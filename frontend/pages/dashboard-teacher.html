@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Teacher Dashboard — Play & Grow</title>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <a href="../index.html" class="brand"><span class="dot"></span> Play & Grow</a>
+    <div class="who"><div id="whoName">—</div><span class="role-badge">Teacher</span></div>
+    <button class="nav-item active" data-panel="overview">🏠 Overview</button>
+    <button class="nav-item" data-panel="attendance">🗓️ Attendance</button>
+    <button class="nav-item" data-panel="progress">📈 Progress</button>
+    <button class="nav-item" data-panel="messages">💬 Messages</button>
+    <button class="nav-item" data-panel="events">🎉 Events</button>
+    <button class="nav-item" data-panel="pickup">🚸 Pickup verification</button>
+    <button class="nav-item" data-panel="alerts">🚨 Emergency alert</button>
+    <button class="nav-item logout" id="logoutBtn">🚪 Log out</button>
+  </aside>
+
+  <main class="main-pane">
+
+    <section class="panel active" id="panel-overview">
+      <h1>Hi there, teacher! 🎨</h1>
+      <p>Here's your class at a glance.</p>
+      <div class="stat-row" id="statRow"></div>
+      <div class="card">
+        <h3>Today's roster</h3>
+        <div id="todayRoster">Loading…</div>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-attendance">
+      <div class="toolbar">
+        <h1 style="margin:0;">Attendance</h1>
+        <input type="date" id="attDate" />
+      </div>
+      <table>
+        <thead><tr><th>Student</th><th>Class</th><th>Status</th><th>Remarks</th></tr></thead>
+        <tbody id="attTbody"></tbody>
+      </table>
+    </section>
+
+    <section class="panel" id="panel-progress">
+      <div class="toolbar">
+        <h1 style="margin:0;">Academic progress</h1>
+        <select id="progStudentSelect"></select>
+      </div>
+      <div class="card" style="margin-bottom:20px;">
+        <h3>Log a new entry</h3>
+        <form id="progressForm">
+          <div class="field"><label>Milestone</label><input id="pMilestone" placeholder="e.g. Recognizes 5 letters" /></div>
+          <div class="field"><label>Activity</label><input id="pActivity" placeholder="e.g. Color sorting game" /></div>
+          <div class="field"><label>Assessment</label><input id="pAssessment" placeholder="e.g. Meeting expectations" /></div>
+          <div class="field"><label>Notes</label><textarea id="pNotes" rows="2"></textarea></div>
+          <button class="btn btn-primary" type="submit">Save entry</button>
+        </form>
+      </div>
+      <div id="progressList"></div>
+    </section>
+
+    <section class="panel" id="panel-messages">
+      <h1>Messages</h1>
+      <div class="grid-2">
+        <div class="card">
+          <h3>Conversations</h3>
+          <div id="inboxList"></div>
+        </div>
+        <div class="card">
+          <h3 id="threadWithName">Select a parent</h3>
+          <div class="chat-thread" id="chatThread"></div>
+          <div class="chat-input-row">
+            <input id="chatInput" placeholder="Type a message…" />
+            <button class="btn btn-primary btn-sm" id="sendChatBtn">Send</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-events">
+      <div class="toolbar">
+        <h1 style="margin:0;">Events & notices</h1>
+        <button class="btn btn-primary btn-sm" id="addEventBtn">+ Notify parents</button>
+      </div>
+      <div id="eventsList"></div>
+    </section>
+
+    <section class="panel" id="panel-pickup">
+      <h1>Pickup verification</h1>
+      <select id="pickupStudentSelect" style="margin-bottom:16px;"></select>
+      <div id="pickupList"></div>
+    </section>
+
+    <section class="panel" id="panel-alerts">
+      <h1>Send an emergency alert</h1>
+      <div class="card">
+        <form id="alertForm">
+          <div class="field"><label>Title</label><input id="aTitle" required /></div>
+          <div class="field"><label>Message</label><textarea id="aMessage" rows="3" required></textarea></div>
+          <button class="btn btn-danger" type="submit">🚨 Send alert to all parents</button>
+        </form>
+      </div>
+      <h3 style="margin-top:24px;">Recent alerts</h3>
+      <div id="alertsList"></div>
+    </section>
+
+  </main>
+</div>
+
+<div class="modal-backdrop" id="modalBackdrop"><div class="modal" id="modalBody"></div></div>
+
+<script src="../js/api.js"></script>
+<script src="../js/dashboard-common.js"></script>
+<script src="../js/teacher.js"></script>
+</body>
+</html>

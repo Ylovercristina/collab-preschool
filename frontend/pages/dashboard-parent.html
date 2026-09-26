@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Parent Dashboard — Play & Grow</title>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <a href="../index.html" class="brand"><span class="dot"></span> Play & Grow</a>
+    <div class="who"><div id="whoName">—</div><span class="role-badge">Parent</span></div>
+    <button class="nav-item active" data-panel="overview">🏠 Overview</button>
+    <button class="nav-item" data-panel="progress">📈 Progress</button>
+    <button class="nav-item" data-panel="attendance">🗓️ Attendance</button>
+    <button class="nav-item" data-panel="fees">💳 Fees</button>
+    <button class="nav-item" data-panel="messages">💬 Messages</button>
+    <button class="nav-item" data-panel="events">🎉 Calendar</button>
+    <button class="nav-item" data-panel="pickup">🚸 Pickup people</button>
+    <button class="nav-item logout" id="logoutBtn">🚪 Log out</button>
+  </aside>
+
+  <main class="main-pane">
+
+    <section class="panel active" id="panel-overview">
+      <h1>Welcome back! 👋</h1>
+      <div id="alertsBanner"></div>
+      <p>Here's what's new with your child.</p>
+      <div id="childSwitcherBox" style="margin-bottom:18px;"></div>
+      <div class="grid-2">
+        <div class="card">
+          <h3>Latest progress</h3>
+          <div id="latestProgress">Loading…</div>
+        </div>
+        <div class="card">
+          <h3>Upcoming events</h3>
+          <div id="upcomingEvents">Loading…</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-progress">
+      <h1>Academic progress</h1>
+      <div id="progressList"></div>
+    </section>
+
+    <section class="panel" id="panel-attendance">
+      <h1>Attendance</h1>
+      <table>
+        <thead><tr><th>Date</th><th>Status</th><th>Remarks</th></tr></thead>
+        <tbody id="attTbody"></tbody>
+      </table>
+    </section>
+
+    <section class="panel" id="panel-fees">
+      <h1>Fees</h1>
+      <table>
+        <thead><tr><th>Description</th><th>Amount</th><th>Paid</th><th>Due</th><th>Status</th></tr></thead>
+        <tbody id="feesTbody"></tbody>
+      </table>
+    </section>
+
+    <section class="panel" id="panel-messages">
+      <h1>Message the teacher</h1>
+      <div class="card">
+        <h3 id="threadWithName">Teacher</h3>
+        <div class="chat-thread" id="chatThread"></div>
+        <div class="chat-input-row">
+          <input id="chatInput" placeholder="Type a message…" />
+          <button class="btn btn-primary btn-sm" id="sendChatBtn">Send</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-events">
+      <h1>School calendar</h1>
+      <div id="eventsList"></div>
+    </section>
+
+    <section class="panel" id="panel-pickup">
+      <div class="toolbar">
+        <h1 style="margin:0;">Authorized pickup people</h1>
+        <button class="btn btn-primary btn-sm" id="addPickupBtn">+ Add person</button>
+      </div>
+      <div id="pickupList"></div>
+    </section>
+
+  </main>
+</div>
+
+<div class="modal-backdrop" id="modalBackdrop"><div class="modal" id="modalBody"></div></div>
+
+<script src="../js/api.js"></script>
+<script src="../js/dashboard-common.js"></script>
+<script src="../js/parent.js"></script>
+</body>
+</html>

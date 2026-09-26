@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Admin Dashboard — Play & Grow</title>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <a href="../index.html" class="brand"><span class="dot"></span> Play & Grow</a>
+    <div class="who">
+      <div id="whoName">—</div>
+      <span class="role-badge">Admin</span>
+    </div>
+    <button class="nav-item active" data-panel="overview">🏠 Overview</button>
+    <button class="nav-item" data-panel="users">🗂️ Accounts</button>
+    <button class="nav-item" data-panel="students">🧒 Students</button>
+    <button class="nav-item" data-panel="fees">💳 Fees</button>
+    <button class="nav-item" data-panel="events">🎉 Events</button>
+    <button class="nav-item" data-panel="logs">📜 Activity logs</button>
+    <button class="nav-item logout" id="logoutBtn">🚪 Log out</button>
+  </aside>
+
+  <main class="main-pane">
+
+    <section class="panel active" id="panel-overview">
+      <h1>Good day, Admin 👋</h1>
+      <p>Here's how the school is doing.</p>
+      <div class="stat-row" id="statRow"></div>
+      <div class="grid-2">
+        <div class="card">
+          <h3>Fee status</h3>
+          <div id="feeReport">Loading…</div>
+        </div>
+        <div class="card">
+          <h3>Students by class</h3>
+          <div id="classReport">Loading…</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-users">
+      <div class="toolbar">
+        <h1 style="margin:0;">Accounts</h1>
+        <button class="btn btn-primary btn-sm" id="addUserBtn">+ Add teacher / admin</button>
+      </div>
+      <div class="toolbar">
+        <div>
+          <label class="field-hint">Filter by role: </label>
+          <select id="roleFilter">
+            <option value="">All</option>
+            <option value="admin">Admin</option>
+            <option value="teacher">Teacher</option>
+            <option value="parent">Parent</option>
+          </select>
+        </div>
+      </div>
+      <table>
+        <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody id="usersTbody"></tbody>
+      </table>
+    </section>
+
+    <section class="panel" id="panel-students">
+      <div class="toolbar">
+        <h1 style="margin:0;">Students</h1>
+        <button class="btn btn-primary btn-sm" id="addStudentBtn">+ Add student</button>
+      </div>
+      <table>
+        <thead><tr><th>Name</th><th>Class</th><th>Parent</th><th>Teacher</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody id="studentsTbody"></tbody>
+      </table>
+    </section>
+
+    <section class="panel" id="panel-fees">
+      <div class="toolbar">
+        <h1 style="margin:0;">Fees</h1>
+        <button class="btn btn-primary btn-sm" id="addFeeBtn">+ New fee</button>
+      </div>
+      <table>
+        <thead><tr><th>Student</th><th>Description</th><th>Amount</th><th>Paid</th><th>Due</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody id="feesTbody"></tbody>
+      </table>
+    </section>
+
+    <section class="panel" id="panel-events">
+      <div class="toolbar">
+        <h1 style="margin:0;">Events</h1>
+        <button class="btn btn-primary btn-sm" id="addEventBtn">+ New event</button>
+      </div>
+      <div id="eventsList"></div>
+    </section>
+
+    <section class="panel" id="panel-logs">
+      <h1>Activity logs</h1>
+      <table>
+        <thead><tr><th>When</th><th>User</th><th>Action</th><th>Details</th></tr></thead>
+        <tbody id="logsTbody"></tbody>
+      </table>
+    </section>
+
+  </main>
+</div>
+
+<div class="modal-backdrop" id="modalBackdrop">
+  <div class="modal" id="modalBody"></div>
+</div>
+
+<script src="../js/api.js"></script>
+<script src="../js/dashboard-common.js"></script>
+<script src="../js/admin.js"></script>
+</body>
+</html>

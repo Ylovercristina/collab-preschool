@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Sign up — Play & Grow</title>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+<div class="auth-wrap">
+  <div class="auth-card">
+    <a href="../index.html" class="brand"><span class="dot"></span> Play & Grow</a>
+    <h1>Create your account</h1>
+    <p class="sub">Parents' accounts need a quick admin approval before first login. Teacher accounts are created by the school admin.</p>
+
+    <div id="msg" class="form-msg"></div>
+
+    <form id="signupForm">
+      <div class="field">
+        <label for="role">I am a</label>
+        <select id="role">
+          <option value="parent">Parent / Guardian</option>
+          <option value="admin">School Admin</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="name">Full name</label>
+        <input type="text" id="name" required />
+      </div>
+      <div class="field">
+        <label for="email">Email</label>
+        <input type="email" id="email" required autocomplete="email" />
+      </div>
+      <div class="field">
+        <label for="phone">Phone (optional)</label>
+        <input type="tel" id="phone" />
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input type="password" id="password" required minlength="6" autocomplete="new-password" />
+        <div class="field-hint">At least 6 characters.</div>
+      </div>
+      <button type="submit" class="btn btn-primary btn-block">Create account</button>
+    </form>
+
+    <p class="auth-foot">Already have an account? <a href="login.html">Log in</a></p>
+  </div>
+</div>
+
+<script src="../js/api.js"></script>
+<script>
+document.getElementById('signupForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const msg = document.getElementById('msg');
+  msg.className = 'form-msg';
+
+  const payload = {
+    role: document.getElementById('role').value,
+    name: document.getElementById('name').value.trim(),
+    email: document.getElementById('email').value.trim(),
+    phone: document.getElementById('phone').value.trim(),
+    password: document.getElementById('password').value,
+  };
+
+  try {
+    const data = await api.post('/auth/signup', payload, { auth: false });
+    if (data.token) {
+      Auth.setSession(data.token, data.user);
+      window.location.href = `dashboard-${data.user.role}.html`;
+    } else {
+      showMsg(msg, data.message, 'success');
+    }
+  } catch (err) {
+    showMsg(msg, err.message);
+  }
+});
+</script>
+</body>
+</html>
