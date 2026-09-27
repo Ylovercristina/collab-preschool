@@ -3,53 +3,104 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Sign up — Play & Grow</title>
-<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+<title>Sign up — Play-is-School</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
 <link rel="stylesheet" href="../css/style.css" />
 </head>
 <body>
-<div class="auth-wrap">
-  <div class="auth-card">
-    <a href="../index.html" class="brand"><span class="dot"></span> Play & Grow</a>
-    <h1>Create your account</h1>
-    <p class="sub">Parents' accounts need a quick admin approval before first login. Teacher accounts are created by the school admin.</p>
+<div class="auth-page-wrap">
+  <div class="auth-container">
+    <!-- Left Column: Matching Brand Showcase -->
+    <div class="auth-brand-side">
+      <div class="auth-brand-badge">
+        <img src="../img/logocollab.jpg" alt="Play-is-School Logo Thumbnail" />
+        <div class="text-group">
+          <span class="school-title">Play-is-School</span>
+          <span class="school-sub">Learning Platform</span>
+        </div>
+      </div>
 
-    <div id="msg" class="form-msg"></div>
+      <div class="auth-logo-center">
+        <div class="auth-logo-card">
+          <img src="../img/logocollab.jpg" alt="Play-is-School Logo" />
+        </div>
+      </div>
 
-    <form id="signupForm">
-      <div class="field">
-        <label for="role">I am a</label>
-        <select id="role">
-          <option value="parent">Parent / Guardian</option>
-          <option value="admin">School Admin</option>
-        </select>
+      <div class="auth-brand-foot">
+        <h3>Learning through Play</h3>
+        <p>Early Childhood Learning &amp; Safety Hub</p>
       </div>
-      <div class="field">
-        <label for="name">Full name</label>
-        <input type="text" id="name" required />
-      </div>
-      <div class="field">
-        <label for="email">Email</label>
-        <input type="email" id="email" required autocomplete="email" />
-      </div>
-      <div class="field">
-        <label for="phone">Phone (optional)</label>
-        <input type="tel" id="phone" />
-      </div>
-      <div class="field">
-        <label for="password">Password</label>
-        <input type="password" id="password" required minlength="6" autocomplete="new-password" />
-        <div class="field-hint">At least 6 characters.</div>
-      </div>
-      <button type="submit" class="btn btn-primary btn-block">Create account</button>
-    </form>
+    </div>
 
-    <p class="auth-foot">Already have an account? <a href="login.html">Log in</a></p>
+    <!-- Right Column: Registration Form -->
+    <div class="auth-form-side">
+      <h2>Create Account</h2>
+      <p class="sub-text">Join the Play-is-School community today.</p>
+
+      <div id="msg" class="form-msg"></div>
+
+      <form id="signupForm">
+        <div class="auth-field">
+          <label class="auth-label" for="role">I AM A</label>
+          <select id="role">
+            <option value="parent">Parent / Guardian</option>
+            <option value="admin">School Admin</option>
+          </select>
+        </div>
+
+        <div class="auth-field">
+          <label class="auth-label" for="name">FULL NAME</label>
+          <input type="text" id="name" placeholder="Jane Doe" required />
+        </div>
+
+        <div class="auth-field">
+          <label class="auth-label" for="email">EMAIL ADDRESS</label>
+          <input type="email" id="email" placeholder="name@example.com" required autocomplete="email" />
+        </div>
+
+        <div class="auth-field">
+          <label class="auth-label" for="phone">PHONE NUMBER (OPTIONAL)</label>
+          <input type="tel" id="phone" placeholder="0912 345 6789" />
+        </div>
+
+        <div class="auth-field">
+          <label class="auth-label" for="password">PASSWORD</label>
+          <div class="input-with-icon">
+            <input type="password" id="password" placeholder="At least 6 characters" required minlength="6" autocomplete="new-password" />
+            <button type="button" class="toggle-password-btn" id="togglePasswordBtn" aria-label="Toggle password visibility">
+              <i class="fa-regular fa-eye" id="passwordEyeIcon"></i>
+            </button>
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-block" style="margin-top: 10px;">
+          Create Account &nbsp;&rarr;
+        </button>
+      </form>
+
+      <div class="auth-divider">or</div>
+
+      <div class="auth-bottom-switch">
+        Already have an account? <a href="login.html">Sign In</a>
+      </div>
+    </div>
   </div>
 </div>
 
 <script src="../js/api.js"></script>
 <script>
+// Eye toggle password visibility
+const toggleBtn = document.getElementById('togglePasswordBtn');
+const passwordInput = document.getElementById('password');
+const eyeIcon = document.getElementById('passwordEyeIcon');
+
+toggleBtn.addEventListener('click', () => {
+  const isPassword = passwordInput.getAttribute('type') === 'password';
+  passwordInput.setAttribute('type', isPassword ? 'text' : 'password');
+  eyeIcon.className = isPassword ? 'fa-regular fa-eye-slash' : 'fa-regular fa-eye';
+});
+
+// Signup form handler
 document.getElementById('signupForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const msg = document.getElementById('msg');

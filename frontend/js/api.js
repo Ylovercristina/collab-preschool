@@ -1,6 +1,16 @@
-// ---------- Play & Grow: tiny API client ----------
+// ---------- Play-is-School API Client ----------
 // Change this if your backend runs somewhere other than localhost:5000
 const API_BASE = 'http://localhost:5000/api';
+
+function getLoginUrl() {
+  const inPages = window.location.pathname.includes('/pages/');
+  return inPages ? 'login.html' : 'pages/login.html';
+}
+
+function getDashboardUrl(role) {
+  const inPages = window.location.pathname.includes('/pages/');
+  return inPages ? `dashboard-${role}.html` : `pages/dashboard-${role}.html`;
+}
 
 const Auth = {
   getToken: () => localStorage.getItem('png_token'),
@@ -37,7 +47,7 @@ async function apiRequest(path, { method = 'GET', body, auth = true } = {}) {
   if (!res.ok) {
     if (res.status === 401 && auth) {
       Auth.clear();
-      window.location.href = '/pages/login.html';
+      window.location.href = getLoginUrl();
     }
     throw new Error((data && data.message) || `Request failed (${res.status})`);
   }
@@ -55,12 +65,12 @@ const api = {
 // or to the correct dashboard if the role doesn't match this page.
 function requireRole(expectedRole) {
   if (!Auth.isLoggedIn()) {
-    window.location.href = '/pages/login.html';
+    window.location.href = getLoginUrl();
     return null;
   }
   const user = Auth.getUser();
   if (expectedRole && user.role !== expectedRole) {
-    window.location.href = `/pages/dashboard-${user.role}.html`;
+    window.location.href = getDashboardUrl(user.role);
     return null;
   }
   return user;

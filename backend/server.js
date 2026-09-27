@@ -7,11 +7,14 @@ const ensureSeedAdmin = require('./utils/seed');
 
 const app = express();
 
-app.use(cors({ origin: process.env.CLIENT_ORIGIN || '*' }));
+app.use(cors({
+  origin: (origin, callback) => callback(null, true),
+  credentials: true,
+}));
 app.use(express.json());
 app.use(morgan('dev'));
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', name: 'Play & Grow API' }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', name: 'Play-is-School API' }));
 
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/users', require('./routes/userRoutes'));
@@ -36,5 +39,5 @@ const PORT = process.env.PORT || 5000;
 
 connectDB().then(async () => {
   await ensureSeedAdmin();
-  app.listen(PORT, () => console.log(`[server] Play & Grow API running on port ${PORT}`));
+  app.listen(PORT, () => console.log(`[server] Play-is-School API running on port ${PORT}`));
 });
