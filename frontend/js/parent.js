@@ -6,13 +6,15 @@ let activeTeacherId = null;
 let parentCalendar = null;
 
 function onPanelShown(panel) {
-  if (panel === 'overview') loadOverview(true);
-  if (panel === 'progress') renderProgress();
-  if (panel === 'attendance') renderAttendance();
-  if (panel === 'fees') renderFees();
-  if (panel === 'messages') openTeacherThread();
-  if (panel === 'events') loadEvents();
-  if (panel === 'pickup') renderPickup();
+  if (panel === 'overview') return loadOverview(true);
+  if (panel === 'progress') return renderProgress();
+  if (panel === 'attendance') return renderAttendance();
+  if (panel === 'fees') {
+    return Promise.all([renderFees(), loadPaymentNotifications()]);
+  }
+  if (panel === 'messages') return openTeacherThread();
+  if (panel === 'events') return loadEvents();
+  if (panel === 'pickup') return renderPickup();
 }
 
 async function loadChildren() {
@@ -57,6 +59,7 @@ async function loadChildren() {
 async function loadOverview(skipChildLoad) {
   if (!skipChildLoad) await loadChildren();
 
+  await loadPaymentNotifications();
   const { alerts } = await api.get('/alerts');
   const recent = alerts.slice(0, 2);
   document.getElementById('alertsBanner').innerHTML = recent.map((a) => `
@@ -96,6 +99,46 @@ async function loadOverview(skipChildLoad) {
     : '<div class="empty-state"><p>No upcoming school events scheduled.</p></div>';
 }
 
+async function loadPaymentNotifications() {
+  const container = document.getElementById('paymentNotifications');
+  if (!container) return;
+  const { notifications } = await api.get('/notifications');
+  const unreadCount = notifications.filter((notification) => !notification.readAt).length;
+  container.innerHTML = notifications.length ? `
+    <div class="card" style="margin-bottom:20px;">
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+        <i class="fa-solid fa-bell" style="color:var(--primary);"></i>
+        <h3 style="margin:0;">Fee Payment Updates</h3>
+        ${unreadCount ? `<span class="badge pending">${unreadCount} unread</span>` : ''}
+      </div>
+      ${notifications.map((notification) => `
+        <div class="list-row">
+          <div>
+            <strong>${notification.title}</strong>
+            <p style="margin:2px 0 4px; font-size:13.5px;">${notification.message}</p>
+            <span style="font-size:12px; color:var(--ink-muted);">${fmtDate(notification.createdAt)}</span>
+            <span class="badge ${notification.readAt ? 'approved' : 'pending'}" style="margin-left:6px;">${notification.readAt ? 'Read' : 'Unread'}</span>
+          </div>
+          <span style="display:flex; gap:6px;">
+            ${notification.payment && notification.fee ? `<button class="btn btn-ghost btn-sm" data-view-notification-receipt="${notification.payment._id}" data-fee-id="${notification.fee._id}">View Receipt</button>` : ''}
+            ${notification.readAt ? '' : `<button class="btn btn-ghost btn-sm" data-read-notification="${notification._id}">Mark read</button>`}
+          </span>
+        </div>
+      `).join('')}
+    </div>
+  ` : '';
+
+  container.querySelectorAll('[data-read-notification]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      await api.patch(`/notifications/${button.dataset.readNotification}/read`, {});
+      await loadPaymentNotifications();
+    });
+  });
+  container.querySelectorAll('[data-view-notification-receipt]').forEach((button) => {
+    button.addEventListener('click', () => showPaymentReceipt(button.dataset.feeId, button.dataset.viewNotificationReceipt));
+  });
+}
+
 // ---------- Progress ----------
 async function renderProgress() {
   if (!activeChildId) return;
@@ -133,15 +176,28 @@ async function renderFees() {
   if (!activeChildId) return;
   const { fees } = await api.get(`/fees/student/${activeChildId}`);
   const tbody = document.getElementById('feesTbody');
-  tbody.innerHTML = fees.length ? fees.map((f) => `
-    <tr>
-      <td><strong>${f.description}</strong></td>
-      <td><strong>${fmtMoney(f.amount)}</strong></td>
-      <td>${fmtMoney(f.amountPaid)}</td>
-      <td>${fmtDate(f.dueDate)}</td>
-      <td><span class="badge ${f.status}">${f.status}</span></td>
-    </tr>
-  `).join('') : `<tr><td colspan="5"><div class="empty-state"><i class="fa-solid fa-credit-card"></i><p>No fee statements for this child.</p></div></td></tr>`;
+  tbody.innerHTML = fees.length ? fees.map((f) => {
+    const totalPaid = Number((f.payments || [])
+      .filter((payment) => payment.receiptState !== 'voided')
+      .reduce((sum, payment) => sum + Number(payment.amountPaid || 0), 0)
+      .toFixed(2));
+    const remainingBalance = Math.max(0, Number((Number(f.amount) - totalPaid).toFixed(2)));
+    const status = totalPaid <= 0 ? 'unpaid' : (remainingBalance === 0 ? 'paid' : 'partial');
+    const statusLabel = { unpaid: 'Unpaid', partial: 'Partial Payment', paid: 'Paid' }[status];
+    return `
+      <tr>
+        <td><strong>${f.description}</strong>${renderPaymentHistory(f.payments, f._id, f.amount)}</td>
+        <td><strong>${fmtMoney(f.amount)}</strong></td>
+        <td>${fmtMoney(totalPaid)}</td>
+        <td>${fmtMoney(remainingBalance)}</td>
+        <td>${fmtDate(f.dueDate)}</td>
+        <td><span class="badge ${status}">${statusLabel}</span></td>
+      </tr>
+    `;
+  }).join('') : `<tr><td colspan="6"><div class="empty-state"><i class="fa-solid fa-credit-card"></i><p>No fee statements for this child.</p></div></td></tr>`;
+  tbody.querySelectorAll('[data-view-receipt]').forEach((button) => {
+    button.addEventListener('click', () => showPaymentReceipt(button.dataset.feeId, button.dataset.viewReceipt));
+  });
 }
 
 // ---------- Messages ----------

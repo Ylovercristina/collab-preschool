@@ -24,6 +24,7 @@ app.use('/api/progress', require('./routes/progressRoutes'));
 app.use('/api/fees', require('./routes/feeRoutes'));
 app.use('/api/events', require('./routes/eventRoutes'));
 app.use('/api/messages', require('./routes/messageRoutes'));
+app.use('/api/notifications', require('./routes/notificationRoutes'));
 app.use('/api/alerts', require('./routes/alertRoutes'));
 app.use('/api/pickup', require('./routes/pickupRoutes'));
 app.use('/api/logs', require('./routes/logRoutes'));

@@ -3,12 +3,12 @@ const user = requireRole('admin');
 let adminCalendar = null;
 
 function onPanelShown(panel) {
-  if (panel === 'overview') loadOverview();
-  if (panel === 'users') loadUsers();
-  if (panel === 'students') loadStudents();
-  if (panel === 'fees') loadFees();
-  if (panel === 'events') loadEvents();
-  if (panel === 'logs') loadLogs();
+  if (panel === 'overview') return loadOverview();
+  if (panel === 'users') return loadUsers();
+  if (panel === 'students') return loadStudents();
+  if (panel === 'fees') return loadFees();
+  if (panel === 'events') return loadEvents();
+  if (panel === 'logs') return loadLogs();
 }
 
 // ---------- Overview ----------
@@ -240,51 +240,158 @@ async function loadFees() {
   const { fees } = await api.get('/fees');
   const tbody = document.getElementById('feesTbody');
   if (!fees.length) {
-    tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state"><i class="fa-solid fa-credit-card"></i><p>No fee statements generated yet.</p></div></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state"><i class="fa-solid fa-credit-card"></i><p>No fee statements generated yet.</p></div></td></tr>`;
     return;
   }
 
-  tbody.innerHTML = fees.map((f) => `
-    <tr>
-      <td><strong>${f.student ? f.student.name : '—'}</strong></td>
-      <td>${f.description}</td>
-      <td><strong>${fmtMoney(f.amount)}</strong></td>
-      <td>${fmtMoney(f.amountPaid)}</td>
-      <td>${fmtDate(f.dueDate)}</td>
-      <td><span class="badge ${f.status}">${f.status}</span></td>
-      <td>${f.status !== 'paid' ? `<button class="btn btn-secondary btn-sm" data-pay="${f._id}"><i class="fa-solid fa-money-bill-wave"></i> Log Payment</button>` : '<span style="color:var(--primary); font-weight:700;"><i class="fa-solid fa-check"></i> Paid</span>'}</td>
-    </tr>
-  `).join('');
-  tbody.querySelectorAll('[data-pay]').forEach((b) => b.addEventListener('click', () => openPaymentModal(b.dataset.pay)));
+  tbody.innerHTML = fees.map((f) => {
+    const totalPaid = Number((f.payments || [])
+      .filter((payment) => payment.receiptState !== 'voided')
+      .reduce((sum, payment) => sum + Number(payment.amountPaid || 0), 0)
+      .toFixed(2));
+    const remainingBalance = Math.max(0, Number((Number(f.amount) - totalPaid).toFixed(2)));
+    const status = totalPaid <= 0 ? 'unpaid' : (remainingBalance === 0 ? 'paid' : 'partial');
+    const statusLabel = { unpaid: 'Unpaid', partial: 'Partial Payment', paid: 'Paid' }[status];
+    return `
+      <tr>
+        <td><strong>${f.student ? f.student.name : '—'}</strong></td>
+        <td>${f.description}${renderAdminPaymentHistory(f)}</td>
+        <td><strong>${fmtMoney(f.amount)}</strong></td>
+        <td>${fmtMoney(totalPaid)}</td>
+        <td>${fmtMoney(remainingBalance)}</td>
+        <td>${fmtDate(f.dueDate)}</td>
+        <td><span class="badge ${status}">${statusLabel}</span></td>
+        <td>${status !== 'paid' ? `<button class="btn btn-secondary btn-sm" data-pay="${f._id}" data-remaining="${remainingBalance}" data-total-fee="${f.amount}"><i class="fa-solid fa-money-bill-wave"></i> Record Cash</button>` : '<span style="color:var(--primary); font-weight:700;"><i class="fa-solid fa-check"></i> Paid</span>'}</td>
+      </tr>
+    `;
+  }).join('');
+  tbody.querySelectorAll('[data-pay]').forEach((b) => b.addEventListener('click', () => openPaymentModal(b.dataset.pay, Number(b.dataset.remaining), Number(b.dataset.totalFee))));
+  tbody.querySelectorAll('[data-view-receipt]').forEach((b) => {
+    b.addEventListener('click', () => showPaymentReceipt(b.dataset.feeId, b.dataset.viewReceipt));
+  });
+  tbody.querySelectorAll('[data-edit-payment]').forEach((b) => {
+    b.addEventListener('click', () => {
+      const fee = fees.find((item) => item._id === b.dataset.feeId);
+      const payment = fee && fee.payments.find((item) => item._id === b.dataset.editPayment);
+      if (!fee || !payment) return;
+      const totalPaid = fee.payments
+        .filter((item) => item.receiptState !== 'voided')
+        .reduce((sum, item) => sum + Number(item.amountPaid || 0), 0);
+      openEditPaymentModal(fee, payment, Number(totalPaid.toFixed(2)));
+    });
+  });
+  tbody.querySelectorAll('[data-delete-payment]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      if (!confirm('Void this recorded payment? The receipt will be marked voided and the fee balance and parent notification will be updated.')) return;
+      try {
+        await api.del(`/fees/${b.dataset.feeId}/payments/${b.dataset.deletePayment}`);
+        await loadFees();
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+  });
 }
 
-function openPaymentModal(feeId) {
+function renderAdminPaymentHistory(fee) {
+  if (!fee.payments || !fee.payments.length) return '';
+  return `
+    <details style="margin-top:4px; font-size:12.5px;">
+      <summary style="cursor:pointer; color:var(--primary); font-weight:600;">Payment history (${fee.payments.length})</summary>
+      <div style="margin-top:6px;">
+        ${fee.payments.map((payment) => `
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; padding:4px 0;">
+            <span>${fmtMoney(payment.amountPaid)} - ${fmtDate(payment.datePaid)} - Cash - Receipt ${payment.receiptNumber || 'pending'} - Remaining after payment: ${fmtMoney(payment.receiptSnapshot?.remainingBalance ?? 0)}${payment.remarks ? ` - ${payment.remarks}` : ''} - Recorded by ${payment.loggedBy?.name || 'Admin'}${payment.receiptState !== 'issued' ? ` - ${payment.receiptState}` : ''}</span>
+            <span style="display:flex; gap:4px;">
+              <button class="btn btn-ghost btn-sm" data-view-receipt="${payment._id}" data-fee-id="${fee._id}" title="View receipt">View Receipt</button>
+              ${payment.receiptState === 'voided' ? '' : `
+                <button class="btn btn-ghost btn-sm" data-edit-payment="${payment._id}" data-fee-id="${fee._id}" title="Edit payment"><i class="fa-solid fa-pen"></i></button>
+                <button class="btn btn-ghost btn-sm" data-delete-payment="${payment._id}" data-fee-id="${fee._id}" title="Void payment"><i class="fa-solid fa-trash-can"></i></button>
+              `}
+            </span>
+          </div>
+        `).join('')}
+      </div>
+    </details>
+  `;
+}
+
+function openPaymentModal(feeId, remainingBalance, totalFee) {
+  const currentDate = new Date();
+  const today = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(currentDate.getDate()).padStart(2, '0')}`;
   Modal.open(`
     <h3>Record Payment</h3>
     <div id="modalMsg" class="form-msg"></div>
     <form id="payForm">
-      <div class="field"><label>Amount Paid (₱)</label><input type="number" min="0" step="0.01" id="pAmount" required /></div>
-      <div class="field"><label>Payment Method</label>
-        <select id="pMethod">
-          <option value="cash">Cash</option>
-          <option value="bank transfer">Bank Transfer</option>
-          <option value="gcash">GCash</option>
-          <option value="other">Other</option>
-        </select>
-      </div>
+      <div class="field"><label>Amount Paid (₱)</label><input type="number" min="0.01" max="${remainingBalance.toFixed(2)}" step="0.01" id="pAmount" required /></div>
+      <div class="field"><label>Date Received</label><input type="date" id="pDate" value="${today}" required /></div>
+      <div class="field"><label>Payment Method</label><p style="margin:0;">Cash</p></div>
+      <div class="field"><label>Remarks</label><textarea id="pRemarks" rows="2"></textarea></div>
       <button class="btn btn-primary btn-block" type="submit" style="margin-top:14px;">Save Payment</button>
     </form>
   `);
   document.getElementById('payForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const msg = document.getElementById('modalMsg');
+    const amountValue = document.getElementById('pAmount').value;
+    const amountPaid = Number(amountValue);
+    if (!amountValue || !Number.isFinite(amountPaid) || amountPaid <= 0) {
+      showMsg(msg, 'Enter a valid payment amount greater than zero.');
+      return;
+    }
+    if (amountPaid > remainingBalance) {
+      showMsg(msg, `Payment exceeds the remaining balance of ${fmtMoney(remainingBalance)}. Total paid cannot exceed the total fee of ${fmtMoney(totalFee)}.`);
+      return;
+    }
     try {
       await api.post(`/fees/${feeId}/payments`, {
-        amountPaid: Number(document.getElementById('pAmount').value),
-        method: document.getElementById('pMethod').value,
+        amountPaid,
+        datePaid: document.getElementById('pDate').value,
+        remarks: document.getElementById('pRemarks').value.trim(),
       });
+      await loadFees();
       Modal.close();
-      loadFees();
+    } catch (err) {
+      showMsg(msg, err.message);
+    }
+  });
+}
+
+function openEditPaymentModal(fee, payment, totalPaid) {
+  const remainingBalance = Math.max(0, Number((fee.amount - (totalPaid - payment.amountPaid)).toFixed(2)));
+  const dateReceived = new Date(payment.datePaid).toISOString().slice(0, 10);
+  Modal.open(`
+    <h3>Edit Cash Payment</h3>
+    <div id="editPaymentMsg" class="form-msg"></div>
+    <form id="editPaymentForm">
+      <div class="field"><label>Amount Paid (₱)</label><input type="number" min="0.01" max="${remainingBalance.toFixed(2)}" step="0.01" id="editPaymentAmount" value="${payment.amountPaid}" required /></div>
+      <div class="field"><label>Date Received</label><input type="date" id="editPaymentDate" value="${dateReceived}" required /></div>
+      <div class="field"><label>Payment Method</label><p style="margin:0;">Cash</p></div>
+      <div class="field"><label>Remarks</label><textarea id="editPaymentRemarks" rows="2">${payment.remarks || ''}</textarea></div>
+      <button class="btn btn-primary btn-block" type="submit" style="margin-top:14px;">Save Changes</button>
+    </form>
+  `);
+  document.getElementById('editPaymentForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const msg = document.getElementById('editPaymentMsg');
+    const amountValue = document.getElementById('editPaymentAmount').value;
+    const amountPaid = Number(amountValue);
+    if (!amountValue || !Number.isFinite(amountPaid) || amountPaid <= 0) {
+      showMsg(msg, 'Enter a valid payment amount greater than zero.');
+      return;
+    }
+    if (amountPaid > remainingBalance) {
+      showMsg(msg, `Payment exceeds the remaining balance of ${fmtMoney(remainingBalance)}.`);
+      return;
+    }
+    try {
+      await api.patch(`/fees/${fee._id}/payments/${payment._id}`, {
+        amountPaid,
+        datePaid: document.getElementById('editPaymentDate').value,
+        remarks: document.getElementById('editPaymentRemarks').value.trim(),
+      });
+      await loadFees();
+      Modal.close();
     } catch (err) {
       showMsg(msg, err.message);
     }
@@ -319,7 +426,7 @@ document.getElementById('addFeeBtn').addEventListener('click', async () => {
         dueDate: document.getElementById('fDue').value,
       });
       Modal.close();
-      loadFees();
+      await loadFees();
     } catch (err) {
       showMsg(msg, err.message);
     }
@@ -336,7 +443,11 @@ async function loadEvents() {
       canManage: true,
       onDeleteEvent: async (eventId) => {
         await api.del(`/events/${eventId}`);
-        loadEvents();
+        await loadEvents();
+      },
+      onEventUpdated: async (eventId, updates) => {
+        await api.patch(`/events/${eventId}`, updates);
+        await loadEvents();
       },
     });
   } else {
@@ -375,7 +486,7 @@ document.getElementById('addEventBtn').addEventListener('click', () => {
         description: document.getElementById('eDesc').value.trim(),
       });
       Modal.close();
-      loadEvents();
+      await loadEvents();
     } catch (err) {
       showMsg(msg, err.message);
     }

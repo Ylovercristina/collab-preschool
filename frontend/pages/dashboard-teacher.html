@@ -20,6 +20,7 @@
     </div>
     <button class="nav-item active" data-panel="overview"><i class="fa-solid fa-gauge-high"></i> Overview</button>
     <button class="nav-item" data-panel="students"><i class="fa-solid fa-user-graduate"></i> Students</button>
+    <button class="nav-item" data-panel="fees"><i class="fa-solid fa-money-bill-wave"></i> Fees</button>
     <button class="nav-item" data-panel="attendance"><i class="fa-solid fa-clipboard-user"></i> Attendance</button>
     <button class="nav-item" data-panel="progress"><i class="fa-solid fa-chart-line"></i> Academic progress</button>
     <button class="nav-item" data-panel="messages"><i class="fa-solid fa-comments"></i> Messages</button>
@@ -64,6 +65,19 @@
         <table>
           <thead><tr><th>Name</th><th>Class</th><th>Parent</th><th>Birthdate</th><th>Status</th><th>Actions</th></tr></thead>
           <tbody id="teacherStudentsTbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-fees">
+      <div style="margin-bottom:20px;">
+        <h1 style="margin:0;">Student Fee Status</h1>
+        <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Read-only fee balances for students assigned to your class.</p>
+      </div>
+      <div class="table-responsive">
+        <table>
+          <thead><tr><th>Student</th><th>Class</th><th>Fee</th><th>Total</th><th>Paid</th><th>Remaining</th><th>Due Date</th><th>Status</th></tr></thead>
+          <tbody id="teacherFeesTbody"></tbody>
         </table>
       </div>
     </section>

@@ -6,14 +6,15 @@ let activeThreadUserId = null;
 let teacherCalendar = null;
 
 function onPanelShown(panel) {
-  if (panel === 'overview') loadOverview();
-  if (panel === 'students') loadStudentsPanel();
-  if (panel === 'attendance') loadAttendance();
-  if (panel === 'progress') loadProgressPanel();
-  if (panel === 'messages') loadInbox();
-  if (panel === 'events') loadEvents();
-  if (panel === 'pickup') loadPickupPanel();
-  if (panel === 'alerts') loadAlerts();
+  if (panel === 'overview') return loadOverview();
+  if (panel === 'students') return loadStudentsPanel();
+  if (panel === 'fees') return loadFeeStatuses();
+  if (panel === 'attendance') return loadAttendance();
+  if (panel === 'progress') return loadProgressPanel();
+  if (panel === 'messages') return loadInbox();
+  if (panel === 'events') return loadEvents();
+  if (panel === 'pickup') return loadPickupPanel();
+  if (panel === 'alerts') return loadAlerts();
 }
 
 async function loadMyStudents() {
@@ -111,6 +112,34 @@ async function loadStudentsPanel() {
       showStudentDetailsModal(btn.dataset.detailsStudent, { canEdit: true, onStudentUpdated: loadStudentsPanel });
     });
   });
+}
+
+async function loadFeeStatuses() {
+  const { fees } = await api.get('/fees/teacher');
+  const tbody = document.getElementById('teacherFeesTbody');
+  if (!fees.length) {
+    tbody.innerHTML = '<tr><td colspan="8"><div class="empty-state"><i class="fa-solid fa-credit-card"></i><p>No fee records for your assigned students.</p></div></td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = fees.map((fee) => {
+    const totalPaid = Number(Number(fee.amountPaid || 0).toFixed(2));
+    const remaining = Math.max(0, Number((Number(fee.amount) - totalPaid).toFixed(2)));
+    const status = totalPaid <= 0 ? 'unpaid' : (remaining === 0 ? 'paid' : 'partial');
+    const statusLabel = { unpaid: 'Unpaid', partial: 'Partial Payment', paid: 'Paid' }[status];
+    return `
+      <tr>
+        <td><strong>${fee.student ? fee.student.name : '—'}</strong></td>
+        <td>${fee.student ? fee.student.className || '—' : '—'}</td>
+        <td>${fee.description}</td>
+        <td>${fmtMoney(fee.amount)}</td>
+        <td>${fmtMoney(totalPaid)}</td>
+        <td>${fmtMoney(remaining)}</td>
+        <td>${fmtDate(fee.dueDate)}</td>
+        <td><span class="badge ${status}">${statusLabel}</span></td>
+      </tr>
+    `;
+  }).join('');
 }
 
 document.getElementById('teacherStudentFilter')?.addEventListener('change', loadStudentsPanel);
@@ -249,7 +278,11 @@ async function loadEvents() {
       canManage: true,
       onDeleteEvent: async (eventId) => {
         await api.del(`/events/${eventId}`);
-        loadEvents();
+        await loadEvents();
+      },
+      onEventUpdated: async (eventId, updates) => {
+        await api.patch(`/events/${eventId}`, updates);
+        await loadEvents();
       },
     });
   } else {
@@ -279,7 +312,7 @@ document.getElementById('addEventBtn').addEventListener('click', () => {
         description: document.getElementById('eDesc').value.trim(),
       });
       Modal.close();
-      loadEvents();
+      await loadEvents();
     } catch (err) {
       showMsg(msg, err.message);
     }

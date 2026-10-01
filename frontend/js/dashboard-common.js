@@ -29,6 +29,78 @@ function setWhoName() {
   if (el && user) el.textContent = user.name;
 }
 
+function renderPaymentHistory(payments = [], feeId = '', totalFee = 0) {
+  if (!payments.length) return '';
+  const balancesAfterPayment = new Map();
+  let totalPaid = 0;
+  [...payments].sort((a, b) => new Date(a.datePaid) - new Date(b.datePaid)).forEach((payment) => {
+    if (payment.receiptState !== 'voided') totalPaid += Number(payment.amountPaid || 0);
+    balancesAfterPayment.set(String(payment._id), Math.max(0, totalFee - totalPaid));
+  });
+  return `
+    <details style="margin-top:4px; font-size:12.5px;">
+      <summary style="cursor:pointer; color:var(--primary); font-weight:600;">Payment history (${payments.length})</summary>
+      <div style="margin-top:6px;">
+        ${payments.map((payment) => {
+          const remaining = payment.receiptSnapshot?.remainingBalance ?? balancesAfterPayment.get(String(payment._id));
+          const receiptState = payment.receiptState || 'issued';
+          return `
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; padding:4px 0;">
+              <span>${fmtMoney(payment.amountPaid)} - ${fmtDate(payment.datePaid)} - Cash - Receipt ${payment.receiptNumber || 'pending'} - Remaining after payment: ${fmtMoney(remaining)} - Recorded by ${payment.loggedBy?.name || 'School admin'}${payment.remarks ? ` - ${payment.remarks}` : ''}${receiptState === 'issued' ? '' : ` - ${receiptState}`}</span>
+              <button class="btn btn-ghost btn-sm" data-view-receipt="${payment._id}" data-fee-id="${feeId}">View Receipt</button>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </details>
+  `;
+}
+
+async function showPaymentReceipt(feeId, paymentId) {
+  try {
+    const { receipt, receiptNumber, state } = await api.get(`/fees/${feeId}/payments/${paymentId}/receipt`);
+    if (!receipt) throw new Error('Receipt details are not available for this payment.');
+    const receiptRows = `
+      <div><strong>Receipt Number:</strong> ${receiptNumber}</div>
+      <div><strong>Date Paid:</strong> ${fmtDate(receipt.datePaid)}</div>
+      <div><strong>School:</strong> ${receipt.schoolName}</div>
+      <div><strong>Student:</strong> ${receipt.studentName}</div>
+      <div><strong>Grade / Section:</strong> ${receipt.gradeSection}</div>
+      <div><strong>Fee:</strong> ${receipt.feeName}</div>
+      <div><strong>Amount Paid:</strong> ${fmtMoney(receipt.amountPaid)} (${receipt.method})</div>
+      <div><strong>Total Fee:</strong> ${fmtMoney(receipt.totalFee)}</div>
+      <div><strong>Total Paid After This Payment:</strong> ${fmtMoney(receipt.totalPaid)}</div>
+      <div><strong>Remaining Balance:</strong> ${fmtMoney(receipt.remainingBalance)}</div>
+      ${receipt.dueDate && receipt.remainingBalance > 0 ? `<div><strong>Due Date:</strong> ${fmtDate(receipt.dueDate)}</div>` : ''}
+      <div><strong>Status After Payment:</strong> ${receipt.status}</div>
+      <div><strong>Recorded By:</strong> ${receipt.recordedBy}</div>
+    `;
+    const stateLabel = state === 'voided' ? 'VOIDED' : (state === 'corrected' ? 'CORRECTED' : '');
+    Modal.open(`
+      <div id="printableReceipt" style="background:#FFF; border:1px solid var(--border); padding:24px; border-radius:var(--radius-md);">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:16px;">
+          <div><h2 style="margin:0; font-size:22px;">${receipt.schoolName}</h2><p style="margin:4px 0 0;">Official Cash Receipt</p></div>
+          ${stateLabel ? `<strong style="color:var(--coral); border:1px solid var(--coral-border); padding:4px 8px;">${stateLabel}</strong>` : ''}
+        </div>
+        <div style="display:grid; gap:8px; font-size:14px;">${receiptRows}</div>
+        <div style="display:flex; justify-content:flex-end; margin-top:20px;">
+          <button class="btn btn-secondary btn-sm" id="printReceiptBtn"><i class="fa-solid fa-print"></i> Print</button>
+        </div>
+      </div>
+    `);
+    document.getElementById('printReceiptBtn').addEventListener('click', () => {
+      const printWindow = window.open('', '_blank');
+      if (!printWindow) return;
+      printWindow.document.write(`<!doctype html><html><head><title>${receiptNumber}</title><style>body{font-family:Arial,sans-serif;color:#1e293b;padding:32px}.receipt{max-width:640px;margin:auto;border:1px solid #cbd5e1;padding:28px}.rows{display:grid;gap:10px;margin-top:24px}.state{color:#c94a4a;font-weight:bold}@media print{body{padding:0}}</style></head><body><main class="receipt"><h1>${receipt.schoolName}</h1><h2>Official Cash Receipt</h2>${stateLabel ? `<p class="state">${stateLabel}</p>` : ''}<section class="rows">${receiptRows}</section></main></body></html>`);
+      printWindow.document.close();
+      printWindow.focus();
+      printWindow.print();
+    });
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
 const Modal = {
   el: null,
   body: null,
@@ -71,7 +143,16 @@ class EventsCalendar {
     this.onDeleteEvent = onDeleteEvent;
     this.onEventAdded = onEventAdded;
     this.currentDate = new Date();
-    this.viewMode = 'calendar'; // 'calendar' or 'list'
+    this.viewMode = 'calendar'; // 'calendar' or 'schedule'
+    this.render();
+  }
+
+  getEventDate(ev) {
+    const date = new Date(ev.date);
+    if (!date.getUTCHours() && !date.getUTCMinutes() && !date.getUTCSeconds() && !date.getUTCMilliseconds()) {
+      return new Date(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+    }
+    return date;
   }
 
   setEvents(events) {
@@ -100,7 +181,7 @@ class EventsCalendar {
   }
 
   showEventDetails(ev) {
-    const formattedDate = new Date(ev.date).toLocaleDateString(undefined, {
+    const formattedDate = this.getEventDate(ev).toLocaleDateString(undefined, {
       weekday: 'long',
       year: 'numeric',
       month: 'long',
@@ -139,16 +220,25 @@ class EventsCalendar {
       ` : ''}
 
       <div style="display:flex; justify-content:space-between; align-items:center; margin-top:24px; padding-top:16px; border-top:1px solid #E2E8F0;">
-        ${this.canManage ? `
-          <button class="btn btn-danger btn-sm" id="calDeleteEventBtn">
-            <i class="fa-solid fa-trash-can"></i> Remove Event
-          </button>
-        ` : '<div></div>'}
+        <div style="display:flex; gap:8px;">
+          ${this.canManage && this.onEventUpdated ? `
+            <button class="btn btn-secondary btn-sm" id="calEditEventBtn">
+              <i class="fa-solid fa-pen-to-square"></i> Edit Event
+            </button>
+          ` : ''}
+          ${this.canManage ? `
+            <button class="btn btn-danger btn-sm" id="calDeleteEventBtn">
+              <i class="fa-solid fa-trash-can"></i> Remove Event
+            </button>
+          ` : ''}
+        </div>
         <button class="btn btn-ghost btn-sm" id="calCloseEventBtn">Close</button>
       </div>
     `);
 
     document.getElementById('calCloseEventBtn').addEventListener('click', () => Modal.close());
+    const editBtn = document.getElementById('calEditEventBtn');
+    if (editBtn) editBtn.addEventListener('click', () => this.showEditEvent(ev));
     if (this.canManage && this.onDeleteEvent) {
       document.getElementById('calDeleteEventBtn').addEventListener('click', async () => {
         if (confirm(`Are you sure you want to remove the event "${ev.title}"?`)) {
@@ -157,6 +247,43 @@ class EventsCalendar {
         }
       });
     }
+  }
+
+  showEditEvent(ev) {
+    const date = this.getEventDate(ev);
+    const dateValue = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    Modal.open(`
+      <h3>Edit School Event</h3>
+      <div id="editEventMsg" class="form-msg"></div>
+      <form id="editEventForm">
+        <div class="field"><label>Event Title</label><input id="editEventTitle" value="${ev.title}" required /></div>
+        <div class="field"><label>Event Date</label><input type="date" id="editEventDate" value="${dateValue}" required /></div>
+        <div class="field"><label>Target Audience</label>
+          <select id="editEventAudience">
+            <option value="all" ${ev.audience === 'all' ? 'selected' : ''}>Everyone (Parents &amp; Staff)</option>
+            <option value="parents" ${ev.audience === 'parents' ? 'selected' : ''}>Parents only</option>
+            <option value="teachers" ${ev.audience === 'teachers' ? 'selected' : ''}>Teachers only</option>
+          </select>
+        </div>
+        <div class="field"><label>Description / Details</label><textarea id="editEventDescription" rows="3">${ev.description || ''}</textarea></div>
+        <button class="btn btn-primary btn-block" type="submit" style="margin-top:14px;">Save Changes</button>
+      </form>
+    `);
+    document.getElementById('editEventForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const msg = document.getElementById('editEventMsg');
+      try {
+        await this.onEventUpdated(ev._id, {
+          title: document.getElementById('editEventTitle').value.trim(),
+          date: document.getElementById('editEventDate').value,
+          audience: document.getElementById('editEventAudience').value,
+          description: document.getElementById('editEventDescription').value.trim(),
+        });
+        Modal.close();
+      } catch (err) {
+        showMsg(msg, err.message);
+      }
+    });
   }
 
   render() {
@@ -197,8 +324,8 @@ class EventsCalendar {
               <button class="btn btn-sm ${this.viewMode === 'calendar' ? 'btn-primary' : 'btn-ghost'}" data-cal-view="calendar" style="border-radius:0; border:none; padding:6px 12px;">
                 <i class="fa-solid fa-calendar-days"></i> Calendar
               </button>
-              <button class="btn btn-sm ${this.viewMode === 'list' ? 'btn-primary' : 'btn-ghost'}" data-cal-view="list" style="border-radius:0; border:none; padding:6px 12px;">
-                <i class="fa-solid fa-list-ul"></i> List
+              <button class="btn btn-sm ${this.viewMode === 'schedule' ? 'btn-primary' : 'btn-ghost'}" data-cal-view="schedule" style="border-radius:0; border:none; padding:6px 12px;">
+                <i class="fa-solid fa-calendar-week"></i> Schedule
               </button>
             </div>
           </div>
@@ -249,7 +376,7 @@ class EventsCalendar {
 
         // Match events for this date
         const matchingEvents = this.events.filter((e) => {
-          const d = new Date(e.date);
+          const d = this.getEventDate(e);
           return (
             d.getFullYear() === cellDate.getFullYear() &&
             d.getMonth() === cellDate.getMonth() &&
@@ -277,56 +404,70 @@ class EventsCalendar {
         `;
       }
 
-      html += `</div></div>`; // Close grid and card
+      html += `</div>`;
+      if (!this.events.length) {
+        html += `
+          <div class="empty-state calendar-empty-state">
+            <i class="fa-regular fa-calendar-xmark"></i>
+            <p>No events yet.</p>
+          </div>
+        `;
+      }
+      html += `</div>`; // Close calendar card
     } else {
-      // List View
-      const sortedEvents = [...this.events].sort((a, b) => new Date(a.date) - new Date(b.date));
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const compareEvents = (a, b) => this.getEventDate(a) - this.getEventDate(b) || a.title.localeCompare(b.title);
+      const upcoming = this.events.filter((ev) => this.getEventDate(ev) >= todayStart).sort(compareEvents);
+      const past = this.events.filter((ev) => this.getEventDate(ev) < todayStart).sort((a, b) => compareEvents(b, a));
+      const sortedEvents = [...upcoming, ...past];
+      const groups = sortedEvents.reduce((result, ev) => {
+        const date = this.getEventDate(ev);
+        const key = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+        if (!result.has(key)) result.set(key, { date, events: [] });
+        result.get(key).events.push(ev);
+        return result;
+      }, new Map());
 
-      html += `<div style="padding:20px;">`;
-      if (sortedEvents.length) {
-        html += sortedEvents.map((ev) => {
-          const formatted = new Date(ev.date).toLocaleDateString(undefined, {
-            weekday: 'short',
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric',
-          });
-          return `
-            <div class="card" style="margin-bottom:14px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
-              <div>
-                <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
-                  <h3 style="margin:0; font-size:16px;">${ev.title}</h3>
-                  <span class="badge ${ev.audience === 'teachers' ? 'pending' : (ev.audience === 'parents' ? 'partial' : 'approved')}">
-                    ${ev.audience || 'all'}
-                  </span>
-                </div>
-                <p style="margin:0 0 4px; font-size:13.5px; color:var(--primary); font-weight:600;">
-                  <i class="fa-regular fa-calendar"></i> ${formatted}
-                </p>
-                ${ev.description ? `<p style="margin:0; font-size:13.5px; color:var(--ink-soft);">${ev.description}</p>` : ''}
-              </div>
-              <div style="display:flex; gap:8px;">
-                <button class="btn btn-secondary btn-sm" data-view-event-id="${ev._id}">
-                  <i class="fa-solid fa-eye"></i> Details
-                </button>
-                ${this.canManage ? `
-                  <button class="btn btn-ghost btn-sm" data-del-event-id="${ev._id}">
-                    <i class="fa-solid fa-trash-can"></i>
-                  </button>
-                ` : ''}
-              </div>
-            </div>
+      html += `<div class="calendar-schedule">`;
+      if (groups.size) {
+        groups.forEach(({ date, events }) => {
+          const isToday = date.getFullYear() === todayStart.getFullYear() && date.getMonth() === todayStart.getMonth() && date.getDate() === todayStart.getDate();
+          const dayLabel = date.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+          html += `
+            <section class="schedule-day ${isToday ? 'today' : ''}">
+              <h3 class="schedule-day-heading">${dayLabel}${isToday ? ' · Today' : ''}</h3>
+              ${events.map((ev) => {
+                const eventDate = this.getEventDate(ev);
+                const hasTime = eventDate.getHours() || eventDate.getMinutes() || eventDate.getSeconds();
+                const time = hasTime ? eventDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : 'All day';
+                const detail = ev.location || ev.description;
+                return `
+                  <article class="schedule-event">
+                    <time class="schedule-event-time">${time}</time>
+                    <div class="schedule-event-info">
+                      <h4>${ev.title}</h4>
+                      ${detail ? `<p>${detail}</p>` : ''}
+                    </div>
+                    <div class="schedule-event-actions">
+                      <button class="btn btn-secondary btn-sm" data-view-event-id="${ev._id}"><i class="fa-solid fa-eye"></i> Details</button>
+                      ${this.canManage ? `<button class="btn btn-ghost btn-sm" data-del-event-id="${ev._id}" aria-label="Remove ${ev.title}" title="Remove event"><i class="fa-solid fa-trash-can"></i></button>` : ''}
+                    </div>
+                  </article>
+                `;
+              }).join('')}
+            </section>
           `;
-        }).join('');
+        });
       } else {
         html += `
           <div class="empty-state">
             <i class="fa-regular fa-calendar-xmark"></i>
-            <p>No events scheduled yet.</p>
+            <p>No events yet.</p>
           </div>
         `;
       }
-      html += `</div></div>`; // Close list & card
+      html += `</div></div>`; // Close schedule and card
     }
 
     this.container.innerHTML = html;
@@ -357,7 +498,7 @@ class EventsCalendar {
       cell.addEventListener('click', () => {
         const cellDate = new Date(cell.dataset.calDate);
         const dayEvents = this.events.filter((e) => {
-          const d = new Date(e.date);
+          const d = this.getEventDate(e);
           return (
             d.getFullYear() === cellDate.getFullYear() &&
             d.getMonth() === cellDate.getMonth() &&
@@ -727,9 +868,28 @@ function openPickupFormModal({ studentId, pickup = null }, onSaved) {
   });
 }
 
+function initDashboardSync() {
+  let refreshInProgress = false;
+  window.setInterval(async () => {
+    if (refreshInProgress || document.hidden || document.querySelector('.modal-backdrop.open')) return;
+    const activePanel = document.querySelector('.panel.active');
+    if (!activePanel || typeof onPanelShown !== 'function') return;
+
+    refreshInProgress = true;
+    try {
+      await onPanelShown(activePanel.id.replace(/^panel-/, ''));
+    } catch (err) {
+      console.error('[dashboard] Could not refresh current panel:', err.message);
+    } finally {
+      refreshInProgress = false;
+    }
+  }, 5000);
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   initSidebarNav();
   initLogout();
   setWhoName();
+  initDashboardSync();
   if (document.getElementById('modalBackdrop')) Modal.init();
 });
