@@ -80,6 +80,10 @@
 
       <div class="auth-divider">or</div>
 
+      <a id="googleSignupLink" href="#" class="btn btn-block btn-google">
+        <i class="fa-brands fa-google" aria-hidden="true"></i> Continue with Google
+      </a>
+
       <div class="auth-bottom-switch">
         Already have an account? <a href="login.html">Sign In</a>
       </div>
@@ -101,6 +105,8 @@ toggleBtn.addEventListener('click', () => {
 });
 
 // Signup form handler
+document.getElementById('googleSignupLink').href = `${API_BASE}/auth/google?mode=signup`;
+
 document.getElementById('signupForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const msg = document.getElementById('msg');

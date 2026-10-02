@@ -113,6 +113,17 @@ img, svg { max-width: 100%; display: block; }
   color: var(--primary);
   border-color: var(--primary-border);
 }
+.btn-google {
+  background: #FFFFFF;
+  color: var(--ink);
+  border-color: var(--border);
+}
+.btn-google:hover {
+  background: var(--bg-surface);
+  color: var(--ink);
+  transform: translateY(-1px);
+}
+.btn-google .fa-google { color: #4285F4; }
 .btn-secondary:hover {
   background: #DCFCE7;
   color: var(--primary-hover);
@@ -554,6 +565,11 @@ footer.site-footer .container {
   border: 1px solid var(--primary-border);
   color: #14532D;
   display: block;
+}
+.otp-code-input {
+  text-align: center;
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ==========================================================================

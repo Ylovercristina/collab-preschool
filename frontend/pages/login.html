@@ -67,6 +67,10 @@
 
       <div class="auth-divider">or</div>
 
+      <a id="googleLoginLink" href="#" class="btn btn-block btn-google">
+        <i class="fa-brands fa-google" aria-hidden="true"></i> Continue with Google
+      </a>
+
       <div class="auth-bottom-switch">
         New parent to the school? <a href="signup.html">Create Account</a>
       </div>
@@ -88,6 +92,49 @@ toggleBtn.addEventListener('click', () => {
 });
 
 // Login form handler
+const googleLoginLink = document.getElementById('googleLoginLink');
+googleLoginLink.href = `${API_BASE}/auth/google?mode=login`;
+
+if (new URLSearchParams(window.location.search).get('passwordReset') === 'success') {
+  showMsg(document.getElementById('msg'), 'Your password has been reset. Please sign in.', 'success');
+}
+
+const loginMsg = document.getElementById('msg');
+const loginParams = new URLSearchParams(window.location.search);
+const googleErrors = {
+  cancelled: 'Google sign-in was cancelled.',
+  unverified: 'Google could not verify this email. Please use a verified account.',
+  'no-account': 'No account found for this Google email. Please sign up first.',
+  approval: 'Your parent account is awaiting admin approval.',
+  archived: 'This account has been archived. Contact the school admin.',
+  'linked-account': 'This account is linked to a different Google account.',
+  configuration: 'Google sign-in is not configured. Please contact the school admin.',
+  'invalid-state': 'Google sign-in could not be verified. Please try again.',
+  'invalid-mode': 'Google sign-in could not be started. Please try again.',
+  failed: 'Google sign-in could not be completed. Please try again.',
+};
+const googleError = loginParams.get('googleError');
+if (googleErrors[googleError]) showMsg(loginMsg, googleErrors[googleError]);
+
+const googleNotice = loginParams.get('googleNotice');
+if (googleNotice === 'approval') showMsg(loginMsg, 'Your parent account is awaiting admin approval.', 'success');
+
+const googleCode = loginParams.get('googleCode');
+if (googleCode) {
+  window.history.replaceState({}, document.title, window.location.pathname);
+  showMsg(loginMsg, 'Completing Google sign-in...', 'success');
+  api.post('/auth/google/exchange', { code: googleCode }, { auth: false }).then((data) => {
+    Auth.setSession(data.token, data.user);
+    const dashboard = `dashboard-${data.user.role}.html`;
+    if (googleNotice === 'account-exists') {
+      showMsg(loginMsg, 'Account already exists, logged you in.', 'success');
+      setTimeout(() => window.location.replace(dashboard), 900);
+      return;
+    }
+    window.location.replace(dashboard);
+  }).catch((err) => showMsg(loginMsg, err.message));
+}
+
 document.getElementById('loginForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const msg = document.getElementById('msg');
