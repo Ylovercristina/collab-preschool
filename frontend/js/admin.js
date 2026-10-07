@@ -11,6 +11,30 @@ function onPanelShown(panel) {
   if (panel === 'logs') return loadLogs();
 }
 
+function initOverviewNavigation() {
+  const overview = document.getElementById('panel-overview');
+  if (!overview) return;
+
+  const navigateFrom = (target) => {
+    const navItem = document.querySelector(`.nav-item[data-panel="${target.dataset.overviewPanel}"]`);
+    if (navItem) navItem.click();
+  };
+
+  overview.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-overview-panel]');
+    if (target) navigateFrom(target);
+  });
+  overview.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const target = event.target.closest('[data-overview-panel]');
+    if (!target) return;
+    event.preventDefault();
+    navigateFrom(target);
+  });
+}
+
+initOverviewNavigation();
+
 // ---------- Overview ----------
 async function loadOverview() {
   try {
@@ -23,19 +47,19 @@ async function loadOverview() {
     const teachersCount = users.users.filter((u) => u.role === 'teacher').length;
 
     document.getElementById('statRow').innerHTML = `
-      <div class="stat-card">
+      <div class="stat-card overview-clickable" data-overview-panel="students" role="button" tabindex="0" aria-label="View ${students.active} active students">
         <div class="stat-icon"><i class="fa-solid fa-user-graduate"></i></div>
         <div class="stat-content"><div class="num">${students.active}</div><div class="label">Active Students</div></div>
       </div>
-      <div class="stat-card">
+      <div class="stat-card overview-clickable" data-overview-panel="fees" role="button" tabindex="0" aria-label="View outstanding fees">
         <div class="stat-icon"><i class="fa-solid fa-receipt"></i></div>
         <div class="stat-content"><div class="num">${fmtMoney(fees.outstanding)}</div><div class="label">Outstanding Fees</div></div>
       </div>
-      <div class="stat-card">
+      <div class="stat-card overview-clickable" data-overview-panel="users" role="button" tabindex="0" aria-label="View ${pendingParents} pending account approvals">
         <div class="stat-icon"><i class="fa-solid fa-user-clock"></i></div>
         <div class="stat-content"><div class="num">${pendingParents}</div><div class="label">Pending Approvals</div></div>
       </div>
-      <div class="stat-card">
+      <div class="stat-card overview-clickable" data-overview-panel="users" role="button" tabindex="0" aria-label="View ${teachersCount} teaching staff accounts">
         <div class="stat-icon"><i class="fa-solid fa-chalkboard-user"></i></div>
         <div class="stat-content"><div class="num">${teachersCount}</div><div class="label">Teaching Staff</div></div>
       </div>
@@ -52,7 +76,7 @@ async function loadOverview() {
 
     document.getElementById('classReport').innerHTML = students.byClass.length
       ? students.byClass.map((c) => `
-        <div class="list-row">
+        <div class="list-row overview-clickable" data-overview-panel="students" role="button" tabindex="0" aria-label="View ${c.count} students in ${c._id || 'Unassigned'}">
           <span><i class="fa-solid fa-door-open" style="color:var(--primary); margin-right:8px;"></i>${c._id || 'Unassigned'}</span>
           <strong>${c.count} student${c.count > 1 ? 's' : ''}</strong>
         </div>

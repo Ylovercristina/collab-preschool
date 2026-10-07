@@ -727,6 +727,19 @@ footer.site-footer .container {
   align-items: center;
   gap: 16px;
 }
+.overview-clickable {
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.overview-clickable:hover {
+  transform: translateY(-2px);
+  border-color: var(--primary-border);
+  box-shadow: var(--shadow-md);
+}
+.overview-clickable:focus-visible {
+  outline: 3px solid var(--sky);
+  outline-offset: 2px;
+}
 .stat-icon {
   width: 48px;
   height: 48px;
