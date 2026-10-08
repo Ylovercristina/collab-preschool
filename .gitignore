@@ -4,4 +4,4 @@ dist/
 build/node_modules/
 .env
 dist/
-build/
+build/backend/uploads/

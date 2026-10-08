@@ -3,88 +3,185 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Parent Dashboard — Play & Grow</title>
-<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+<title>Parent Dashboard — Play-is-School</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
 <link rel="stylesheet" href="../css/style.css" />
 </head>
 <body>
 <div class="app-shell">
   <aside class="sidebar">
-    <a href="../index.html" class="brand"><span class="dot"></span> Play & Grow</a>
-    <div class="who"><div id="whoName">—</div><span class="role-badge">Parent</span></div>
-    <button class="nav-item active" data-panel="overview">🏠 Overview</button>
-    <button class="nav-item" data-panel="progress">📈 Progress</button>
-    <button class="nav-item" data-panel="attendance">🗓️ Attendance</button>
-    <button class="nav-item" data-panel="fees">💳 Fees</button>
-    <button class="nav-item" data-panel="messages">💬 Messages</button>
-    <button class="nav-item" data-panel="events">🎉 Calendar</button>
-    <button class="nav-item" data-panel="pickup">🚸 Pickup people</button>
-    <button class="nav-item logout" id="logoutBtn">🚪 Log out</button>
+    <a href="../index.html" class="brand">
+      <img src="../img/logocollab.jpg" alt="Play-is-School Logo" class="brand-logo-img" />
+      <span>Play-is-School</span>
+    </a>
+    <div class="who sidebar-profile">
+      <div class="profile-avatar">
+        <img id="sidebarAvatar" alt="" hidden />
+        <span id="sidebarInitials" aria-hidden="true">?</span>
+      </div>
+      <div class="sidebar-profile-content">
+        <div class="user-name" id="whoName">Loading profile...</div>
+        <div class="sidebar-profile-email" id="whoEmail"></div>
+        <span class="role-badge"><i class="fa-solid fa-people-roof"></i> Parent</span>
+      </div>
+    </div>
+    <button class="nav-item active" data-panel="overview"><i class="fa-solid fa-gauge-high"></i> Overview</button>
+    <button class="nav-item" data-panel="progress"><i class="fa-solid fa-chart-line"></i> Academic progress</button>
+    <button class="nav-item" data-panel="attendance"><i class="fa-solid fa-clipboard-user"></i> Attendance</button>
+    <button class="nav-item" data-panel="fees"><i class="fa-solid fa-credit-card"></i> Fees</button>
+    <button class="nav-item" data-panel="messages"><i class="fa-solid fa-comments"></i> Messages</button>
+    <button class="nav-item" data-panel="events"><i class="fa-solid fa-calendar-days"></i> School calendar</button>
+    <button class="nav-item" data-panel="pickup"><i class="fa-solid fa-shield-halved"></i> Authorized pickup</button>
+    <div class="sidebar-actions">
+      <button class="nav-item logout" id="logoutBtn"><i class="fa-solid fa-right-from-bracket"></i> Log out</button>
+      <button class="nav-item settings-button" type="button" data-panel="settings" aria-label="Settings" title="Settings"><i class="fa-solid fa-gear"></i></button>
+    </div>
   </aside>
 
   <main class="main-pane">
 
     <section class="panel active" id="panel-overview">
-      <h1>Welcome back! 👋</h1>
+      <div style="margin-bottom:24px;">
+        <h1 style="margin-bottom:4px;">Welcome Back</h1>
+        <p style="margin:0;">Here is your child's daily school overview and upcoming events.</p>
+      </div>
+
       <div id="alertsBanner"></div>
-      <p>Here's what's new with your child.</p>
-      <div id="childSwitcherBox" style="margin-bottom:18px;"></div>
+      <div id="paymentNotifications"></div>
+
+      <div id="childSwitcherBox" style="margin-bottom:20px;"></div>
+
       <div class="grid-2">
         <div class="card">
-          <h3>Latest progress</h3>
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:14px;">
+            <i class="fa-solid fa-chart-line" style="color:var(--primary); font-size:18px;"></i>
+            <h3 style="margin:0;">Latest Learning Progress</h3>
+          </div>
           <div id="latestProgress">Loading…</div>
         </div>
         <div class="card">
-          <h3>Upcoming events</h3>
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:14px;">
+            <i class="fa-solid fa-calendar-days" style="color:var(--primary); font-size:18px;"></i>
+            <h3 style="margin:0;">Upcoming Events</h3>
+          </div>
           <div id="upcomingEvents">Loading…</div>
         </div>
       </div>
     </section>
 
     <section class="panel" id="panel-progress">
-      <h1>Academic progress</h1>
+      <div style="margin-bottom:20px;">
+        <h1 style="margin:0;">Academic Progress Reports</h1>
+        <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Developmental milestones, daily classroom activities, and evaluations.</p>
+      </div>
       <div id="progressList"></div>
     </section>
 
     <section class="panel" id="panel-attendance">
-      <h1>Attendance</h1>
-      <table>
-        <thead><tr><th>Date</th><th>Status</th><th>Remarks</th></tr></thead>
-        <tbody id="attTbody"></tbody>
-      </table>
+      <div style="margin-bottom:20px;">
+        <h1 style="margin:0;">Daily Attendance History</h1>
+        <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Record of child presence, arrival punctuality, and teacher remarks.</p>
+      </div>
+      <div class="table-responsive">
+        <table>
+          <thead><tr><th>Date</th><th>Status</th><th>Remarks</th></tr></thead>
+          <tbody id="attTbody"></tbody>
+        </table>
+      </div>
     </section>
 
     <section class="panel" id="panel-fees">
-      <h1>Fees</h1>
-      <table>
-        <thead><tr><th>Description</th><th>Amount</th><th>Paid</th><th>Due</th><th>Status</th></tr></thead>
-        <tbody id="feesTbody"></tbody>
-      </table>
+      <div style="margin-bottom:20px;">
+        <h1 style="margin:0;">Tuition &amp; Fees Statement</h1>
+        <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Billing overview, payment history, and due dates.</p>
+        <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Payments are accepted in cash at the school office only.</p>
+      </div>
+      <div class="table-responsive">
+        <table>
+          <thead><tr><th>Description</th><th>Total Amount</th><th>Total Paid</th><th>Remaining Balance</th><th>Due Date</th><th>Status</th></tr></thead>
+          <tbody id="feesTbody"></tbody>
+        </table>
+      </div>
     </section>
 
     <section class="panel" id="panel-messages">
-      <h1>Message the teacher</h1>
-      <div class="card">
-        <h3 id="threadWithName">Teacher</h3>
+      <div style="margin-bottom:20px;">
+        <h1 style="margin:0;">Teacher Communication</h1>
+        <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Direct messages with your child's assigned educator.</p>
+      </div>
+      <div class="card" style="max-width:760px;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:14px;">
+          <i class="fa-solid fa-chalkboard-user" style="color:var(--primary);"></i>
+          <h3 id="threadWithName" style="margin:0;">Teacher</h3>
+        </div>
         <div class="chat-thread" id="chatThread"></div>
         <div class="chat-input-row">
-          <input id="chatInput" placeholder="Type a message…" />
-          <button class="btn btn-primary btn-sm" id="sendChatBtn">Send</button>
+          <input id="chatInput" placeholder="Type a message to the teacher…" />
+          <button class="btn btn-primary btn-sm" id="sendChatBtn"><i class="fa-solid fa-paper-plane"></i> Send</button>
         </div>
       </div>
     </section>
 
     <section class="panel" id="panel-events">
-      <h1>School calendar</h1>
-      <div id="eventsList"></div>
+      <div style="margin-bottom:20px;">
+        <h1 style="margin:0;">School Events Calendar</h1>
+        <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Interactive calendar showing school holidays, parent meetings, and performances.</p>
+      </div>
+      <div id="parentEventsCalendarContainer"></div>
     </section>
 
     <section class="panel" id="panel-pickup">
       <div class="toolbar">
-        <h1 style="margin:0;">Authorized pickup people</h1>
-        <button class="btn btn-primary btn-sm" id="addPickupBtn">+ Add person</button>
+        <div>
+          <h1 style="margin:0;">Authorized Pickup Persons</h1>
+          <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">List of individuals authorized to pick up your child from preschool.</p>
+        </div>
+        <button class="btn btn-primary btn-sm" id="addPickupBtn"><i class="fa-solid fa-user-plus"></i> Add Person</button>
       </div>
       <div id="pickupList"></div>
+    </section>
+
+    <section class="panel" id="panel-settings">
+      <div class="toolbar">
+        <div>
+          <h1 style="margin:0;">Personal Profile</h1>
+          <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Update your profile and sign-in details.</p>
+        </div>
+      </div>
+      <div class="card profile-settings-card">
+        <div id="profileFormMessage" class="form-msg" aria-live="polite"></div>
+        <form id="profileForm" enctype="multipart/form-data">
+          <section class="profile-photo-editor" aria-label="Profile photo">
+            <div class="profile-avatar profile-avatar-large">
+              <img id="profilePreviewImage" alt="" hidden />
+              <span id="profilePreviewInitials" aria-hidden="true">?</span>
+            </div>
+            <div class="profile-photo-copy">
+              <h2>Profile photo</h2>
+              <p>JPG, PNG or WEBP, up to 2 MB.</p>
+              <input class="profile-file-input" id="profileImage" name="avatar" type="file" accept="image/jpeg,image/png,image/webp" />
+              <label class="btn btn-secondary profile-upload-button" for="profileImage"><i class="fa-solid fa-arrow-up-from-bracket"></i> Choose image</label>
+            </div>
+          </section>
+          <section class="profile-details">
+            <div class="profile-section-heading"><span>YOUR PROFILE</span><h2>Personal details</h2></div>
+            <div class="grid-2 profile-fields">
+            <div class="field"><label for="profileFirstName">First name</label><input id="profileFirstName" name="firstName" autocomplete="given-name" maxlength="80" required /></div>
+            <div class="field"><label for="profileMiddleName">Middle name</label><input id="profileMiddleName" name="middleName" autocomplete="additional-name" maxlength="80" /></div>
+            <div class="field"><label for="profileLastName">Last name</label><input id="profileLastName" name="lastName" autocomplete="family-name" maxlength="80" required /></div>
+            <div class="field"><label for="profileEmail">Email address</label><input id="profileEmail" name="email" type="email" autocomplete="email" required /></div>
+            <div class="field"><label for="profilePhone">Contact number</label><input id="profilePhone" name="phone" type="tel" autocomplete="tel" required /></div>
+            <div class="field"><label for="profileAddress">Address</label><textarea id="profileAddress" name="address" rows="2" maxlength="500" autocomplete="street-address" required></textarea></div>
+            </div>
+          </section>
+          <div class="field profile-children-field" id="profileChildrenField" hidden>
+            <label for="profileChildrenNames">Name of child/children</label>
+            <textarea id="profileChildrenNames" name="childrenNamesInput" rows="3"></textarea>
+            <div class="field-hint">Enter one child name per line.</div>
+          </div>
+          <div class="profile-form-footer"><button class="btn btn-primary" type="submit"><i class="fa-solid fa-floppy-disk"></i> Save Changes</button></div>
+        </form>
+      </div>
     </section>
 
   </main>

@@ -3,79 +3,150 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Teacher Dashboard — Play & Grow</title>
-<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+<title>Teacher Dashboard — Play-is-School</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
 <link rel="stylesheet" href="../css/style.css" />
 </head>
 <body>
 <div class="app-shell">
   <aside class="sidebar">
-    <a href="../index.html" class="brand"><span class="dot"></span> Play & Grow</a>
-    <div class="who"><div id="whoName">—</div><span class="role-badge">Teacher</span></div>
-    <button class="nav-item active" data-panel="overview">🏠 Overview</button>
-    <button class="nav-item" data-panel="attendance">🗓️ Attendance</button>
-    <button class="nav-item" data-panel="progress">📈 Progress</button>
-    <button class="nav-item" data-panel="messages">💬 Messages</button>
-    <button class="nav-item" data-panel="events">🎉 Events</button>
-    <button class="nav-item" data-panel="pickup">🚸 Pickup verification</button>
-    <button class="nav-item" data-panel="alerts">🚨 Emergency alert</button>
-    <button class="nav-item logout" id="logoutBtn">🚪 Log out</button>
+    <a href="../index.html" class="brand">
+      <img src="../img/logocollab.jpg" alt="Play-is-School Logo" class="brand-logo-img" />
+      <span>Play-is-School</span>
+    </a>
+    <div class="who sidebar-profile">
+      <div class="profile-avatar">
+        <img id="sidebarAvatar" alt="" hidden />
+        <span id="sidebarInitials" aria-hidden="true">?</span>
+      </div>
+      <div class="sidebar-profile-content">
+        <div class="user-name" id="whoName">Loading profile...</div>
+        <div class="sidebar-profile-email" id="whoEmail"></div>
+        <span class="role-badge"><i class="fa-solid fa-chalkboard-user"></i> Teacher</span>
+      </div>
+    </div>
+    <button class="nav-item active" data-panel="overview"><i class="fa-solid fa-gauge-high"></i> Overview</button>
+    <button class="nav-item" data-panel="students"><i class="fa-solid fa-user-graduate"></i> Students</button>
+    <button class="nav-item" data-panel="fees"><i class="fa-solid fa-money-bill-wave"></i> Fees</button>
+    <button class="nav-item" data-panel="attendance"><i class="fa-solid fa-clipboard-user"></i> Attendance</button>
+    <button class="nav-item" data-panel="progress"><i class="fa-solid fa-chart-line"></i> Academic progress</button>
+    <button class="nav-item" data-panel="messages"><i class="fa-solid fa-comments"></i> Messages</button>
+    <button class="nav-item" data-panel="events"><i class="fa-solid fa-calendar-days"></i> Events &amp; Calendar</button>
+    <button class="nav-item" data-panel="pickup"><i class="fa-solid fa-shield-halved"></i> Pickup verification</button>
+    <button class="nav-item" data-panel="alerts"><i class="fa-solid fa-triangle-exclamation"></i> Emergency alert</button>
+    <div class="sidebar-actions">
+      <button class="nav-item logout" id="logoutBtn"><i class="fa-solid fa-right-from-bracket"></i> Log out</button>
+      <button class="nav-item settings-button" type="button" data-panel="settings" aria-label="Settings" title="Settings"><i class="fa-solid fa-gear"></i></button>
+    </div>
   </aside>
 
   <main class="main-pane">
 
     <section class="panel active" id="panel-overview">
-      <h1>Hi there, teacher! 🎨</h1>
-      <p>Here's your class at a glance.</p>
+      <div style="margin-bottom:24px;">
+        <h1 style="margin-bottom:4px;">Good day, Educator</h1>
+        <p style="margin:0;">Here is your class roster and daily monitoring status.</p>
+      </div>
       <div class="stat-row" id="statRow"></div>
       <div class="card">
-        <h3>Today's roster</h3>
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:16px;">
+          <i class="fa-solid fa-calendar-check" style="color:var(--primary); font-size:18px;"></i>
+          <h3 style="margin:0;">Today's Attendance Roster</h3>
+        </div>
         <div id="todayRoster">Loading…</div>
+      </div>
+    </section>
+
+    <!-- Students Management Panel (Teacher & Admin capability) -->
+    <section class="panel" id="panel-students">
+      <div class="toolbar">
+        <div>
+          <h1 style="margin:0;">Student Information &amp; Profiles</h1>
+          <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">View and edit student information, parent linkages, and authorized pickup persons.</p>
+        </div>
+        <div style="display:flex; gap:10px; align-items:center;">
+          <select id="teacherStudentFilter" style="padding:7px 12px; border-radius:6px; border:1px solid #CBD5E1; font-weight:600;">
+            <option value="my">My Assigned Class</option>
+            <option value="all">All School Students</option>
+          </select>
+        </div>
+      </div>
+      <div class="table-responsive">
+        <table>
+          <thead><tr><th>Name</th><th>Class</th><th>Parent</th><th>Birthdate</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="teacherStudentsTbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-fees">
+      <div style="margin-bottom:20px;">
+        <h1 style="margin:0;">Student Fee Status</h1>
+        <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Read-only fee balances for students assigned to your class.</p>
+      </div>
+      <div class="table-responsive">
+        <table>
+          <thead><tr><th>Student</th><th>Class</th><th>Fee</th><th>Total</th><th>Paid</th><th>Remaining</th><th>Due Date</th><th>Status</th></tr></thead>
+          <tbody id="teacherFeesTbody"></tbody>
+        </table>
       </div>
     </section>
 
     <section class="panel" id="panel-attendance">
       <div class="toolbar">
-        <h1 style="margin:0;">Attendance</h1>
-        <input type="date" id="attDate" />
+        <div>
+          <h1 style="margin:0;">Class Attendance</h1>
+          <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Mark and record daily student attendance statuses.</p>
+        </div>
+        <input type="date" id="attDate" style="padding:8px 12px; border-radius:6px; border:1px solid #CBD5E1;" />
       </div>
-      <table>
-        <thead><tr><th>Student</th><th>Class</th><th>Status</th><th>Remarks</th></tr></thead>
-        <tbody id="attTbody"></tbody>
-      </table>
+      <div class="table-responsive">
+        <table>
+          <thead><tr><th>Student</th><th>Class</th><th>Attendance Status</th><th>Remarks</th></tr></thead>
+          <tbody id="attTbody"></tbody>
+        </table>
+      </div>
     </section>
 
     <section class="panel" id="panel-progress">
       <div class="toolbar">
-        <h1 style="margin:0;">Academic progress</h1>
-        <select id="progStudentSelect"></select>
+        <h1 style="margin:0;">Academic Progress Evaluation</h1>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <label style="font-weight:600; font-size:13.5px;">Student:</label>
+          <select id="progStudentSelect" style="padding:7px 12px; border-radius:6px; border:1px solid #CBD5E1;"></select>
+        </div>
       </div>
       <div class="card" style="margin-bottom:20px;">
-        <h3>Log a new entry</h3>
+        <h3 style="margin-bottom:14px;"><i class="fa-solid fa-plus-circle" style="color:var(--primary); margin-right:6px;"></i>Log Milestone or Activity</h3>
         <form id="progressForm">
-          <div class="field"><label>Milestone</label><input id="pMilestone" placeholder="e.g. Recognizes 5 letters" /></div>
-          <div class="field"><label>Activity</label><input id="pActivity" placeholder="e.g. Color sorting game" /></div>
-          <div class="field"><label>Assessment</label><input id="pAssessment" placeholder="e.g. Meeting expectations" /></div>
-          <div class="field"><label>Notes</label><textarea id="pNotes" rows="2"></textarea></div>
-          <button class="btn btn-primary" type="submit">Save entry</button>
+          <div class="grid-2">
+            <div class="field"><label>Milestone</label><input id="pMilestone" placeholder="e.g. Recognizes 5 alphabet letters" /></div>
+            <div class="field"><label>Activity</label><input id="pActivity" placeholder="e.g. Color sorting puzzle" /></div>
+          </div>
+          <div class="field"><label>Assessment / Observation</label><input id="pAssessment" placeholder="e.g. Meeting age expectations" /></div>
+          <div class="field"><label>Teacher Notes</label><textarea id="pNotes" rows="2" placeholder="Describe strengths or areas needing practice…"></textarea></div>
+          <button class="btn btn-primary" type="submit"><i class="fa-solid fa-floppy-disk"></i> Save Entry</button>
         </form>
       </div>
       <div id="progressList"></div>
     </section>
 
     <section class="panel" id="panel-messages">
-      <h1>Messages</h1>
+      <div style="margin-bottom:20px;">
+        <h1 style="margin:0;">Parent Communications</h1>
+        <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Direct message threads with parents and guardians.</p>
+      </div>
       <div class="grid-2">
         <div class="card">
-          <h3>Conversations</h3>
+          <h3 style="margin-bottom:14px;"><i class="fa-solid fa-inbox" style="color:var(--primary); margin-right:6px;"></i>Conversations</h3>
           <div id="inboxList"></div>
         </div>
         <div class="card">
-          <h3 id="threadWithName">Select a parent</h3>
+          <h3 id="threadWithName" style="margin-bottom:14px;">Select a parent</h3>
           <div class="chat-thread" id="chatThread"></div>
           <div class="chat-input-row">
-            <input id="chatInput" placeholder="Type a message…" />
-            <button class="btn btn-primary btn-sm" id="sendChatBtn">Send</button>
+            <input id="chatInput" placeholder="Type a message to parent…" />
+            <button class="btn btn-primary btn-sm" id="sendChatBtn"><i class="fa-solid fa-paper-plane"></i> Send</button>
           </div>
         </div>
       </div>
@@ -83,29 +154,91 @@
 
     <section class="panel" id="panel-events">
       <div class="toolbar">
-        <h1 style="margin:0;">Events & notices</h1>
-        <button class="btn btn-primary btn-sm" id="addEventBtn">+ Notify parents</button>
+        <div>
+          <h1 style="margin:0;">Events &amp; Notices Calendar</h1>
+          <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">View the school calendar and publish notices for parents.</p>
+        </div>
+        <button class="btn btn-primary btn-sm" id="addEventBtn"><i class="fa-solid fa-bullhorn"></i> Send Notice / Event</button>
       </div>
-      <div id="eventsList"></div>
+      <div id="teacherEventsCalendarContainer"></div>
     </section>
 
     <section class="panel" id="panel-pickup">
-      <h1>Pickup verification</h1>
-      <select id="pickupStudentSelect" style="margin-bottom:16px;"></select>
+      <div class="toolbar">
+        <div>
+          <h1 style="margin:0;">Pickup Verification &amp; Security</h1>
+          <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Verify authorized pickup persons at departure time.</p>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <label style="font-weight:600; font-size:13.5px;">Student:</label>
+          <select id="pickupStudentSelect" style="padding:7px 12px; border-radius:6px; border:1px solid #CBD5E1;"></select>
+        </div>
+      </div>
+
+      <div style="display:flex; justify-content:flex-end; margin-bottom:12px;">
+        <button class="btn btn-primary btn-sm" id="teacherAddPickupBtn"><i class="fa-solid fa-user-plus"></i> Add Authorized Person</button>
+      </div>
+
       <div id="pickupList"></div>
     </section>
 
     <section class="panel" id="panel-alerts">
-      <h1>Send an emergency alert</h1>
+      <div style="margin-bottom:20px;">
+        <h1 style="margin:0;">Emergency Alerts</h1>
+        <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Broadcast urgent notices to all registered parents.</p>
+      </div>
       <div class="card">
         <form id="alertForm">
-          <div class="field"><label>Title</label><input id="aTitle" required /></div>
-          <div class="field"><label>Message</label><textarea id="aMessage" rows="3" required></textarea></div>
-          <button class="btn btn-danger" type="submit">🚨 Send alert to all parents</button>
+          <div class="field"><label>Alert Title</label><input id="aTitle" placeholder="e.g. Weather Advisory / Early Dismissal" required /></div>
+          <div class="field"><label>Message Content</label><textarea id="aMessage" rows="3" placeholder="Provide clear, urgent instructions for parents…" required></textarea></div>
+          <button class="btn btn-danger" type="submit"><i class="fa-solid fa-triangle-exclamation"></i> Send Alert to All Parents</button>
         </form>
       </div>
-      <h3 style="margin-top:24px;">Recent alerts</h3>
+      <h3 style="margin-top:28px; margin-bottom:14px;">Recent Alerts</h3>
       <div id="alertsList"></div>
+    </section>
+
+    <section class="panel" id="panel-settings">
+      <div class="toolbar">
+        <div>
+          <h1 style="margin:0;">Personal Profile</h1>
+          <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Update your profile and sign-in details.</p>
+        </div>
+      </div>
+      <div class="card profile-settings-card">
+        <div id="profileFormMessage" class="form-msg" aria-live="polite"></div>
+        <form id="profileForm" enctype="multipart/form-data">
+          <section class="profile-photo-editor" aria-label="Profile photo">
+            <div class="profile-avatar profile-avatar-large">
+              <img id="profilePreviewImage" alt="" hidden />
+              <span id="profilePreviewInitials" aria-hidden="true">?</span>
+            </div>
+            <div class="profile-photo-copy">
+              <h2>Profile photo</h2>
+              <p>JPG, PNG or WEBP, up to 2 MB.</p>
+              <input class="profile-file-input" id="profileImage" name="avatar" type="file" accept="image/jpeg,image/png,image/webp" />
+              <label class="btn btn-secondary profile-upload-button" for="profileImage"><i class="fa-solid fa-arrow-up-from-bracket"></i> Choose image</label>
+            </div>
+          </section>
+          <section class="profile-details">
+            <div class="profile-section-heading"><span>YOUR PROFILE</span><h2>Personal details</h2></div>
+            <div class="grid-2 profile-fields">
+            <div class="field"><label for="profileFirstName">First name</label><input id="profileFirstName" name="firstName" autocomplete="given-name" maxlength="80" required /></div>
+            <div class="field"><label for="profileMiddleName">Middle name</label><input id="profileMiddleName" name="middleName" autocomplete="additional-name" maxlength="80" /></div>
+            <div class="field"><label for="profileLastName">Last name</label><input id="profileLastName" name="lastName" autocomplete="family-name" maxlength="80" required /></div>
+            <div class="field"><label for="profileEmail">Email address</label><input id="profileEmail" name="email" type="email" autocomplete="email" required /></div>
+            <div class="field"><label for="profilePhone">Contact number</label><input id="profilePhone" name="phone" type="tel" autocomplete="tel" required /></div>
+            <div class="field"><label for="profileAddress">Address</label><textarea id="profileAddress" name="address" rows="2" maxlength="500" autocomplete="street-address" required></textarea></div>
+            </div>
+          </section>
+          <div class="field profile-children-field" id="profileChildrenField" hidden>
+            <label for="profileChildrenNames">Name of child/children</label>
+            <textarea id="profileChildrenNames" name="childrenNamesInput" rows="3"></textarea>
+            <div class="field-hint">Enter one child name per line.</div>
+          </div>
+          <div class="profile-form-footer"><button class="btn btn-primary" type="submit"><i class="fa-solid fa-floppy-disk"></i> Save Changes</button></div>
+        </form>
+      </div>
     </section>
 
   </main>

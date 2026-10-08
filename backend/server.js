@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
+const path = require('path');
 const connectDB = require('./config/db');
 const ensureSeedAdmin = require('./utils/seed');
 
@@ -10,6 +11,7 @@ const app = express();
 app.use(cors({ origin: process.env.CLIENT_ORIGIN || '*' }));
 app.use(express.json());
 app.use(morgan('dev'));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', name: 'Play & Grow API' }));
 
