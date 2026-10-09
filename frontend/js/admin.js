@@ -105,6 +105,7 @@ async function loadUsers() {
       <td><span class="badge ${u.status}">${u.status}</span></td>
       <td>
         <div style="display:flex; gap:6px;">
+          ${u.status !== 'archived' ? `<a class="btn btn-ghost btn-sm" href="edit-user.html?id=${encodeURIComponent(u.id)}" title="Edit user"><i class="fa-solid fa-pen-to-square"></i> Edit</a>` : ''}
           ${u.status === 'pending' ? `<button class="btn btn-secondary btn-sm" data-approve="${u.id}"><i class="fa-solid fa-check"></i> Approve</button>` : ''}
           ${u.status !== 'archived' ? `<button class="btn btn-ghost btn-sm" data-archive="${u.id}">Archive</button>` : `<button class="btn btn-ghost btn-sm" data-reactivate="${u.id}">Reactivate</button>`}
         </div>
