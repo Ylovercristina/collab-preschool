@@ -56,24 +56,65 @@
     </section>
 
     <section class="panel" id="panel-users">
-      <div class="toolbar">
-        <h1 style="margin:0;">User Accounts</h1>
-        <button class="btn btn-primary btn-sm" id="addUserBtn"><i class="fa-solid fa-user-plus"></i> Add Teacher / Admin</button>
-      </div>
-      <div class="toolbar" style="margin-bottom:14px;">
-        <div style="display:flex; align-items:center; gap:10px;">
-          <label class="field-hint" style="font-weight:600; color:var(--ink);">Filter by role: </label>
-          <select id="roleFilter" style="padding:6px 10px; border-radius:6px; border:1px solid #CBD5E1;">
-            <option value="">All Roles</option>
-            <option value="admin">Admin</option>
-            <option value="teacher">Teacher</option>
-            <option value="parent">Parent</option>
-          </select>
+      <div class="toolbar" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:18px;">
+        <div>
+          <h1 style="margin:0; font-size:24px; font-weight:800; color:var(--ink);">User Accounts Management</h1>
+          <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">View, search, and manage administrator, teaching staff, and parent accounts.</p>
         </div>
+        <button class="btn btn-primary btn-sm" id="addUserBtn"><i class="fa-solid fa-user-plus"></i> Add Staff / Admin</button>
       </div>
+
+      <!-- Segmented Role Category Tabs -->
+      <div class="account-role-tabs" style="display:flex; gap:8px; border-bottom:1px solid var(--border); margin-bottom:18px; overflow-x:auto;">
+        <button type="button" class="account-tab active" data-account-role="teacher" style="padding:10px 18px; font-size:13.5px; font-weight:700; border:none; background:rgba(46,125,50,0.06); cursor:pointer; display:flex; align-items:center; gap:8px; border-bottom:3px solid var(--primary); color:var(--primary); border-radius:8px 8px 0 0; transition:all 0.15s ease;">
+          <i class="fa-solid fa-chalkboard-user"></i>
+          <span>Teacher Accounts</span>
+          <span id="tabCountTeacher" class="badge" style="background:#E2E8F0; color:var(--ink); font-size:11px; padding:2px 7px;">0</span>
+        </button>
+        <button type="button" class="account-tab" data-account-role="parent" style="padding:10px 18px; font-size:13.5px; font-weight:700; border:none; background:none; cursor:pointer; display:flex; align-items:center; gap:8px; border-bottom:3px solid transparent; color:var(--ink-muted); border-radius:8px 8px 0 0; transition:all 0.15s ease;">
+          <i class="fa-solid fa-users"></i>
+          <span>Parent Accounts</span>
+          <span id="tabCountParent" class="badge" style="background:#E2E8F0; color:var(--ink); font-size:11px; padding:2px 7px;">0</span>
+        </button>
+        <button type="button" class="account-tab" data-account-role="admin" style="padding:10px 18px; font-size:13.5px; font-weight:700; border:none; background:none; cursor:pointer; display:flex; align-items:center; gap:8px; border-bottom:3px solid transparent; color:var(--ink-muted); border-radius:8px 8px 0 0; transition:all 0.15s ease;">
+          <i class="fa-solid fa-user-shield"></i>
+          <span>Admin Accounts</span>
+          <span id="tabCountAdmin" class="badge" style="background:#E2E8F0; color:var(--ink); font-size:11px; padding:2px 7px;">0</span>
+        </button>
+      </div>
+
+      <!-- Search, Filter & Counter Bar -->
+      <div style="margin-bottom:16px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+        <div style="display:flex; align-items:center; gap:10px; flex:1; min-width:280px; max-width:560px; flex-wrap:wrap;">
+          <div style="position:relative; flex:1; min-width:220px;">
+            <i class="fa-solid fa-magnifying-glass" style="position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--ink-muted); font-size:12px;"></i>
+            <input type="text" id="userSearchInput" placeholder="Search by name or email..." style="width:100%; padding:8px 12px 8px 34px; border:1px solid var(--border); border-radius:8px; font-size:13px; background:#fff;" />
+          </div>
+          <select id="userStatusFilter" style="padding:8px 12px; border-radius:8px; border:1px solid var(--border); font-size:13px; background:#fff; color:var(--ink);">
+            <option value="">All Statuses</option>
+            <option value="approved">Approved</option>
+            <option value="pending">Pending</option>
+            <option value="archived">Archived</option>
+          </select>
+          <button type="button" class="btn btn-ghost btn-sm" id="userResetFilterBtn" style="padding:7px 12px; font-size:12.5px;" title="Reset filters">
+            <i class="fa-solid fa-rotate-left"></i> Reset
+          </button>
+        </div>
+        <div id="userSearchResultsCount" style="font-size:12.5px; color:var(--ink-muted); font-weight:600;"></div>
+      </div>
+
+      <!-- Accounts Table -->
       <div class="table-responsive">
         <table>
-          <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead>
+          <thead>
+            <tr>
+              <th style="min-width:180px;">Account Name</th>
+              <th style="min-width:220px;">Email Address</th>
+              <th style="min-width:110px;">Status</th>
+              <th style="min-width:120px;">Date Created</th>
+              <th style="min-width:150px; text-align:right;">Actions</th>
+            </tr>
+          </thead>
           <tbody id="usersTbody"></tbody>
         </table>
       </div>
@@ -98,7 +139,17 @@
     <section class="panel" id="panel-fees">
       <div class="toolbar">
         <h1 style="margin:0;">Fee Billing &amp; Collections</h1>
-        <button class="btn btn-primary btn-sm" id="addFeeBtn"><i class="fa-solid fa-plus"></i> New Fee Record</button>
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <button class="btn btn-secondary btn-sm" id="paymentReportBtn"><i class="fa-solid fa-file-invoice-dollar"></i> Payment Reports</button>
+          <button class="btn btn-primary btn-sm" id="addFeeBtn"><i class="fa-solid fa-plus"></i> New Fee Record</button>
+        </div>
+      </div>
+      <div style="margin:12px 0 16px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+        <div style="position:relative; width:100%; max-width:320px;">
+          <i class="fa-solid fa-magnifying-glass" style="position:absolute; left:11px; top:50%; transform:translateY(-50%); color:var(--ink-muted); font-size:12px;"></i>
+          <input type="text" id="feeSearchInput" placeholder="Search student name or ID..." style="width:100%; padding:7px 12px 7px 32px; border:1px solid var(--border); border-radius:6px; font-size:13px; background:#fff;" />
+        </div>
+        <div id="feeSearchCount" style="font-size:12.5px; color:var(--ink-muted);"></div>
       </div>
       <div class="table-responsive">
         <table>

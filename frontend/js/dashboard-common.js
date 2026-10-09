@@ -60,38 +60,180 @@ async function showPaymentReceipt(feeId, paymentId) {
   try {
     const { receipt, receiptNumber, state } = await api.get(`/fees/${feeId}/payments/${paymentId}/receipt`);
     if (!receipt) throw new Error('Receipt details are not available for this payment.');
-    const receiptRows = `
-      <div><strong>Receipt Number:</strong> ${receiptNumber}</div>
-      <div><strong>Date Paid:</strong> ${fmtDate(receipt.datePaid)}</div>
-      <div><strong>School:</strong> ${receipt.schoolName}</div>
-      <div><strong>Student:</strong> ${receipt.studentName}</div>
-      <div><strong>Grade / Section:</strong> ${receipt.gradeSection}</div>
-      <div><strong>Fee:</strong> ${receipt.feeName}</div>
-      <div><strong>Amount Paid:</strong> ${fmtMoney(receipt.amountPaid)} (${receipt.method})</div>
-      <div><strong>Total Fee:</strong> ${fmtMoney(receipt.totalFee)}</div>
-      <div><strong>Total Paid After This Payment:</strong> ${fmtMoney(receipt.totalPaid)}</div>
-      <div><strong>Remaining Balance:</strong> ${fmtMoney(receipt.remainingBalance)}</div>
-      ${receipt.dueDate && receipt.remainingBalance > 0 ? `<div><strong>Due Date:</strong> ${fmtDate(receipt.dueDate)}</div>` : ''}
-      <div><strong>Status After Payment:</strong> ${receipt.status}</div>
-      <div><strong>Recorded By:</strong> ${receipt.recordedBy}</div>
-    `;
-    const stateLabel = state === 'voided' ? 'VOIDED' : (state === 'corrected' ? 'CORRECTED' : '');
+
+    const isVoided = state === 'voided';
+    const isCorrected = state === 'corrected';
+    const stateLabel = isVoided ? 'VOIDED' : (isCorrected ? 'CORRECTED' : '');
+    const isPaid = receipt.remainingBalance === 0;
+    const statusColor = isPaid ? '#15803D' : '#B45309';
+    const statusBg = isPaid ? '#DCFCE7' : '#FEF3C7';
+
+    const logoPath = '../img/logocollab.jpg';
+
+    // Helper to build a receipt data row
+    const row = (label, value) => `
+      <div style="display:flex; justify-content:space-between; align-items:baseline; padding:9px 0; border-bottom:1px solid #F1F5F9; gap:12px;">
+        <span style="font-size:12.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; color:#64748B; white-space:nowrap;">${label}</span>
+        <span style="font-size:14px; font-weight:600; color:#1E293B; text-align:right;">${value}</span>
+      </div>`;
+
+    // Build print-friendly plain rows (no inline HTML icons)
+    const printRow = (label, value) => `<tr><td style="padding:7px 0; font-size:13px; color:#64748B; font-weight:600; white-space:nowrap; padding-right:24px;">${label}</td><td style="padding:7px 0; font-size:13px; color:#1E293B; font-weight:700; text-align:right;">${value}</td></tr>`;
+
     Modal.open(`
-      <div id="printableReceipt" style="background:#FFF; border:1px solid var(--border); padding:24px; border-radius:var(--radius-md);">
-        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:16px;">
-          <div><h2 style="margin:0; font-size:22px;">${receipt.schoolName}</h2><p style="margin:4px 0 0;">Official Cash Receipt</p></div>
-          ${stateLabel ? `<strong style="color:var(--coral); border:1px solid var(--coral-border); padding:4px 8px;">${stateLabel}</strong>` : ''}
+      <div id="printableReceipt" style="background:#FFFFFF; border-radius:12px; overflow:hidden;">
+
+        <!-- Receipt Header -->
+        <div style="background:linear-gradient(135deg,#38A169 0%,#276749 100%); padding:22px 24px 18px; display:flex; align-items:center; gap:16px;">
+          <div style="width:52px; height:52px; border-radius:10px; background:#FFFFFF; overflow:hidden; flex-shrink:0; display:flex; align-items:center; justify-content:center; box-shadow:0 2px 8px rgba(0,0,0,0.18);">
+            <img src="${logoPath}" alt="School Logo" style="width:100%; height:100%; object-fit:cover; border-radius:9px;" onerror="this.style.display='none'" />
+          </div>
+          <div style="flex:1; min-width:0;">
+            <div style="font-size:18px; font-weight:800; color:#FFFFFF; line-height:1.2;">${receipt.schoolName}</div>
+            <div style="font-size:12px; color:rgba(255,255,255,0.82); margin-top:2px; font-weight:500;">Official Payment Receipt</div>
+          </div>
+          ${stateLabel ? `<div style="background:rgba(255,255,255,0.15); border:1.5px solid rgba(255,255,255,0.4); border-radius:6px; padding:4px 10px; font-size:12px; font-weight:800; color:#FFFFFF; letter-spacing:0.06em;">${stateLabel}</div>` : ''}
         </div>
-        <div style="display:grid; gap:8px; font-size:14px;">${receiptRows}</div>
-        <div style="display:flex; justify-content:flex-end; margin-top:20px;">
-          <button class="btn btn-secondary btn-sm" id="printReceiptBtn"><i class="fa-solid fa-print"></i> Print</button>
+
+        <!-- Receipt Number Banner -->
+        <div style="background:#F8FAFC; border-bottom:1px solid #E2E8F0; padding:10px 24px; display:flex; justify-content:space-between; align-items:center;">
+          <span style="font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#64748B;">Receipt No.</span>
+          <span style="font-size:15px; font-weight:800; color:#2E7D32; letter-spacing:0.04em;">${receiptNumber}</span>
         </div>
+
+        <!-- Receipt Body -->
+        <div style="padding:6px 24px 16px;">
+
+          <!-- Student Info Section -->
+          <div style="margin-top:14px; margin-bottom:4px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.07em; color:#94A3B8;">Student Information</div>
+          <div style="background:#F8FAFC; border-radius:8px; border:1px solid #E2E8F0; padding:2px 12px; margin-bottom:10px;">
+            ${row('Full Name', receipt.studentName)}
+            ${row('Grade / Section', receipt.gradeSection)}
+          </div>
+
+          <!-- Fee Details Section -->
+          <div style="margin-top:10px; margin-bottom:4px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.07em; color:#94A3B8;">Fee Details</div>
+          <div style="background:#F8FAFC; border-radius:8px; border:1px solid #E2E8F0; padding:2px 12px; margin-bottom:10px;">
+            ${row('Description', receipt.feeName)}
+            ${row('Total Fee', fmtMoney(receipt.totalFee))}
+            ${row('Amount Paid', `<span style="color:#15803D;">${fmtMoney(receipt.amountPaid)}</span> <span style="font-size:12px; font-weight:500; color:#64748B;">(${receipt.method})</span>`)}
+            ${row('Total Paid (Cumulative)', fmtMoney(receipt.totalPaid))}
+            ${row('Remaining Balance', `<span style="color:${isPaid ? '#15803D' : '#B45309'}; font-weight:700;">${fmtMoney(receipt.remainingBalance)}</span>`)}
+            ${receipt.dueDate && receipt.remainingBalance > 0 ? row('Due Date', fmtDate(receipt.dueDate)) : ''}
+          </div>
+
+          <!-- Payment Details Section -->
+          <div style="margin-top:10px; margin-bottom:4px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.07em; color:#94A3B8;">Payment Details</div>
+          <div style="background:#F8FAFC; border-radius:8px; border:1px solid #E2E8F0; padding:2px 12px; margin-bottom:10px;">
+            ${row('Date Paid', fmtDate(receipt.datePaid))}
+            ${row('Payment Method', receipt.method)}
+            ${row('Recorded By', receipt.recordedBy)}
+          </div>
+
+          <!-- Status Badge -->
+          <div style="margin-top:14px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+            <div style="display:inline-flex; align-items:center; gap:8px; background:${statusBg}; border-radius:8px; padding:8px 14px;">
+              <i class="fa-solid fa-${isPaid ? 'circle-check' : 'clock'}" style="color:${statusColor}; font-size:15px;"></i>
+              <span style="font-size:13px; font-weight:700; color:${statusColor};">${receipt.status}</span>
+            </div>
+            <div style="font-size:11.5px; color:#94A3B8;">Issued by Play-is-School</div>
+          </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div style="padding:14px 24px 20px; display:flex; justify-content:space-between; align-items:center; border-top:1px solid #E2E8F0; gap:10px;">
+          <button class="btn btn-ghost btn-sm" id="closeReceiptBtn"><i class="fa-solid fa-xmark"></i> Close</button>
+          <button class="btn btn-primary btn-sm" id="printReceiptBtn"><i class="fa-solid fa-print"></i> Print Receipt</button>
+        </div>
+
       </div>
     `);
+
+    document.getElementById('closeReceiptBtn').addEventListener('click', () => Modal.close());
+
     document.getElementById('printReceiptBtn').addEventListener('click', () => {
       const printWindow = window.open('', '_blank');
       if (!printWindow) return;
-      printWindow.document.write(`<!doctype html><html><head><title>${receiptNumber}</title><style>body{font-family:Arial,sans-serif;color:#1e293b;padding:32px}.receipt{max-width:640px;margin:auto;border:1px solid #cbd5e1;padding:28px}.rows{display:grid;gap:10px;margin-top:24px}.state{color:#c94a4a;font-weight:bold}@media print{body{padding:0}}</style></head><body><main class="receipt"><h1>${receipt.schoolName}</h1><h2>Official Cash Receipt</h2>${stateLabel ? `<p class="state">${stateLabel}</p>` : ''}<section class="rows">${receiptRows}</section></main></body></html>`);
+      const hasDue = receipt.dueDate && receipt.remainingBalance > 0;
+      printWindow.document.write(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Receipt ${receiptNumber} — ${receipt.schoolName}</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: Arial, Helvetica, sans-serif; color: #1e293b; margin: 0; padding: 32px; background: #fff; }
+    .receipt { max-width: 580px; margin: 0 auto; border: 1px solid #cbd5e1; border-radius: 10px; overflow: hidden; }
+    .receipt-header { background: #276749; padding: 20px 24px; display: flex; align-items: center; gap: 14px; }
+    .receipt-logo { width: 48px; height: 48px; border-radius: 8px; background: #fff; object-fit: cover; }
+    .receipt-header-text { flex: 1; }
+    .receipt-header-text h1 { margin: 0; font-size: 18px; color: #fff; }
+    .receipt-header-text p { margin: 2px 0 0; font-size: 12px; color: rgba(255,255,255,0.8); }
+    .state-badge { border: 1.5px solid rgba(255,255,255,0.5); border-radius: 5px; padding: 3px 9px; font-size: 11px; font-weight: 800; color: #fff; letter-spacing: 0.06em; }
+    .receipt-no-bar { background: #f8fafc; border-bottom: 1px solid #e2e8f0; padding: 9px 24px; display: flex; justify-content: space-between; }
+    .receipt-no-bar .label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; }
+    .receipt-no-bar .value { font-size: 15px; font-weight: 800; color: #276749; letter-spacing: 0.04em; }
+    .receipt-body { padding: 16px 24px 20px; }
+    .section-label { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: #94a3b8; margin: 14px 0 6px; }
+    .data-table { width: 100%; border-collapse: collapse; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0; margin-bottom: 6px; }
+    .data-table td { padding: 8px 12px; font-size: 13px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+    .data-table tr:last-child td { border-bottom: none; }
+    .data-table .lbl { color: #64748b; font-weight: 600; width: 46%; white-space: nowrap; }
+    .data-table .val { color: #1e293b; font-weight: 700; text-align: right; }
+    .status-row { margin-top: 16px; display: flex; align-items: center; justify-content: space-between; }
+    .status-pill { display: inline-block; padding: 6px 14px; border-radius: 7px; font-size: 13px; font-weight: 700; }
+    .status-paid { background: #dcfce7; color: #15803d; }
+    .status-partial { background: #fef3c7; color: #b45309; }
+    .footer-note { font-size: 11px; color: #94a3b8; }
+    @media print { body { padding: 0; } }
+  </style>
+</head>
+<body>
+<div class="receipt">
+  <div class="receipt-header">
+    <img src="../img/logocollab.jpg" alt="Logo" class="receipt-logo" onerror="this.style.display='none'" />
+    <div class="receipt-header-text">
+      <h1>${receipt.schoolName}</h1>
+      <p>Official Payment Receipt</p>
+    </div>
+    ${stateLabel ? `<span class="state-badge">${stateLabel}</span>` : ''}
+  </div>
+  <div class="receipt-no-bar">
+    <span class="label">Receipt No.</span>
+    <span class="value">${receiptNumber}</span>
+  </div>
+  <div class="receipt-body">
+    <div class="section-label">Student Information</div>
+    <table class="data-table">
+      ${printRow('Full Name', receipt.studentName)}
+      ${printRow('Grade / Section', receipt.gradeSection)}
+    </table>
+
+    <div class="section-label">Fee Details</div>
+    <table class="data-table">
+      ${printRow('Description', receipt.feeName)}
+      ${printRow('Total Fee', fmtMoney(receipt.totalFee))}
+      ${printRow('Amount Paid', `${fmtMoney(receipt.amountPaid)} (${receipt.method})`)}
+      ${printRow('Total Paid (Cumulative)', fmtMoney(receipt.totalPaid))}
+      ${printRow('Remaining Balance', fmtMoney(receipt.remainingBalance))}
+      ${hasDue ? printRow('Due Date', fmtDate(receipt.dueDate)) : ''}
+    </table>
+
+    <div class="section-label">Payment Details</div>
+    <table class="data-table">
+      ${printRow('Date Paid', fmtDate(receipt.datePaid))}
+      ${printRow('Payment Method', receipt.method)}
+      ${printRow('Recorded By', receipt.recordedBy)}
+    </table>
+
+    <div class="status-row">
+      <span class="status-pill ${isPaid ? 'status-paid' : 'status-partial'}">${receipt.status}</span>
+      <span class="footer-note">Issued by Play-is-School</span>
+    </div>
+  </div>
+</div>
+</body>
+</html>`);
       printWindow.document.close();
       printWindow.focus();
       printWindow.print();
