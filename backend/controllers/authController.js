@@ -165,9 +165,17 @@ function setGoogleStateCookie(res, state, clear = false) {
   res.setHeader('Set-Cookie', cookieParts.join('; '));
 }
 
+
 function frontendLoginUrl(query = {}) {
-  const url = new URL('/pages/login.html', process.env.CLIENT_ORIGIN || 'http://127.0.0.1:5500');
-  Object.entries(query).forEach(([key, value]) => url.searchParams.set(key, value));
+  const url = new URL(
+    '/frontend/pages/login.html',
+    process.env.CLIENT_ORIGIN || 'http://127.0.0.1:5500'
+  );
+
+  Object.entries(query).forEach(([key, value]) => {
+    url.searchParams.set(key, value);
+  });
+
   return url;
 }
 
