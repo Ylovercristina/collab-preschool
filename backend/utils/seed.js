@@ -11,7 +11,7 @@ async function ensureSeedAdmin() {
   const password = process.env.SEED_ADMIN_PASSWORD || 'Admin123!';
 
   await User.create({ name, email, password, role: 'admin', status: 'approved' });
-  console.log(`[seed] Created initial admin account -> ${email} / ${password} (change the password after first login)`);
+  console.log('[seed] Created initial admin account. Credentials were not logged.');
 }
 
 module.exports = ensureSeedAdmin;

@@ -1,35 +1,148 @@
+// ---------- Play-is-School -- Teacher Dashboard Controller ----------
 const user = requireRole('teacher');
 let myStudents = [];
+let allStudents = [];
 let activeThreadUserId = null;
+let teacherCalendar = null;
 
 function onPanelShown(panel) {
-  if (panel === 'attendance') loadAttendance();
-  if (panel === 'progress') loadProgressPanel();
-  if (panel === 'messages') loadInbox();
-  if (panel === 'events') loadEvents();
-  if (panel === 'pickup') loadPickupPanel();
-  if (panel === 'alerts') loadAlerts();
+  if (panel === 'overview') return loadOverview();
+  if (panel === 'students') return loadStudentsPanel();
+  if (panel === 'fees') return loadFeeStatuses();
+  if (panel === 'attendance') return loadAttendance();
+  if (panel === 'progress') return loadProgressPanel();
+  if (panel === 'messages') return loadInbox();
+  if (panel === 'events') return loadEvents();
+  if (panel === 'pickup') return loadPickupPanel();
+  if (panel === 'alerts') return loadAlerts();
 }
 
 async function loadMyStudents() {
   const { students } = await api.get('/students');
-  myStudents = students;
-  return students;
+  allStudents = students;
+  myStudents = students.filter((s) => s.teacher && (s.teacher._id === user.id || s.teacher === user.id));
+  if (!myStudents.length) {
+    // If not specifically assigned by ID, show all active students in class roster
+    myStudents = allStudents;
+  }
+  return myStudents;
 }
 
 // ---------- Overview ----------
 async function loadOverview() {
   await loadMyStudents();
   document.getElementById('statRow').innerHTML = `
-    <div class="stat-card"><div class="num">${myStudents.length}</div><div class="label">My students</div></div>
+    <div class="stat-card">
+      <div class="stat-icon"><i class="fa-solid fa-user-graduate"></i></div>
+      <div class="stat-content"><div class="num">${myStudents.length}</div><div class="label">My Class Students</div></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-icon"><i class="fa-solid fa-users"></i></div>
+      <div class="stat-content"><div class="num">${allStudents.length}</div><div class="label">Total School Students</div></div>
+    </div>
   `;
   const { roster } = await api.get('/attendance/class');
   document.getElementById('todayRoster').innerHTML = roster.length ? `
-    <table><thead><tr><th>Student</th><th>Status today</th></tr></thead><tbody>
-      ${roster.map((r) => `<tr><td>${r.student.name}</td><td>${r.attendance ? `<span class="badge ${r.attendance.status}">${r.attendance.status}</span>` : '<em>not marked</em>'}</td></tr>`).join('')}
-    </tbody></table>
-  ` : '<div class="empty-state">No students assigned to you yet.</div>';
+    <div class="table-responsive">
+      <table>
+        <thead><tr><th>Student</th><th>Class</th><th>Today's Status</th></tr></thead>
+        <tbody>
+          ${roster.map((r) => `
+            <tr>
+              <td><strong>${r.student.name}</strong></td>
+              <td>${r.student.className || '—'}</td>
+              <td>${r.attendance ? `<span class="badge ${r.attendance.status}">${r.attendance.status}</span>` : '<span style="color:var(--ink-muted); font-style:italic;">Not marked yet</span>'}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  ` : '<div class="empty-state"><i class="fa-solid fa-clipboard-question"></i><p>No students assigned to your class roster yet.</p></div>';
 }
+
+// ---------- Students Panel (Edit Student Information & Pickup) ----------
+async function loadStudentsPanel() {
+  const { students } = await api.get('/students');
+  allStudents = students;
+  myStudents = students.filter((s) => s.teacher && (s.teacher._id === user.id || s.teacher === user.id));
+
+  const filter = document.getElementById('teacherStudentFilter')?.value || 'my';
+  const displayList = (filter === 'my' && myStudents.length) ? myStudents : allStudents;
+
+  const tbody = document.getElementById('teacherStudentsTbody');
+  if (!displayList.length) {
+    tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state"><i class="fa-solid fa-user-graduate"></i><p>No students found.</p></div></td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = displayList.map((s) => {
+    const bdate = s.birthdate ? new Date(s.birthdate).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—';
+    return `
+      <tr>
+        <td><strong>${s.name}</strong></td>
+        <td><span class="badge" style="background:#F1F5F9; color:var(--ink);">${s.className || 'Unassigned'}</span></td>
+        <td>${s.parent ? `${s.parent.name}` : '<em>Unassigned</em>'}</td>
+        <td>${bdate}</td>
+        <td><span class="badge ${s.status}">${s.status}</span></td>
+        <td>
+          <div style="display:flex; gap:6px;">
+            <button class="btn btn-secondary btn-sm" data-edit-student="${s._id}" title="Edit Student Information">
+              <i class="fa-solid fa-pen-to-square"></i> Edit
+            </button>
+            <button class="btn btn-ghost btn-sm" data-details-student="${s._id}" title="View Details & Authorized Pickup">
+              <i class="fa-solid fa-shield-halved"></i> Details &amp; Pickup
+            </button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  // Bind Edit buttons
+  tbody.querySelectorAll('[data-edit-student]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const s = displayList.find((x) => x._id === btn.dataset.editStudent);
+      if (s) openEditStudentModal(s, loadStudentsPanel);
+    });
+  });
+
+  // Bind Details & Pickup buttons
+  tbody.querySelectorAll('[data-details-student]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      showStudentDetailsModal(btn.dataset.detailsStudent, { canEdit: true, onStudentUpdated: loadStudentsPanel });
+    });
+  });
+}
+
+async function loadFeeStatuses() {
+  const { fees } = await api.get('/fees/teacher');
+  const tbody = document.getElementById('teacherFeesTbody');
+  if (!fees.length) {
+    tbody.innerHTML = '<tr><td colspan="8"><div class="empty-state"><i class="fa-solid fa-credit-card"></i><p>No fee records for your assigned students.</p></div></td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = fees.map((fee) => {
+    const totalPaid = Number(Number(fee.amountPaid || 0).toFixed(2));
+    const remaining = Math.max(0, Number((Number(fee.amount) - totalPaid).toFixed(2)));
+    const status = totalPaid <= 0 ? 'unpaid' : (remaining === 0 ? 'paid' : 'partial');
+    const statusLabel = { unpaid: 'Unpaid', partial: 'Partial Payment', paid: 'Paid' }[status];
+    return `
+      <tr>
+        <td><strong>${fee.student ? fee.student.name : '—'}</strong></td>
+        <td>${fee.student ? fee.student.className || '—' : '—'}</td>
+        <td>${fee.description}</td>
+        <td>${fmtMoney(fee.amount)}</td>
+        <td>${fmtMoney(totalPaid)}</td>
+        <td>${fmtMoney(remaining)}</td>
+        <td>${fmtDate(fee.dueDate)}</td>
+        <td><span class="badge ${status}">${statusLabel}</span></td>
+      </tr>
+    `;
+  }).join('');
+}
+
+document.getElementById('teacherStudentFilter')?.addEventListener('change', loadStudentsPanel);
 
 // ---------- Attendance ----------
 const attDateInput = document.getElementById('attDate');
@@ -40,18 +153,21 @@ async function loadAttendance() {
   const date = attDateInput.value || new Date().toISOString().slice(0, 10);
   const { roster } = await api.get(`/attendance/class?date=${date}`);
   const tbody = document.getElementById('attTbody');
-  if (!roster.length) { tbody.innerHTML = `<tr><td colspan="4"><div class="empty-state">No students assigned to you.</div></td></tr>`; return; }
+  if (!roster.length) {
+    tbody.innerHTML = `<tr><td colspan="4"><div class="empty-state"><i class="fa-solid fa-clipboard-user"></i><p>No students assigned to you.</p></div></td></tr>`;
+    return;
+  }
 
   tbody.innerHTML = roster.map((r) => `
     <tr data-student="${r.student.id}">
-      <td>${r.student.name}</td>
+      <td><strong>${r.student.name}</strong></td>
       <td>${r.student.className || '—'}</td>
       <td>
-        <select class="statusSelect">
+        <select class="statusSelect" style="padding:6px 10px; border-radius:6px; border:1px solid #CBD5E1;">
           ${['present', 'late', 'excused', 'absent'].map((s) => `<option value="${s}" ${r.attendance && r.attendance.status === s ? 'selected' : ''}>${s}</option>`).join('')}
         </select>
       </td>
-      <td><input class="remarksInput" value="${r.attendance ? (r.attendance.remarks || '') : ''}" placeholder="optional" /></td>
+      <td><input class="remarksInput" value="${r.attendance ? (r.attendance.remarks || '') : ''}" placeholder="Optional remarks" style="padding:6px 10px; border-radius:6px; border:1px solid #CBD5E1; width:100%; max-width:240px;" /></td>
     </tr>
   `).join('');
 
@@ -69,13 +185,14 @@ async function loadAttendance() {
   });
 }
 
-// ---------- Progress ----------
+// ---------- Academic Progress ----------
 async function loadProgressPanel() {
-  if (!myStudents.length) await loadMyStudents();
+  if (!allStudents.length) await loadMyStudents();
   const sel = document.getElementById('progStudentSelect');
-  sel.innerHTML = myStudents.map((s) => `<option value="${s._id}">${s.name}</option>`).join('');
+  const targetList = myStudents.length ? myStudents : allStudents;
+  sel.innerHTML = targetList.map((s) => `<option value="${s._id}">${s.name}</option>`).join('');
   sel.onchange = renderProgressList;
-  if (myStudents.length) renderProgressList();
+  if (targetList.length) renderProgressList();
 }
 
 async function renderProgressList() {
@@ -84,13 +201,15 @@ async function renderProgressList() {
   const { progress } = await api.get(`/progress/student/${sid}`);
   document.getElementById('progressList').innerHTML = progress.length ? progress.map((p) => `
     <div class="card" style="margin-bottom:12px;">
-      <p style="margin-bottom:4px; color:var(--ink); font-weight:700;">${fmtDate(p.date)}</p>
-      ${p.milestone ? `<p><strong>Milestone:</strong> ${p.milestone}</p>` : ''}
-      ${p.activity ? `<p><strong>Activity:</strong> ${p.activity}</p>` : ''}
-      ${p.assessment ? `<p><strong>Assessment:</strong> ${p.assessment}</p>` : ''}
-      ${p.notes ? `<p><strong>Notes:</strong> ${p.notes}</p>` : ''}
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <span style="color:var(--primary); font-weight:700;"><i class="fa-regular fa-calendar"></i> ${fmtDate(p.date)}</span>
+      </div>
+      ${p.milestone ? `<p style="margin-bottom:4px;"><strong>Milestone:</strong> ${p.milestone}</p>` : ''}
+      ${p.activity ? `<p style="margin-bottom:4px;"><strong>Activity:</strong> ${p.activity}</p>` : ''}
+      ${p.assessment ? `<p style="margin-bottom:4px;"><strong>Assessment:</strong> ${p.assessment}</p>` : ''}
+      ${p.notes ? `<p style="margin:0; color:var(--ink-soft); font-style:italic;">Notes: ${p.notes}</p>` : ''}
     </div>
-  `).join('') : '<div class="empty-state">No entries logged yet for this student.</div>';
+  `).join('') : '<div class="empty-state"><i class="fa-solid fa-chart-simple"></i><p>No progress entries logged yet for this student.</p></div>';
 }
 
 document.getElementById('progressForm').addEventListener('submit', async (e) => {
@@ -110,22 +229,24 @@ document.getElementById('progressForm').addEventListener('submit', async (e) => 
 
 // ---------- Messages ----------
 async function loadInbox() {
-  if (!myStudents.length) await loadMyStudents();
+  if (!allStudents.length) await loadMyStudents();
   const { threads } = await api.get('/messages/inbox');
   const parentsFromStudents = new Map();
-  myStudents.forEach((s) => { if (s.parent) parentsFromStudents.set(s.parent._id, s.parent); });
+  allStudents.forEach((s) => { if (s.parent) parentsFromStudents.set(s.parent._id, s.parent); });
 
   const box = document.getElementById('inboxList');
   const known = new Map(threads.map((t) => [t.with.id, t]));
-  parentsFromStudents.forEach((p, id) => { if (!known.has(id)) known.set(id, { with: { id, name: p.name, role: 'parent' }, unread: 0 }); });
+  parentsFromStudents.forEach((p, id) => {
+    if (!known.has(id)) known.set(id, { with: { id, name: p.name, role: 'parent' }, unread: 0 });
+  });
 
   const items = Array.from(known.values());
   box.innerHTML = items.length ? items.map((t) => `
     <div class="list-row" style="cursor:pointer;" data-open="${t.with.id}" data-name="${t.with.name}">
-      <span>${t.with.name}${t.unread ? ` <span class="badge pending">${t.unread}</span>` : ''}</span>
-      <span>›</span>
+      <span><i class="fa-solid fa-user" style="color:var(--primary); margin-right:8px;"></i>${t.with.name}${t.unread ? ` <span class="badge pending">${t.unread} new</span>` : ''}</span>
+      <i class="fa-solid fa-chevron-right" style="color:var(--ink-light); font-size:12px;"></i>
     </div>
-  `).join('') : '<div class="empty-state">No parents to message yet.</div>';
+  `).join('') : '<div class="empty-state"><p>No parents to message yet.</p></div>';
 
   box.querySelectorAll('[data-open]').forEach((row) => row.addEventListener('click', () => openThread(row.dataset.open, row.dataset.name)));
 }
@@ -147,27 +268,37 @@ document.getElementById('sendChatBtn').addEventListener('click', async () => {
   openThread(activeThreadUserId, document.getElementById('threadWithName').textContent);
 });
 
-// ---------- Events ----------
+// ---------- Events Calendar ----------
 async function loadEvents() {
   const { events } = await api.get('/events');
-  document.getElementById('eventsList').innerHTML = events.length ? events.map((ev) => `
-    <div class="card" style="margin-bottom:14px;">
-      <h3 style="margin-bottom:4px;">${ev.title}</h3>
-      <p style="margin-bottom:4px;">${fmtDate(ev.date)} · audience: ${ev.audience}</p>
-      <p style="margin:0;">${ev.description || ''}</p>
-    </div>
-  `).join('') : '<div class="empty-state">No events yet.</div>';
+  if (!teacherCalendar) {
+    teacherCalendar = new EventsCalendar({
+      containerId: 'teacherEventsCalendarContainer',
+      events,
+      canManage: true,
+      onDeleteEvent: async (eventId) => {
+        await api.del(`/events/${eventId}`);
+        await loadEvents();
+      },
+      onEventUpdated: async (eventId, updates) => {
+        await api.patch(`/events/${eventId}`, updates);
+        await loadEvents();
+      },
+    });
+  } else {
+    teacherCalendar.setEvents(events);
+  }
 }
 
 document.getElementById('addEventBtn').addEventListener('click', () => {
   Modal.open(`
-    <h3>Notify parents</h3>
+    <h3>Publish Notice / Event</h3>
     <div id="modalMsg" class="form-msg"></div>
     <form id="eventForm">
-      <div class="field"><label>Title</label><input id="eTitle" required /></div>
+      <div class="field"><label>Title</label><input id="eTitle" placeholder="e.g. Field Trip Permission Reminder" required /></div>
       <div class="field"><label>Date</label><input type="date" id="eDate" required /></div>
-      <div class="field"><label>Message</label><textarea id="eDesc" rows="3"></textarea></div>
-      <button class="btn btn-primary btn-block" type="submit">Send notice</button>
+      <div class="field"><label>Message / Description</label><textarea id="eDesc" rows="3" placeholder="Enter notice details for parents…"></textarea></div>
+      <button class="btn btn-primary btn-block" type="submit" style="margin-top:14px;">Publish Notice</button>
     </form>
   `);
   document.getElementById('eventForm').addEventListener('submit', async (e) => {
@@ -181,46 +312,106 @@ document.getElementById('addEventBtn').addEventListener('click', () => {
         description: document.getElementById('eDesc').value.trim(),
       });
       Modal.close();
-      loadEvents();
-    } catch (err) { showMsg(msg, err.message); }
+      await loadEvents();
+    } catch (err) {
+      showMsg(msg, err.message);
+    }
   });
 });
 
-// ---------- Pickup verification ----------
+// ---------- Pickup Verification Panel ----------
 async function loadPickupPanel() {
-  if (!myStudents.length) await loadMyStudents();
+  if (!allStudents.length) await loadMyStudents();
   const sel = document.getElementById('pickupStudentSelect');
-  sel.innerHTML = myStudents.map((s) => `<option value="${s._id}">${s.name}</option>`).join('');
+  const targetList = myStudents.length ? myStudents : allStudents;
+  sel.innerHTML = targetList.map((s) => `<option value="${s._id}">${s.name}</option>`).join('');
   sel.onchange = renderPickupList;
-  if (myStudents.length) renderPickupList();
+  if (targetList.length) renderPickupList();
 }
 
 async function renderPickupList() {
   const sid = document.getElementById('pickupStudentSelect').value;
   if (!sid) return;
   const { authorizations } = await api.get(`/pickup/student/${sid}`);
-  document.getElementById('pickupList').innerHTML = authorizations.length ? authorizations.map((a) => `
-    <div class="list-row">
-      <span><strong>${a.authorizedName}</strong> — ${a.relationship} · ${a.contact}${a.verified.length ? ` <span class="badge active">verified ${a.verified.length}×</span>` : ''}</span>
-      <button class="btn btn-secondary btn-sm" data-verify="${a._id}">Verify pickup now</button>
-    </div>
-  `).join('') : '<div class="empty-state">No authorized pickup people registered for this student yet.</div>';
+  const listEl = document.getElementById('pickupList');
 
-  document.querySelectorAll('[data-verify]').forEach((b) => b.addEventListener('click', async () => {
+  listEl.innerHTML = authorizations.length ? authorizations.map((a) => `
+    <div class="pickup-person-card">
+      <div>
+        <div class="info-title">
+          ${a.authorizedName}
+          ${a.verified.length ? `<span class="badge approved" style="margin-left:8px;"><i class="fa-solid fa-check-double"></i> Verified ${a.verified.length}×</span>` : '<span class="badge pending" style="margin-left:8px;">Pending verification</span>'}
+        </div>
+        <div class="info-meta">
+          <strong>Relationship:</strong> ${a.relationship} &nbsp;|&nbsp;
+          <strong>Contact:</strong> ${a.contact}
+        </div>
+        ${a.identification ? `
+          <div class="info-meta" style="margin-top:4px;">
+            <strong>ID / Details:</strong> ${a.identification}
+          </div>
+        ` : ''}
+      </div>
+
+      <div class="pickup-actions">
+        <button class="btn btn-primary btn-sm" data-verify="${a._id}">
+          <i class="fa-solid fa-user-check"></i> Verify Pickup Now
+        </button>
+        <button class="btn btn-ghost btn-sm" data-edit-p="${a._id}" title="Edit Information">
+          <i class="fa-solid fa-pen"></i>
+        </button>
+        <button class="btn btn-danger btn-sm" data-del-p="${a._id}" title="Remove Person">
+          <i class="fa-solid fa-trash-can"></i>
+        </button>
+      </div>
+    </div>
+  `).join('') : '<div class="empty-state"><i class="fa-solid fa-shield-halved"></i><p>No authorized pickup people registered for this student yet.</p></div>';
+
+  // Bind Verify button
+  listEl.querySelectorAll('[data-verify]').forEach((b) => b.addEventListener('click', async () => {
     await api.post(`/pickup/${b.dataset.verify}/verify`, {});
     renderPickupList();
   }));
+
+  // Bind Edit button
+  listEl.querySelectorAll('[data-edit-p]').forEach((b) => b.addEventListener('click', () => {
+    const item = authorizations.find((x) => x._id === b.dataset.editP);
+    if (item) {
+      openPickupFormModal({ studentId: sid, pickup: item }, renderPickupList);
+    }
+  }));
+
+  // Bind Delete button
+  listEl.querySelectorAll('[data-del-p]').forEach((b) => b.addEventListener('click', async () => {
+    const item = authorizations.find((x) => x._id === b.dataset.delP);
+    if (item && confirm(`Remove ${item.authorizedName} from authorized pickup list?`)) {
+      await api.del(`/pickup/${item._id}`);
+      renderPickupList();
+    }
+  }));
 }
 
-// ---------- Emergency alerts ----------
+document.getElementById('teacherAddPickupBtn')?.addEventListener('click', () => {
+  const sid = document.getElementById('pickupStudentSelect').value;
+  if (!sid) return alert('Please select a student first.');
+  openPickupFormModal({ studentId: sid }, renderPickupList);
+});
+
+// ---------- Emergency Alerts ----------
 async function loadAlerts() {
   const { alerts } = await api.get('/alerts');
   document.getElementById('alertsList').innerHTML = alerts.length ? alerts.map((a) => `
     <div class="alert-banner">
-      <strong>${a.title}</strong> — ${a.message}
-      <div class="field-hint">${new Date(a.createdAt).toLocaleString()} · by ${a.createdBy ? a.createdBy.name : 'staff'}</div>
+      <i class="fa-solid fa-triangle-exclamation"></i>
+      <div>
+        <strong style="font-size:15px;">${a.title}</strong>
+        <p style="margin:4px 0 6px; color:#7F1D1D;">${a.message}</p>
+        <div class="field-hint" style="color:#991B1B;">
+          ${new Date(a.createdAt).toLocaleString()} &bull; Sent by ${a.createdBy ? a.createdBy.name : 'Staff'}
+        </div>
+      </div>
     </div>
-  `).join('') : '<div class="empty-state">No alerts sent.</div>';
+  `).join('') : '<div class="empty-state"><i class="fa-solid fa-shield-heart"></i><p>No emergency alerts issued.</p></div>';
 }
 
 document.getElementById('alertForm').addEventListener('submit', async (e) => {

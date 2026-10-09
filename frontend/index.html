@@ -1,115 +1,152 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Play & Grow — Preschool Monitoring System</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css" />
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Play-is-School — Preschool Monitoring System</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+  <link rel="stylesheet" href="css/style.css" />
 </head>
+
 <body>
 
-<header class="site-header">
-  <div class="container">
-    <a href="index.html" class="brand"><span class="dot"></span> Play & Grow</a>
-    <ul class="nav-links">
-      <li><a href="#roles">For families & staff</a></li>
-      <li><a href="#features">What it does</a></li>
-      <li><a href="#about">About</a></li>
-    </ul>
-    <div class="nav-actions">
-      <a href="pages/login.html" class="btn btn-ghost btn-sm">Log in</a>
-      <a href="pages/signup.html" class="btn btn-primary btn-sm">Get started</a>
-    </div>
-  </div>
-</header>
-
-<section class="hero">
-  <div class="container">
-    <div>
-      <div class="pill-row">
-        <span class="pill">Learn through play</span>
-        <span class="pill">Ages 2–5</span>
-      </div>
-      <h1>One playful place to raise, teach, and watch little learners grow.</h1>
-      <p class="lede">Play & Grow connects admins, teachers, and parents around every child's day — progress, attendance, fees, events, and the small moments in between — all in one friendly system.</p>
-      <div style="display:flex; gap:14px; flex-wrap:wrap;">
-        <a href="pages/signup.html" class="btn btn-primary">Create a parent account</a>
-        <a href="pages/login.html" class="btn btn-secondary">I already have an account</a>
+  <header class="site-header">
+    <div class="container">
+      <a href="index.html" class="brand">
+        <img src="img/logocollab.jpg" alt="Play-is-School Logo" class="brand-logo-img" />
+        <span>Play-is-School</span>
+      </a>
+      <ul class="nav-links">
+        <li><a href="#roles">For Families &amp; Staff</a></li>
+        <li><a href="#features">Features</a></li>
+        <li><a href="#about">About</a></li>
+      </ul>
+      <div class="nav-actions">
+        <a href="pages/login.html" class="btn btn-ghost btn-sm">Sign In</a>
+        <a href="pages/signup.html" class="btn btn-primary btn-sm">Get Started</a>
       </div>
     </div>
-    <div class="hero-art">
-      <div class="blob blob-a"></div>
-      <div class="blob blob-b"></div>
-      <div class="blob blob-c"></div>
-      <div class="hero-emoji">🧸</div>
-    </div>
-  </div>
-</section>
+  </header>
 
-<section class="section" id="roles">
-  <div class="container">
-    <div class="section-head">
-      <h2>Built around three people, and one child at the center</h2>
-      <p>Each role gets exactly the tools it needs — nothing more to dig through.</p>
-    </div>
-    <div class="grid-3">
-      <div class="card role-card">
-        <span class="icon">🗂️</span>
-        <h3>Admins</h3>
-        <p>Approve accounts, manage admissions, track fees, run reports, and keep an eye on everything happening across the school.</p>
+  <section class="hero">
+    <div class="container">
+      <div>
+        <div class="pill-row">
+          <span class="pill"><i class="fa-solid fa-sparkles"></i> Learning through Play</span>
+        </div>
+        <h1>A Modern Preschool Platform for Safety, Growth &amp; Collaboration.</h1>
+        <p class="lede">Play-is-School connects school administrators, teachers, and parents around every child's day —
+          monitoring academic milestones, attendance, fees, scheduled events, and verified pickup authorization.</p>
+        <div style="display:flex; gap:14px; flex-wrap:wrap; margin-top:24px;">
+          <a href="pages/signup.html" class="btn btn-primary">Create Parent Account</a>
+          <a href="pages/login.html" class="btn btn-secondary">Sign In to Dashboard</a>
+        </div>
       </div>
-      <div class="card role-card">
-        <span class="icon">🎨</span>
-        <h3>Teachers</h3>
-        <p>Log attendance and milestones, message parents, send reminders and emergency alerts, and verify who's picking up each child.</p>
-      </div>
-      <div class="card role-card">
-        <span class="icon">👨‍👩‍👧</span>
-        <h3>Parents</h3>
-        <p>Watch your child's progress and attendance, chat with their teacher, track fees, and stay on top of school events.</p>
+      <div class="hero-art-container">
+        <img src="img/logocollab.jpg" alt="Play-is-School Official Logo" class="hero-logo-display" />
+        <h3 style="margin-bottom:4px; font-size:18px;">Play-is-School</h3>
+        <p style="margin:0; font-size:13.5px; color:var(--ink-muted);">Early Childhood Learning &amp; Safety Hub</p>
       </div>
     </div>
-  </div>
-</section>
+  </section>
 
-<section class="section" id="features" style="background:var(--cream-deep);">
-  <div class="container">
-    <div class="section-head">
-      <h2>Everything the school day needs, in one calm dashboard</h2>
+  <section class="section" id="roles">
+    <div class="container">
+      <div class="section-head">
+        <h2>Built for Seamless School Collaboration</h2>
+        <p>Dedicated tools designed specifically for each stakeholder in early childhood education.</p>
+      </div>
+      <div class="grid-3">
+        <div class="card">
+          <div class="icon-box"><i class="fa-solid fa-users-gear"></i></div>
+          <h3>School Administrators</h3>
+          <p>Manage admissions, approve parent accounts, oversee student records, track tuition fees, audit activity
+            logs, and coordinate school-wide operations.</p>
+        </div>
+        <div class="card">
+          <div class="icon-box"><i class="fa-solid fa-chalkboard-user"></i></div>
+          <h3>Teachers &amp; Educators</h3>
+          <p>Record daily class attendance, evaluate student progress milestones, manage authorized pickup
+            verifications, and communicate directly with families.</p>
+        </div>
+        <div class="card">
+          <div class="icon-box"><i class="fa-solid fa-people-roof"></i></div>
+          <h3>Parents &amp; Guardians</h3>
+          <p>Track your child's attendance and academic progress, stay informed through the events calendar, communicate
+            with teachers, and register authorized pickup persons.</p>
+        </div>
+      </div>
     </div>
-    <div class="grid-3">
-      <div class="card"><span class="icon">📈</span><h3>Academic progress</h3><p>Milestones, activities and assessments logged as they happen.</p></div>
-      <div class="card"><span class="icon">🗓️</span><h3>Attendance</h3><p>Daily roster marking with a clear history per child.</p></div>
-      <div class="card"><span class="icon">💬</span><h3>Messaging</h3><p>Direct parent–teacher conversations, no phone tag.</p></div>
-      <div class="card"><span class="icon">💳</span><h3>Fee tracking</h3><p>Bills, payments, and balances, always up to date.</p></div>
-      <div class="card"><span class="icon">🎉</span><h3>Events & calendar</h3><p>School activities everyone can see coming.</p></div>
-      <div class="card"><span class="icon">🚸</span><h3>Pickup verification</h3><p>Only trusted, registered people take a child home.</p></div>
-    </div>
-  </div>
-</section>
+  </section>
 
-<section class="section" id="about">
-  <div class="container grid-2" style="align-items:center;">
-    <div>
-      <h2>Play is how young children learn best</h2>
-      <p>Play & Grow was designed for preschools that teach through play — so the system stays out of the way of the classroom and simply keeps everyone gently informed: what a child worked on today, how they're doing, and what's coming up next.</p>
+  <section class="section" id="features" style="background:#F1F8F3;">
+    <div class="container">
+      <div class="section-head">
+        <h2>Essential Features for Preschool Monitoring</h2>
+        <p>Everything needed to manage a secure, transparent, and nurturing learning environment.</p>
+      </div>
+      <div class="grid-3">
+        <div class="card">
+          <div class="icon-box"><i class="fa-solid fa-chart-line"></i></div>
+          <h3>Academic Progress</h3>
+          <p>Track developmental milestones, classroom activities, and structured teacher assessments.</p>
+        </div>
+        <div class="card">
+          <div class="icon-box"><i class="fa-solid fa-clipboard-user"></i></div>
+          <h3>Daily Attendance</h3>
+          <p>Real-time roster tracking with instant historical records for administrators and parents.</p>
+        </div>
+        <div class="card">
+          <div class="icon-box"><i class="fa-solid fa-comments"></i></div>
+          <h3>Direct Messaging</h3>
+          <p>Secure, direct parent-teacher communications for timely updates and questions.</p>
+        </div>
+        <div class="card">
+          <div class="icon-box"><i class="fa-solid fa-credit-card"></i></div>
+          <h3>Fee Management</h3>
+          <p>Transparent tracking of tuition statements, partial or full payments, and due dates.</p>
+        </div>
+        <div class="card">
+          <div class="icon-box"><i class="fa-solid fa-calendar-days"></i></div>
+          <h3>Events Calendar</h3>
+          <p>Interactive monthly calendar highlighting school activities, parent meetings, and holidays.</p>
+        </div>
+        <div class="card">
+          <div class="icon-box"><i class="fa-solid fa-shield-halved"></i></div>
+          <h3>Pickup Authorization</h3>
+          <p>Verify and manage authorized pickup guardians with complete identification details.</p>
+        </div>
+      </div>
     </div>
-    <div class="card" style="background:var(--sun); border-color:var(--ink);">
-      <h3>Ready to join?</h3>
-      <p>Parents can sign up in a minute — an admin will approve your account so you can see your child's day.</p>
-      <a href="pages/signup.html" class="btn btn-primary">Sign up as a parent</a>
-    </div>
-  </div>
-</section>
+  </section>
 
-<footer class="site-footer">
-  <div class="container">
-    <span>© 2026 Play & Grow Preschool</span>
-    <span>Made for little learners and the grown-ups who love them.</span>
-  </div>
-</footer>
+  <section class="section" id="about">
+    <div class="container">
+      <div class="card"
+        style="background:var(--primary-surface); border:1px solid var(--primary-border); padding:36px; max-width:800px; margin:0 auto; text-align:center;">
+        <h2 style="font-size:26px; margin-bottom:12px;">Get Started with Play-is-School</h2>
+        <p style="font-size:16px; margin-bottom:24px; color:var(--ink-soft);">Parents can register online in moments —
+          school administrators verify and connect your account so you can monitor your child's educational journey.</p>
+        <div style="display:flex; justify-content:center; gap:14px; flex-wrap:wrap;">
+          <a href="pages/signup.html" class="btn btn-primary">Sign Up as Parent</a>
+          <a href="pages/login.html" class="btn btn-ghost">Sign In</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="site-footer">
+    <div class="container">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <img src="img/logocollab.jpg" alt="Logo"
+          style="width:24px; height:24px; border-radius:6px; object-fit:cover;" />
+        <strong>Play-is-School</strong> &mdash; Learning through Play
+      </div>
+      <span>&copy; Play-is-School. All rights reserved.</span>
+    </div>
+  </footer>
 
 </body>
+
 </html>

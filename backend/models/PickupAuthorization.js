@@ -6,6 +6,7 @@ const pickupAuthorizationSchema = new mongoose.Schema(
     authorizedName: { type: String, required: true, trim: true },
     relationship: { type: String, required: true, trim: true },
     contact: { type: String, required: true, trim: true },
+    identification: { type: String, trim: true, default: '' },
     addedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     verified: [
       {

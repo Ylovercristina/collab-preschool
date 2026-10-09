@@ -443,9 +443,9 @@ exports.googleStart = async (req, res) => {
     setGoogleStateCookie(res, state);
     res.redirect(authorizationUrl);
   } catch (err) {
-  console.error('[Google OAuth configuration error]:', err.message);
-  redirectGoogleError(res, 'configuration');
-}
+    console.error('[Google OAuth configuration error]:', err.message);
+    redirectGoogleError(res, 'configuration');
+  }
 };
 
 // GET /api/auth/google/callback

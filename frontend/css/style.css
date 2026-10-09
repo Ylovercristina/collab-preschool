@@ -874,6 +874,11 @@ footer.site-footer .container {
 }
 .edit-user-not-found h2 { margin-bottom: 6px; font-size: 20px; }
 .edit-user-not-found p { margin: 0 0 20px; color: var(--ink-muted); }
+.sidebar > .logout {
+  margin-top: auto;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 14px;
+}
 
 /* Main Dashboard Pane */
 .main-pane {
