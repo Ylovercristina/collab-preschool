@@ -14,9 +14,16 @@
       <img src="../img/logocollab.jpg" alt="Play-is-School Logo" class="brand-logo-img" />
       <span>Play-is-School</span>
     </a>
-    <div class="who">
-      <div class="user-name" id="whoName">Administrator</div>
-      <span class="role-badge"><i class="fa-solid fa-shield"></i> Admin</span>
+    <div class="who sidebar-profile">
+      <div class="profile-avatar">
+        <img id="sidebarAvatar" alt="" hidden />
+        <span id="sidebarInitials" aria-hidden="true">?</span>
+      </div>
+      <div class="sidebar-profile-content">
+        <div class="user-name" id="whoName">Loading profile...</div>
+        <div class="sidebar-profile-email" id="whoEmail"></div>
+        <span class="role-badge"><i class="fa-solid fa-shield"></i> Admin</span>
+      </div>
     </div>
     <button class="nav-item active" data-panel="overview"><i class="fa-solid fa-gauge-high"></i> Overview</button>
     <button class="nav-item" data-panel="users"><i class="fa-solid fa-users-gear"></i> Accounts</button>
@@ -24,7 +31,10 @@
     <button class="nav-item" data-panel="fees"><i class="fa-solid fa-credit-card"></i> Fees</button>
     <button class="nav-item" data-panel="events"><i class="fa-solid fa-calendar-days"></i> Events &amp; Calendar</button>
     <button class="nav-item" data-panel="logs"><i class="fa-solid fa-clock-rotate-left"></i> Activity logs</button>
-    <button class="nav-item logout" id="logoutBtn"><i class="fa-solid fa-right-from-bracket"></i> Log out</button>
+    <div class="sidebar-actions">
+      <button class="nav-item logout" id="logoutBtn"><i class="fa-solid fa-right-from-bracket"></i> Log out</button>
+      <button class="nav-item settings-button" type="button" data-panel="settings" aria-label="Settings" title="Settings"><i class="fa-solid fa-gear"></i></button>
+    </div>
   </aside>
 
   <main class="main-pane">
@@ -180,6 +190,49 @@
           <thead><tr><th>Timestamp</th><th>User</th><th>Action</th><th>Details</th></tr></thead>
           <tbody id="logsTbody"></tbody>
         </table>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-settings">
+      <div class="toolbar">
+        <div>
+          <h1 style="margin:0;">Personal Profile</h1>
+          <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Update your profile and sign-in details.</p>
+        </div>
+      </div>
+      <div class="card profile-settings-card">
+        <div id="profileFormMessage" class="form-msg" aria-live="polite"></div>
+        <form id="profileForm" enctype="multipart/form-data">
+          <section class="profile-photo-editor" aria-label="Profile photo">
+            <div class="profile-avatar profile-avatar-large">
+              <img id="profilePreviewImage" alt="" hidden />
+              <span id="profilePreviewInitials" aria-hidden="true">?</span>
+            </div>
+            <div class="profile-photo-copy">
+              <h2>Profile photo</h2>
+              <p>JPG, PNG or WEBP, up to 2 MB.</p>
+              <input class="profile-file-input" id="profileImage" name="avatar" type="file" accept="image/jpeg,image/png,image/webp" />
+              <label class="btn btn-secondary profile-upload-button" for="profileImage"><i class="fa-solid fa-arrow-up-from-bracket"></i> Choose image</label>
+            </div>
+          </section>
+          <section class="profile-details">
+            <div class="profile-section-heading"><span>YOUR PROFILE</span><h2>Personal details</h2></div>
+            <div class="grid-2 profile-fields">
+            <div class="field"><label for="profileFirstName">First name</label><input id="profileFirstName" name="firstName" autocomplete="given-name" maxlength="80" required /></div>
+            <div class="field"><label for="profileMiddleName">Middle name</label><input id="profileMiddleName" name="middleName" autocomplete="additional-name" maxlength="80" /></div>
+            <div class="field"><label for="profileLastName">Last name</label><input id="profileLastName" name="lastName" autocomplete="family-name" maxlength="80" required /></div>
+            <div class="field"><label for="profileEmail">Email address</label><input id="profileEmail" name="email" type="email" autocomplete="email" required /></div>
+            <div class="field"><label for="profilePhone">Contact number</label><input id="profilePhone" name="phone" type="tel" autocomplete="tel" required /></div>
+            <div class="field"><label for="profileAddress">Address</label><textarea id="profileAddress" name="address" rows="2" maxlength="500" autocomplete="street-address" required></textarea></div>
+            </div>
+          </section>
+          <div class="field profile-children-field" id="profileChildrenField" hidden>
+            <label for="profileChildrenNames">Name of child/children</label>
+            <textarea id="profileChildrenNames" name="childrenNamesInput" rows="3"></textarea>
+            <div class="field-hint">Enter one child name per line.</div>
+          </div>
+          <div class="profile-form-footer"><button class="btn btn-primary" type="submit"><i class="fa-solid fa-floppy-disk"></i> Save Changes</button></div>
+        </form>
       </div>
     </section>
 

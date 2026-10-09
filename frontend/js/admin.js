@@ -265,7 +265,12 @@ function renderFilteredUsers() {
                 <i class="fa-solid fa-rotate-left"></i> Reactivate
               </button>
             `}
-            <button class="btn btn-ghost btn-sm" data-edit-user="${u.id}" style="padding:4px 7px; font-size:12px;" title="Edit user details">
+            ${u.status !== 'archived' ? `
+              <a class="btn btn-ghost btn-sm" href="edit-user.html?id=${encodeURIComponent(u.id)}" style="padding:4px 7px; font-size:12px; text-decoration:none;" title="Edit user profile & photo">
+                <i class="fa-solid fa-pen-to-square"></i>
+              </a>
+            ` : ''}
+            <button class="btn btn-ghost btn-sm" data-edit-user="${u.id}" style="padding:4px 7px; font-size:12px;" title="Quick edit user details">
               <i class="fa-solid fa-pen"></i>
             </button>
           </div>

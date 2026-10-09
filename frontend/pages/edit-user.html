@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Edit User — Play-is-School</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+<link rel="stylesheet" href="../css/style.css" />
+</head>
+<body class="edit-user-page">
+<div class="edit-user-shell">
+  <header class="edit-user-header">
+    <a href="dashboard-admin.html?panel=users" class="brand">
+      <img src="../img/logocollab.jpg" alt="Play-is-School Logo" class="brand-logo-img" />
+      <span>Play-is-School</span>
+    </a>
+    <a class="btn btn-ghost btn-sm" href="dashboard-admin.html?panel=users"><i class="fa-solid fa-arrow-left"></i> Accounts</a>
+  </header>
+
+  <main class="edit-user-main">
+    <div class="edit-user-heading">
+      <span>ACCOUNT MANAGEMENT</span>
+      <h1>Edit User</h1>
+      <p>Update this account's contact and profile information.</p>
+    </div>
+
+    <section class="card edit-user-not-found" id="editUserError" hidden>
+      <div class="edit-user-error-icon"><i class="fa-solid fa-user-slash"></i></div>
+      <h2 id="editUserErrorTitle">User not found</h2>
+      <p id="editUserErrorMessage">This account could not be found.</p>
+      <a class="btn btn-primary" href="dashboard-admin.html?panel=users"><i class="fa-solid fa-arrow-left"></i> Back to Accounts</a>
+    </section>
+
+    <section class="card edit-user-card" id="editUserCard" hidden>
+      <div id="editUserMessage" class="form-msg" aria-live="polite"></div>
+      <form id="editUserForm" enctype="multipart/form-data" hidden>
+        <div class="edit-user-photo">
+          <div class="profile-avatar edit-user-avatar">
+            <img id="editUserAvatar" alt="" hidden />
+            <span id="editUserInitials" aria-hidden="true">?</span>
+          </div>
+          <div class="edit-user-photo-copy">
+            <h2>Profile image</h2>
+            <p>JPG, PNG or WEBP, up to 2 MB.</p>
+            <input class="edit-user-file-input" id="editUserImage" name="avatar" type="file" accept="image/jpeg,image/png,image/webp" />
+            <label class="btn btn-secondary" for="editUserImage"><i class="fa-solid fa-arrow-up-from-bracket"></i> Replace image</label>
+          </div>
+        </div>
+
+        <div class="edit-user-form-grid">
+          <div class="field"><label for="editFirstName">First name</label><input id="editFirstName" name="firstName" autocomplete="given-name" maxlength="80" required /></div>
+          <div class="field"><label for="editMiddleName">Middle name</label><input id="editMiddleName" name="middleName" autocomplete="additional-name" maxlength="80" /></div>
+          <div class="field"><label for="editLastName">Last name</label><input id="editLastName" name="lastName" autocomplete="family-name" maxlength="80" required /></div>
+          <div class="field"><label for="editEmail">Email address</label><input id="editEmail" name="email" type="email" autocomplete="email" required /></div>
+          <div class="field"><label for="editPhone">Contact number</label><input id="editPhone" name="phone" type="tel" autocomplete="tel" required /></div>
+          <div class="field"><label for="editRole">Role</label>
+            <select id="editRole" name="role" required>
+              <option value="admin">Admin</option>
+              <option value="teacher">Teacher</option>
+              <option value="parent">Parent</option>
+            </select>
+          </div>
+          <div class="field edit-user-address"><label for="editAddress">Address</label><textarea id="editAddress" name="address" rows="2" maxlength="500" autocomplete="street-address" required></textarea></div>
+        </div>
+
+        <div class="field edit-user-children" id="editChildrenField" hidden>
+          <label for="editChildrenNames">Name of child/children</label>
+          <textarea id="editChildrenNames" name="childrenNamesInput" rows="3"></textarea>
+          <div class="field-hint">Enter one child name per line.</div>
+        </div>
+
+        <div class="edit-user-actions">
+          <a class="btn btn-ghost" href="dashboard-admin.html?panel=users">Cancel</a>
+          <button class="btn btn-primary" type="submit"><i class="fa-solid fa-floppy-disk"></i> Save User</button>
+        </div>
+      </form>
+    </section>
+  </main>
+</div>
+
+<script src="../js/api.js"></script>
+<script src="../js/edit-user.js"></script>
+</body>
+</html>

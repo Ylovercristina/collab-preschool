@@ -27,7 +27,9 @@ const Auth = {
 };
 
 async function apiRequest(path, { method = 'GET', body, auth = true } = {}) {
-  const headers = { 'Content-Type': 'application/json' };
+  const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
+  const headers = {};
+  if (!isFormData) headers['Content-Type'] = 'application/json';
   if (auth && Auth.getToken()) headers.Authorization = `Bearer ${Auth.getToken()}`;
 
   let res;
@@ -35,7 +37,7 @@ async function apiRequest(path, { method = 'GET', body, auth = true } = {}) {
     res = await fetch(`${API_BASE}${path}`, {
       method,
       headers,
-      body: body ? JSON.stringify(body) : undefined,
+      body: body ? (isFormData ? body : JSON.stringify(body)) : undefined,
     });
   } catch (err) {
     throw new Error('Could not reach the server. Is the backend running?');
@@ -58,6 +60,7 @@ const api = {
   get: (path) => apiRequest(path),
   post: (path, body, opts = {}) => apiRequest(path, { method: 'POST', body, ...opts }),
   patch: (path, body) => apiRequest(path, { method: 'PATCH', body }),
+  putFormData: (path, body) => apiRequest(path, { method: 'PUT', body }),
   del: (path) => apiRequest(path, { method: 'DELETE' }),
 };
 
