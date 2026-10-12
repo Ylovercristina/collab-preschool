@@ -9,6 +9,13 @@ const academicProgressSchema = new mongoose.Schema(
     activity: { type: String, trim: true },
     assessment: { type: String, trim: true },
     notes: { type: String, trim: true },
+    learningArea: { type: String, trim: true, default: '' },
+    evaluation: { type: String, trim: true, default: '' },
+    strengths: { type: String, trim: true, default: '' },
+    areasForImprovement: { type: String, trim: true, default: '' },
+    overallDevelopment: { type: String, trim: true, default: '' },
+    reviewedAt: { type: Date },
+    reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   },
   { timestamps: true }
 );

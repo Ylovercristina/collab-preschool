@@ -28,6 +28,9 @@
     <button class="nav-item active" data-panel="overview"><i class="fa-solid fa-gauge-high"></i> Overview</button>
     <button class="nav-item" data-panel="users"><i class="fa-solid fa-users-gear"></i> Accounts</button>
     <button class="nav-item" data-panel="students"><i class="fa-solid fa-user-graduate"></i> Students</button>
+    <button class="nav-item" data-panel="enrollment"><i class="fa-solid fa-file-signature"></i> Enrollment</button>
+    <button class="nav-item" data-panel="academic-progress"><i class="fa-solid fa-chart-line"></i> Academic Progress</button>
+    <button class="nav-item" data-panel="records"><i class="fa-solid fa-folder-open"></i> Records Management</button>
     <button class="nav-item" data-panel="fees"><i class="fa-solid fa-credit-card"></i> Fees</button>
     <button class="nav-item" data-panel="events"><i class="fa-solid fa-calendar-days"></i> Events &amp; Calendar</button>
     <button class="nav-item" data-panel="logs"><i class="fa-solid fa-clock-rotate-left"></i> Activity logs</button>
@@ -146,6 +149,82 @@
       </div>
     </section>
 
+    <section class="panel" id="panel-enrollment">
+      <div style="margin-bottom:20px;">
+        <h1 style="margin:0;">Enrollment Management</h1>
+        <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Set the term currently accepting applications and review parent submissions.</p>
+      </div>
+      <div class="card" style="max-width:760px; margin-bottom:20px;">
+        <h3 style="margin-top:0;">Enrollment availability</h3>
+        <div id="adminEnrollmentMessage" class="form-msg" aria-live="polite"></div>
+        <form id="enrollmentPeriodForm">
+          <div class="grid-2">
+            <div class="field"><label for="enrollmentTerm">Term / semester</label><input id="enrollmentTerm" maxlength="80" placeholder="e.g. First Semester" required /></div>
+            <div class="field"><label for="enrollmentSchoolYear">School year</label><input id="enrollmentSchoolYear" maxlength="40" placeholder="e.g. 2026–2027" required /></div>
+            <div class="field"><label for="enrollmentOpensAt">Opens on</label><input id="enrollmentOpensAt" type="date" required /></div>
+            <div class="field"><label for="enrollmentClosesAt">Closes on</label><input id="enrollmentClosesAt" type="date" required /></div>
+          </div>
+          <label style="display:flex; align-items:center; gap:8px; margin:4px 0 14px;"><input id="enrollmentEnabled" type="checkbox" checked /> Accept applications during this period</label>
+          <button class="btn btn-primary" type="submit"><i class="fa-solid fa-floppy-disk"></i> Save availability</button>
+        </form>
+        <p id="adminEnrollmentStatus" style="margin:12px 0 0; color:var(--ink-muted);"></p>
+      </div>
+      <h2 style="font-size:19px;">Enrollment applications</h2>
+      <div id="adminEnrollmentApplications" class="table-responsive"></div>
+    </section>
+
+    <section class="panel" id="panel-academic-progress">
+      <div class="toolbar">
+        <div>
+          <h1 style="margin:0;">Student Academic Progress</h1>
+          <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Review teacher-submitted assessments, evaluations and student development over time.</p>
+        </div>
+        <div class="record-actions">
+          <button type="button" class="btn btn-secondary btn-sm" id="progressExportBtn"><i class="fa-solid fa-file-csv"></i> Export CSV</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="progressPrintBtn"><i class="fa-solid fa-print"></i> Print report</button>
+        </div>
+      </div>
+      <div id="progressMessage" class="form-msg" aria-live="polite"></div>
+      <div class="records-filterbar">
+        <input type="search" id="progressSearch" placeholder="Search student name, ID or class..." aria-label="Search student progress" />
+        <select id="progressClassFilter" aria-label="Filter progress by class"><option value="">All classes</option></select>
+        <select id="progressStatusFilter" aria-label="Filter students by progress"><option value="">All progress statuses</option><option value="records">Has records</option><option value="none">No records</option><option value="support">Support noted</option></select>
+        <span id="progressResultCount" class="records-result-count"></span>
+      </div>
+      <div class="table-responsive">
+        <table>
+          <thead><tr><th>Student ID</th><th>Student</th><th>Class / Section</th><th>Academic progress</th><th>Records</th><th>Action</th></tr></thead>
+          <tbody id="progressStudentsTbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-records">
+      <div class="toolbar">
+        <div>
+          <h1 style="margin:0;">Records Management</h1>
+          <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Securely organize student and teaching staff profiles and documents.</p>
+        </div>
+        <button type="button" class="btn btn-primary btn-sm" id="addManagedRecordBtn"><i class="fa-solid fa-plus"></i> Add student record</button>
+      </div>
+      <div class="record-category-tabs" role="tablist" aria-label="Record category">
+        <button type="button" class="record-category-tab active" data-record-category="students" role="tab" aria-selected="true"><i class="fa-solid fa-user-graduate"></i> Student Records</button>
+        <button type="button" class="record-category-tab" data-record-category="teachers" role="tab" aria-selected="false"><i class="fa-solid fa-chalkboard-user"></i> Teacher Records</button>
+      </div>
+      <div id="recordsMessage" class="form-msg" aria-live="polite"></div>
+      <div class="records-filterbar">
+        <input type="search" id="recordsSearch" placeholder="Search name, ID, class or contact..." aria-label="Search records" />
+        <select id="recordsClassFilter" aria-label="Filter records by class"><option value="">All classes</option></select>
+        <span id="recordsResultCount" class="records-result-count"></span>
+      </div>
+      <div class="table-responsive">
+        <table>
+          <thead id="recordsThead"></thead>
+          <tbody id="recordsTbody"></tbody>
+        </table>
+      </div>
+    </section>
+
     <section class="panel" id="panel-fees">
       <div class="toolbar">
         <h1 style="margin:0;">Fee Billing &amp; Collections</h1>
@@ -246,5 +325,7 @@
 <script src="../js/api.js"></script>
 <script src="../js/dashboard-common.js"></script>
 <script src="../js/admin.js"></script>
+<script src="../js/admin-records.js"></script>
+<script src="../js/enrollment.js"></script>
 </body>
 </html>

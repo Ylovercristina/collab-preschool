@@ -2,21 +2,16 @@ const Student = require('../models/Student');
 const logActivity = require('../utils/logActivity');
 
 // Helper: build a scope filter based on who's asking
-function scopeFilter(user, req) {
+function scopeFilter(user) {
   if (user.role === 'admin') return {};
-  if (user.role === 'teacher') {
-    if (req && req.query && req.query.myClass === 'true') {
-      return { teacher: user._id };
-    }
-    return {};
-  }
+  if (user.role === 'teacher') return { teacher: user._id };
   if (user.role === 'parent') return { parent: user._id };
   return { _id: null };
 }
 
 // GET /api/students
 exports.listStudents = async (req, res) => {
-  const filter = { ...scopeFilter(req.user, req) };
+  const filter = { ...scopeFilter(req.user) };
   if (req.query.status) filter.status = req.query.status;
   const students = await Student.find(filter)
     .populate('parent', 'name email phone')
@@ -27,14 +22,14 @@ exports.listStudents = async (req, res) => {
 
 // GET /api/students/:id
 exports.getStudent = async (req, res) => {
-  const student = await Student.findOne({ _id: req.params.id, ...scopeFilter(req.user, req) })
+  const student = await Student.findOne({ _id: req.params.id, ...scopeFilter(req.user) })
     .populate('parent', 'name email phone')
     .populate('teacher', 'name email');
   if (!student) return res.status(404).json({ message: 'Student not found.' });
   res.json({ student });
 };
 
-// POST /api/students   (admin, or teacher during admission review)
+// POST /api/students   (admin)
 exports.createStudent = async (req, res) => {
   try {
     const { name, birthdate, className, parent, teacher, notes } = req.body;
@@ -52,18 +47,26 @@ exports.createStudent = async (req, res) => {
 // PATCH /api/students/:id
 exports.updateStudent = async (req, res) => {
   try {
-    const allowed = ['name', 'birthdate', 'className', 'parent', 'teacher', 'notes', 'status'];
+    const allowed = req.user.role === 'teacher'
+      ? ['name', 'birthdate', 'className', 'enrollmentDate', 'guardianName', 'guardianPhone', 'notes']
+      : ['name', 'birthdate', 'className', 'enrollmentDate', 'guardianName', 'guardianPhone', 'parent', 'teacher', 'notes', 'status'];
+    if (req.user.role === 'teacher' && Object.keys(req.body || {}).some((key) => !allowed.includes(key))) {
+      return res.status(403).json({ message: 'Teachers may only update assigned student and enrollment information.' });
+    }
     const update = {};
     allowed.forEach((k) => { if (req.body[k] !== undefined) update[k] = req.body[k]; });
 
-    const student = await Student.findByIdAndUpdate(req.params.id, update, { new: true })
+    const filter = { _id: req.params.id };
+    if (req.user.role === 'teacher') filter.teacher = req.user._id;
+    const student = await Student.findOneAndUpdate(filter, update, { new: true, runValidators: true })
       .populate('parent', 'name email phone')
       .populate('teacher', 'name email');
     if (!student) return res.status(404).json({ message: 'Student not found.' });
     await logActivity(req.user._id, 'student-updated', student.name);
     res.json({ student });
   } catch (err) {
-    res.status(500).json({ message: 'Could not update student.', error: err.message });
+    const statusCode = err.name === 'ValidationError' || err.name === 'CastError' ? 400 : 500;
+    res.status(statusCode).json({ message: statusCode === 400 ? err.message : 'Could not update student.', error: err.message });
   }
 };
 
