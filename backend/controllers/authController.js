@@ -1,3 +1,4 @@
+
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
@@ -73,6 +74,42 @@ async function sendResetOtp(user, otp) {
 
 exports.verifyEmailTransport = () => emailTransporter.verify();
 exports.emailTransportError = emailTransportError;
+
+
+exports.sendAccountApprovalEmail = async (user) => {
+  const name = String(user.name || 'there');
+  const role = String(user.role || 'user');
+  const signInInstructions = user.googleId
+    ? 'Sign in using the Google account linked to this email address. If you also registered a password, you can sign in with your email address and password.'
+    : 'Sign in using your registered email address and password.';
+  const escapeHtml = (value) => String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+  await emailTransporter.sendMail({
+    from: `Play-is-School <${process.env.EMAIL_USER}>`,
+    to: user.email,
+    subject: 'Your Play-is-School account has been approved!',
+    text: `Hello ${name},
+
+Good news! Your Play-is-School ${role} account has been approved by the school administrator.
+
+${signInInstructions}
+
+Thank you for joining Play-is-School!`,
+    html: `
+      <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1f2937;line-height:1.6">
+        <h2 style="color:#287a62">Play-is-School</h2>
+        <p>Hello ${escapeHtml(name)},</p>
+        <p>Good news! Your Play-is-School ${escapeHtml(role)} account has been approved by the school administrator.</p>
+        <p>${escapeHtml(signInInstructions)}</p>
+        <p>Thank you for joining Play-is-School!</p>
+      </div>`,
+  });
+};
 
 async function issueResetOtp(user) {
   const otp = crypto.randomInt(100000, 1000000).toString();
