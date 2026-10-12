@@ -857,7 +857,13 @@ class EventsCalendar {
 // STUDENT DETAILS & AUTHORIZED PICKUP MODAL HELPERS (Admin & Teacher)
 // ==========================================================================
 
-async function showStudentDetailsModal(studentId, { canEdit = true, onStudentUpdated } = {}) {
+function escapeStudentModalValue(value = '') {
+  return String(value).replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[character]);
+}
+
+async function showStudentDetailsModal(studentId, { canEdit = true, onStudentUpdated, teacherMode = false } = {}) {
   try {
     const [{ student }, { authorizations }] = await Promise.all([
       api.get(`/students/${studentId}`),
@@ -870,8 +876,8 @@ async function showStudentDetailsModal(studentId, { canEdit = true, onStudentUpd
       return `
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; border-bottom:1px solid #E2E8F0; padding-bottom:12px;">
           <div>
-            <h3 style="margin:0; font-size:22px; color:var(--ink);">${s.name}</h3>
-            <span class="badge ${s.status}">${s.status}</span>
+            <h3 style="margin:0; font-size:22px; color:var(--ink);">${escapeStudentModalValue(s.name)}</h3>
+            <span class="badge ${escapeStudentModalValue(s.status)}">${escapeStudentModalValue(s.status)}</span>
           </div>
           ${canEdit ? `
             <button class="btn btn-secondary btn-sm" id="modalEditStudentBtn">
@@ -882,27 +888,36 @@ async function showStudentDetailsModal(studentId, { canEdit = true, onStudentUpd
 
         <div class="grid-2" style="margin-bottom:20px;">
           <div style="background:#F8FAFC; padding:12px 14px; border-radius:8px; border:1px solid #E2E8F0;">
+            <div class="event-detail-label">Student ID</div>
+            <div style="font-weight:600; font-size:14.5px;">${escapeStudentModalValue(s.studentId || 'Not assigned')}</div>
+          </div>
+          <div style="background:#F8FAFC; padding:12px 14px; border-radius:8px; border:1px solid #E2E8F0;">
             <div class="event-detail-label">Class</div>
-            <div style="font-weight:600; font-size:14.5px;">${s.className || 'Unassigned'}</div>
+            <div style="font-weight:600; font-size:14.5px;">${escapeStudentModalValue(s.className || 'Unassigned')}</div>
           </div>
           <div style="background:#F8FAFC; padding:12px 14px; border-radius:8px; border:1px solid #E2E8F0;">
             <div class="event-detail-label">Birthdate</div>
             <div style="font-weight:600; font-size:14.5px;">${birthdateStr}</div>
           </div>
           <div style="background:#F8FAFC; padding:12px 14px; border-radius:8px; border:1px solid #E2E8F0;">
+            <div class="event-detail-label">Enrollment date</div>
+            <div style="font-weight:600; font-size:14.5px;">${s.enrollmentDate ? fmtDate(s.enrollmentDate) : 'Not specified'}</div>
+          </div>
+          <div style="background:#F8FAFC; padding:12px 14px; border-radius:8px; border:1px solid #E2E8F0;">
             <div class="event-detail-label">Parent / Guardian</div>
-            <div style="font-weight:600; font-size:14.5px;">${s.parent ? `${s.parent.name} (${s.parent.email || s.parent.phone || ''})` : 'None linked'}</div>
+            <div style="font-weight:600; font-size:14.5px;">${s.parent ? `${escapeStudentModalValue(s.parent.name)} (${escapeStudentModalValue(s.parent.email || s.parent.phone || '')})` : escapeStudentModalValue(s.guardianName || 'None linked')}</div>
           </div>
           <div style="background:#F8FAFC; padding:12px 14px; border-radius:8px; border:1px solid #E2E8F0;">
             <div class="event-detail-label">Assigned Teacher</div>
-            <div style="font-weight:600; font-size:14.5px;">${s.teacher ? s.teacher.name : 'Unassigned'}</div>
+            <div style="font-weight:600; font-size:14.5px;">${s.teacher ? escapeStudentModalValue(s.teacher.name) : 'Unassigned'}</div>
           </div>
+          ${s.guardianPhone ? `<div style="background:#F8FAFC; padding:12px 14px; border-radius:8px; border:1px solid #E2E8F0;"><div class="event-detail-label">Guardian contact</div><div style="font-weight:600; font-size:14.5px;">${escapeStudentModalValue(s.guardianPhone)}</div></div>` : ''}
         </div>
 
         ${s.notes ? `
           <div style="margin-bottom:20px; background:#F8FAFC; padding:12px 14px; border-radius:8px; border:1px solid #E2E8F0;">
             <div class="event-detail-label">Notes &amp; Dietary / Medical Info</div>
-            <div style="font-size:14px; color:var(--ink-soft);">${s.notes}</div>
+            <div style="font-size:14px; color:var(--ink-soft);">${escapeStudentModalValue(s.notes)}</div>
           </div>
         ` : ''}
 
@@ -925,25 +940,25 @@ async function showStudentDetailsModal(studentId, { canEdit = true, onStudentUpd
               <div class="pickup-person-card">
                 <div>
                   <div class="info-title">
-                    ${p.authorizedName}
+                    ${escapeStudentModalValue(p.authorizedName)}
                     ${p.verified && p.verified.length ? `<span class="badge approved" style="margin-left:6px;"><i class="fa-solid fa-check-double"></i> Verified ${p.verified.length}×</span>` : ''}
                   </div>
                   <div class="info-meta">
-                    <strong>Relationship:</strong> ${p.relationship} &nbsp;|&nbsp;
-                    <strong>Contact:</strong> ${p.contact}
+                    <strong>Relationship:</strong> ${escapeStudentModalValue(p.relationship)} &nbsp;|&nbsp;
+                    <strong>Contact:</strong> ${escapeStudentModalValue(p.contact)}
                   </div>
                   ${p.identification ? `
                     <div class="info-meta" style="margin-top:4px;">
-                      <strong>ID / Details:</strong> ${p.identification}
+                      <strong>ID / Details:</strong> ${escapeStudentModalValue(p.identification)}
                     </div>
                   ` : ''}
                 </div>
                 ${canEdit ? `
                   <div class="pickup-actions">
-                    <button class="btn btn-ghost btn-sm" data-edit-p="${p._id}" title="Edit Person">
+                    <button class="btn btn-ghost btn-sm" data-edit-p="${escapeStudentModalValue(p._id)}" title="Edit Person">
                       <i class="fa-solid fa-pen"></i> Edit
                     </button>
-                    <button class="btn btn-danger btn-sm" data-del-p="${p._id}" title="Remove Person">
+                    <button class="btn btn-danger btn-sm" data-del-p="${escapeStudentModalValue(p._id)}" title="Remove Person">
                       <i class="fa-solid fa-trash-can"></i>
                     </button>
                   </div>
@@ -967,14 +982,14 @@ async function showStudentDetailsModal(studentId, { canEdit = true, onStudentUpd
       document.getElementById('modalEditStudentBtn')?.addEventListener('click', () => {
         openEditStudentModal(student, async (updatedStudent) => {
           if (onStudentUpdated) onStudentUpdated(updatedStudent);
-          showStudentDetailsModal(studentId, { canEdit, onStudentUpdated });
-        });
+          showStudentDetailsModal(studentId, { canEdit, onStudentUpdated, teacherMode });
+        }, { teacherMode });
       });
 
       // Bind Add Pickup button
       document.getElementById('modalAddPickupBtn')?.addEventListener('click', () => {
         openPickupFormModal({ studentId }, async () => {
-          showStudentDetailsModal(studentId, { canEdit, onStudentUpdated });
+          showStudentDetailsModal(studentId, { canEdit, onStudentUpdated, teacherMode });
         });
       });
 
@@ -984,7 +999,7 @@ async function showStudentDetailsModal(studentId, { canEdit = true, onStudentUpd
           const item = authorizations.find((a) => a._id === btn.dataset.editP);
           if (item) {
             openPickupFormModal({ studentId, pickup: item }, async () => {
-              showStudentDetailsModal(studentId, { canEdit, onStudentUpdated });
+              showStudentDetailsModal(studentId, { canEdit, onStudentUpdated, teacherMode });
             });
           }
         });
@@ -996,7 +1011,7 @@ async function showStudentDetailsModal(studentId, { canEdit = true, onStudentUpd
           const item = authorizations.find((a) => a._id === btn.dataset.delP);
           if (item && confirm(`Remove ${item.authorizedName} from authorized pickup list?`)) {
             await api.del(`/pickup/${item._id}`);
-            showStudentDetailsModal(studentId, { canEdit, onStudentUpdated });
+            showStudentDetailsModal(studentId, { canEdit, onStudentUpdated, teacherMode });
           }
         });
       });
@@ -1007,21 +1022,28 @@ async function showStudentDetailsModal(studentId, { canEdit = true, onStudentUpd
 }
 
 // Edit Student Modal (Used by both Admin and Teacher)
-async function openEditStudentModal(student, onSaved) {
-  const [{ users: parents }, { users: teachers }] = await Promise.all([
-    api.get('/users?role=parent&status=approved'),
-    api.get('/users?role=teacher'),
-  ]);
+async function openEditStudentModal(student, onSaved, { teacherMode = false } = {}) {
+  let parents = [];
+  let teachers = [];
+  if (!teacherMode) {
+    const results = await Promise.all([
+      api.get('/users?role=parent&status=approved'),
+      api.get('/users?role=teacher'),
+    ]);
+    parents = results[0].users;
+    teachers = results[1].users;
+  }
 
   const birthdateFormatted = student.birthdate ? new Date(student.birthdate).toISOString().slice(0, 10) : '';
+  const enrollmentDateFormatted = student.enrollmentDate ? new Date(student.enrollmentDate).toISOString().slice(0, 10) : '';
 
   Modal.open(`
-    <h3>Edit Student Information</h3>
+    <h3>${teacherMode ? 'Manage Student Enrollment' : 'Edit Student Information'}</h3>
     <div id="modalEditMsg" class="form-msg"></div>
     <form id="editStudentForm">
       <div class="field">
         <label for="esName">Full Name</label>
-        <input type="text" id="esName" value="${student.name || ''}" required />
+        <input type="text" id="esName" value="${escapeStudentModalValue(student.name || '')}" maxlength="120" required />
       </div>
 
       <div class="grid-2">
@@ -1031,18 +1053,34 @@ async function openEditStudentModal(student, onSaved) {
         </div>
         <div class="field">
           <label for="esClass">Class / Grade</label>
-          <input type="text" id="esClass" value="${student.className || ''}" placeholder="e.g. Sunbeams" />
+          <input type="text" id="esClass" value="${escapeStudentModalValue(student.className || '')}" maxlength="80" placeholder="e.g. Sunbeams" />
         </div>
       </div>
 
+      ${teacherMode ? `
+        <div class="field">
+          <label for="esEnrollmentDate">Enrollment date</label>
+          <input type="date" id="esEnrollmentDate" value="${enrollmentDateFormatted}" required />
+        </div>
+        <div class="grid-2">
+          <div class="field">
+            <label for="esGuardianName">Parent / guardian name</label>
+            <input type="text" id="esGuardianName" value="${escapeStudentModalValue(student.guardianName || '')}" maxlength="120" />
+          </div>
+          <div class="field">
+            <label for="esGuardianPhone">Guardian contact</label>
+            <input type="tel" id="esGuardianPhone" value="${escapeStudentModalValue(student.guardianPhone || '')}" maxlength="30" />
+          </div>
+        </div>
+      ` : `
       <div class="grid-2">
         <div class="field">
           <label for="esParent">Parent / Guardian</label>
           <select id="esParent">
             <option value="">— Unassigned —</option>
             ${parents.map((p) => `
-              <option value="${p.id}" ${student.parent && (student.parent._id === p.id || student.parent === p.id) ? 'selected' : ''}>
-                ${p.name} (${p.email})
+              <option value="${escapeStudentModalValue(p.id)}" ${student.parent && (student.parent._id === p.id || student.parent === p.id) ? 'selected' : ''}>
+                ${escapeStudentModalValue(p.name)} (${escapeStudentModalValue(p.email)})
               </option>
             `).join('')}
           </select>
@@ -1052,19 +1090,21 @@ async function openEditStudentModal(student, onSaved) {
           <select id="esTeacher">
             <option value="">— Unassigned —</option>
             ${teachers.map((t) => `
-              <option value="${t.id}" ${student.teacher && (student.teacher._id === t.id || student.teacher === t.id) ? 'selected' : ''}>
-                ${t.name}
+              <option value="${escapeStudentModalValue(t.id)}" ${student.teacher && (student.teacher._id === t.id || student.teacher === t.id) ? 'selected' : ''}>
+                ${escapeStudentModalValue(t.name)}
               </option>
             `).join('')}
           </select>
         </div>
       </div>
+      `}
 
       <div class="field">
         <label for="esNotes">Notes (Medical, Allergies, Special Needs)</label>
-        <textarea id="esNotes" rows="3" placeholder="Enter notes or special considerations…">${student.notes || ''}</textarea>
+        <textarea id="esNotes" rows="3" maxlength="1000" placeholder="Enter notes or special considerations…">${escapeStudentModalValue(student.notes || '')}</textarea>
       </div>
 
+      ${teacherMode ? '' : `
       <div class="field">
         <label for="esStatus">Status</label>
         <select id="esStatus">
@@ -1072,6 +1112,7 @@ async function openEditStudentModal(student, onSaved) {
           <option value="archived" ${student.status === 'archived' ? 'selected' : ''}>Archived</option>
         </select>
       </div>
+      `}
 
       <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:20px;">
         <button type="button" class="btn btn-ghost" id="cancelEditStudentBtn">Cancel</button>
@@ -1091,11 +1132,17 @@ async function openEditStudentModal(student, onSaved) {
       name: document.getElementById('esName').value.trim(),
       birthdate: document.getElementById('esBirthdate').value || null,
       className: document.getElementById('esClass').value.trim(),
-      parent: document.getElementById('esParent').value || null,
-      teacher: document.getElementById('esTeacher').value || null,
       notes: document.getElementById('esNotes').value.trim(),
-      status: document.getElementById('esStatus').value,
     };
+    if (teacherMode) {
+      payload.enrollmentDate = document.getElementById('esEnrollmentDate').value;
+      payload.guardianName = document.getElementById('esGuardianName').value.trim();
+      payload.guardianPhone = document.getElementById('esGuardianPhone').value.trim();
+    } else {
+      payload.parent = document.getElementById('esParent').value || null;
+      payload.teacher = document.getElementById('esTeacher').value || null;
+      payload.status = document.getElementById('esStatus').value;
+    }
 
     try {
       const res = await api.patch(`/students/${student._id}`, payload);
