@@ -1,12 +1,28 @@
 // ---------- Play-is-School -- Teacher Dashboard Controller ----------
 const user = requireRole('teacher');
 let myStudents = [];
-let allStudents = [];
 let activeThreadUserId = null;
 let teacherCalendar = null;
 
+function escapeTeacherHtml(value = '') {
+  return String(value).replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[character]);
+}
+
+function relatedUserId(value) {
+  return value ? String(value._id || value.id || value) : '';
+}
+
+function localDateValue(date = new Date()) {
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
 function onPanelShown(panel) {
   if (panel === 'overview') return loadOverview();
+  if (panel === 'enrollment') return loadTeacherEnrollment();
   if (panel === 'students') return loadStudentsPanel();
   if (panel === 'fees') return loadFeeStatuses();
   if (panel === 'attendance') return loadAttendance();
@@ -19,12 +35,7 @@ function onPanelShown(panel) {
 
 async function loadMyStudents() {
   const { students } = await api.get('/students');
-  allStudents = students;
-  myStudents = students.filter((s) => s.teacher && (s.teacher._id === user.id || s.teacher === user.id));
-  if (!myStudents.length) {
-    // If not specifically assigned by ID, show all active students in class roster
-    myStudents = allStudents;
-  }
+  myStudents = students || [];
   return myStudents;
 }
 
@@ -34,14 +45,14 @@ async function loadOverview() {
   document.getElementById('statRow').innerHTML = `
     <div class="stat-card">
       <div class="stat-icon"><i class="fa-solid fa-user-graduate"></i></div>
-      <div class="stat-content"><div class="num">${myStudents.length}</div><div class="label">My Class Students</div></div>
+      <div class="stat-content"><div class="num">${myStudents.length}</div><div class="label">Assigned Students</div></div>
     </div>
     <div class="stat-card">
-      <div class="stat-icon"><i class="fa-solid fa-users"></i></div>
-      <div class="stat-content"><div class="num">${allStudents.length}</div><div class="label">Total School Students</div></div>
+      <div class="stat-icon"><i class="fa-solid fa-user-check"></i></div>
+      <div class="stat-content"><div class="num">${myStudents.filter((student) => student.status === 'active').length}</div><div class="label">Active Students</div></div>
     </div>
   `;
-  const { roster } = await api.get('/attendance/class');
+  const { roster } = await api.get(`/attendance/class?date=${localDateValue()}`);
   document.getElementById('todayRoster').innerHTML = roster.length ? `
     <div class="table-responsive">
       <table>
@@ -51,7 +62,7 @@ async function loadOverview() {
             <tr>
               <td><strong>${r.student.name}</strong></td>
               <td>${r.student.className || '—'}</td>
-              <td>${r.attendance ? `<span class="badge ${r.attendance.status}">${r.attendance.status}</span>` : '<span style="color:var(--ink-muted); font-style:italic;">Not marked yet</span>'}</td>
+              <td>${r.attendance ? `<span class="badge ${escapeTeacherHtml(r.attendance.status)}">${['late', 'tardy'].includes(r.attendance.status) ? 'Tardy' : escapeTeacherHtml(r.attendance.status)}</span>` : '<span style="color:var(--ink-muted); font-style:italic;">Not marked yet</span>'}</td>
             </tr>
           `).join('')}
         </tbody>
@@ -62,12 +73,8 @@ async function loadOverview() {
 
 // ---------- Students Panel (Edit Student Information & Pickup) ----------
 async function loadStudentsPanel() {
-  const { students } = await api.get('/students');
-  allStudents = students;
-  myStudents = students.filter((s) => s.teacher && (s.teacher._id === user.id || s.teacher === user.id));
-
-  const filter = document.getElementById('teacherStudentFilter')?.value || 'my';
-  const displayList = (filter === 'my' && myStudents.length) ? myStudents : allStudents;
+  await loadMyStudents();
+  const displayList = myStudents;
 
   const tbody = document.getElementById('teacherStudentsTbody');
   if (!displayList.length) {
@@ -79,17 +86,17 @@ async function loadStudentsPanel() {
     const bdate = s.birthdate ? new Date(s.birthdate).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—';
     return `
       <tr>
-        <td><strong>${s.name}</strong></td>
-        <td><span class="badge" style="background:#F1F5F9; color:var(--ink);">${s.className || 'Unassigned'}</span></td>
-        <td>${s.parent ? `${s.parent.name}` : '<em>Unassigned</em>'}</td>
+        <td><strong>${escapeTeacherHtml(s.name)}</strong></td>
+        <td><span class="badge" style="background:#F1F5F9; color:var(--ink);">${escapeTeacherHtml(s.className || 'Unassigned')}</span></td>
+        <td>${s.parent ? escapeTeacherHtml(s.parent.name) : '<em>Unassigned</em>'}</td>
         <td>${bdate}</td>
-        <td><span class="badge ${s.status}">${s.status}</span></td>
+        <td><span class="badge ${escapeTeacherHtml(s.status)}">${escapeTeacherHtml(s.status)}</span></td>
         <td>
           <div style="display:flex; gap:6px;">
-            <button class="btn btn-secondary btn-sm" data-edit-student="${s._id}" title="Edit Student Information">
+            <button type="button" class="btn btn-secondary btn-sm" data-edit-student="${escapeTeacherHtml(s._id)}" title="Edit Student Information">
               <i class="fa-solid fa-pen-to-square"></i> Edit
             </button>
-            <button class="btn btn-ghost btn-sm" data-details-student="${s._id}" title="View Details & Authorized Pickup">
+            <button type="button" class="btn btn-ghost btn-sm" data-details-student="${escapeTeacherHtml(s._id)}" title="View Details & Authorized Pickup">
               <i class="fa-solid fa-shield-halved"></i> Details &amp; Pickup
             </button>
           </div>
@@ -102,14 +109,18 @@ async function loadStudentsPanel() {
   tbody.querySelectorAll('[data-edit-student]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const s = displayList.find((x) => x._id === btn.dataset.editStudent);
-      if (s) openEditStudentModal(s, loadStudentsPanel);
+      if (s) openEditStudentModal(s, loadStudentsPanel, { teacherMode: true });
     });
   });
 
   // Bind Details & Pickup buttons
   tbody.querySelectorAll('[data-details-student]').forEach((btn) => {
     btn.addEventListener('click', () => {
-      showStudentDetailsModal(btn.dataset.detailsStudent, { canEdit: true, onStudentUpdated: loadStudentsPanel });
+      showStudentDetailsModal(btn.dataset.detailsStudent, {
+        canEdit: true,
+        onStudentUpdated: loadStudentsPanel,
+        teacherMode: true,
+      });
     });
   });
 }
@@ -142,130 +153,265 @@ async function loadFeeStatuses() {
   }).join('');
 }
 
-document.getElementById('teacherStudentFilter')?.addEventListener('change', loadStudentsPanel);
-
 // ---------- Attendance ----------
 const attDateInput = document.getElementById('attDate');
-attDateInput.valueAsDate = new Date();
+attDateInput.value = localDateValue();
 attDateInput.addEventListener('change', loadAttendance);
 
 async function loadAttendance() {
   const date = attDateInput.value || new Date().toISOString().slice(0, 10);
-  const { roster } = await api.get(`/attendance/class?date=${date}`);
   const tbody = document.getElementById('attTbody');
-  if (!roster.length) {
-    tbody.innerHTML = `<tr><td colspan="4"><div class="empty-state"><i class="fa-solid fa-clipboard-user"></i><p>No students assigned to you.</p></div></td></tr>`;
-    return;
-  }
+  const message = document.getElementById('attendanceMessage');
+  message.textContent = '';
+  try {
+    const { roster } = await api.get(`/attendance/class?date=${encodeURIComponent(date)}`);
+    if (!roster.length) {
+      tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state"><i class="fa-solid fa-clipboard-user"></i><p>No students assigned to you.</p></div></td></tr>`;
+      return;
+    }
 
-  tbody.innerHTML = roster.map((r) => `
-    <tr data-student="${r.student.id}">
-      <td><strong>${r.student.name}</strong></td>
-      <td>${r.student.className || '—'}</td>
-      <td>
-        <select class="statusSelect" style="padding:6px 10px; border-radius:6px; border:1px solid #CBD5E1;">
-          ${['present', 'late', 'excused', 'absent'].map((s) => `<option value="${s}" ${r.attendance && r.attendance.status === s ? 'selected' : ''}>${s}</option>`).join('')}
-        </select>
-      </td>
-      <td><input class="remarksInput" value="${r.attendance ? (r.attendance.remarks || '') : ''}" placeholder="Optional remarks" style="padding:6px 10px; border-radius:6px; border:1px solid #CBD5E1; width:100%; max-width:240px;" /></td>
-    </tr>
-  `).join('');
+    tbody.innerHTML = roster.map((r) => `
+      <tr data-student="${escapeTeacherHtml(r.student.id)}">
+        <td><strong>${escapeTeacherHtml(r.student.name)}</strong></td>
+        <td>${escapeTeacherHtml(r.student.className || '—')}</td>
+        <td>
+          <select class="statusSelect" aria-label="Attendance status for ${escapeTeacherHtml(r.student.name)}" style="padding:6px 10px; border-radius:6px; border:1px solid #CBD5E1;">
+            ${[['present', 'Present'], ['absent', 'Absent'], ['tardy', 'Tardy'], ['excused', 'Excused']].map(([value, label]) => `<option value="${value}" ${r.attendance && (r.attendance.status === value || (value === 'tardy' && r.attendance.status === 'late')) ? 'selected' : ''}>${label}</option>`).join('')}
+          </select>
+        </td>
+        <td><input class="remarksInput" maxlength="500" value="${escapeTeacherHtml(r.attendance ? (r.attendance.remarks || '') : '')}" aria-label="Attendance remarks for ${escapeTeacherHtml(r.student.name)}" placeholder="Optional remarks" style="padding:6px 10px; border-radius:6px; border:1px solid #CBD5E1; width:100%; max-width:240px;" /></td>
+        <td><div style="display:flex;align-items:center;gap:8px;"><button type="button" class="btn btn-secondary btn-sm" data-save-attendance>Save</button><span data-attendance-state aria-live="polite">${r.attendance ? 'Saved' : 'Not recorded'}</span></div></td>
+      </tr>
+    `).join('');
 
-  tbody.querySelectorAll('tr').forEach((row) => {
-    const save = async () => {
-      await api.post('/attendance', {
-        student: row.dataset.student,
-        date,
-        status: row.querySelector('.statusSelect').value,
-        remarks: row.querySelector('.remarksInput').value,
+    tbody.querySelectorAll('tr').forEach((row) => {
+      const saveButton = row.querySelector('[data-save-attendance]');
+      const state = row.querySelector('[data-attendance-state]');
+      const markUnsaved = () => { state.textContent = 'Unsaved changes'; };
+      row.querySelector('.statusSelect').addEventListener('change', markUnsaved);
+      row.querySelector('.remarksInput').addEventListener('input', markUnsaved);
+      saveButton.addEventListener('click', async () => {
+        saveButton.disabled = true;
+        state.textContent = 'Saving…';
+        document.getElementById('attendanceMessage').textContent = '';
+        try {
+          await api.post('/attendance', {
+            student: row.dataset.student,
+            date,
+            status: row.querySelector('.statusSelect').value,
+            remarks: row.querySelector('.remarksInput').value.trim(),
+          });
+          state.textContent = 'Saved';
+        } catch (err) {
+          state.textContent = 'Not saved';
+          showMsg(document.getElementById('attendanceMessage'), err.message);
+        } finally {
+          saveButton.disabled = false;
+        }
       });
-    };
-    row.querySelector('.statusSelect').addEventListener('change', save);
-    row.querySelector('.remarksInput').addEventListener('change', save);
-  });
+    });
+  } catch (err) {
+    tbody.innerHTML = '<tr><td colspan="5"><div class="empty-state"><p>Attendance roster could not be loaded.</p></div></td></tr>';
+    showMsg(message, err.message);
+  }
 }
 
 // ---------- Academic Progress ----------
+let editingProgressId = '';
+
+function escapeProgressText(value = '') {
+  return String(value).replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[character]);
+}
+
+function resetProgressEdit() {
+  editingProgressId = '';
+  const form = document.getElementById('progressForm');
+  form.reset();
+  document.getElementById('pDate').value = new Date().toISOString().slice(0, 10);
+  document.getElementById('progressFormTitle').innerHTML = '<i class="fa-solid fa-plus-circle" style="color:var(--primary); margin-right:6px;"></i>Log Milestone or Activity';
+  document.getElementById('progressSaveButton').innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save Entry';
+  document.getElementById('progressCancelEdit').hidden = true;
+}
+
+function editProgressEntry(entry) {
+  editingProgressId = entry._id;
+  document.getElementById('pDate').value = entry.date ? new Date(entry.date).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
+  document.getElementById('pLearningArea').value = entry.learningArea || '';
+  document.getElementById('pMilestone').value = entry.milestone || '';
+  document.getElementById('pActivity').value = entry.activity || '';
+  document.getElementById('pAssessment').value = entry.assessment || '';
+  document.getElementById('pEvaluation').value = entry.evaluation || '';
+  document.getElementById('pStrengths').value = entry.strengths || '';
+  document.getElementById('pAreasForImprovement').value = entry.areasForImprovement || '';
+  document.getElementById('pOverallDevelopment').value = entry.overallDevelopment || '';
+  document.getElementById('pNotes').value = entry.notes || '';
+  document.getElementById('progressFormTitle').textContent = 'Update Progress Entry';
+  document.getElementById('progressSaveButton').innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Update Entry';
+  document.getElementById('progressCancelEdit').hidden = false;
+  document.getElementById('progressForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
 async function loadProgressPanel() {
-  if (!allStudents.length) await loadMyStudents();
+  if (!document.getElementById('pDate').value) document.getElementById('pDate').value = new Date().toISOString().slice(0, 10);
+  await loadMyStudents();
   const sel = document.getElementById('progStudentSelect');
-  const targetList = myStudents.length ? myStudents : allStudents;
-  sel.innerHTML = targetList.map((s) => `<option value="${s._id}">${s.name}</option>`).join('');
+  sel.innerHTML = myStudents.map((s) => `<option value="${escapeTeacherHtml(s._id)}">${escapeTeacherHtml(s.name)}</option>`).join('');
   sel.onchange = renderProgressList;
-  if (targetList.length) renderProgressList();
+  if (myStudents.length) renderProgressList();
+  else document.getElementById('progressList').innerHTML = '<div class="empty-state"><i class="fa-solid fa-chart-simple"></i><p>No students are assigned to you.</p></div>';
 }
 
 async function renderProgressList() {
   const sid = document.getElementById('progStudentSelect').value;
   if (!sid) return;
   const { progress } = await api.get(`/progress/student/${sid}`);
-  document.getElementById('progressList').innerHTML = progress.length ? progress.map((p) => `
+  const list = document.getElementById('progressList');
+  list.innerHTML = progress.length ? progress.map((p) => `
     <div class="card" style="margin-bottom:12px;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-        <span style="color:var(--primary); font-weight:700;"><i class="fa-regular fa-calendar"></i> ${fmtDate(p.date)}</span>
+        <span style="color:var(--primary); font-weight:700;"><i class="fa-regular fa-calendar"></i> ${fmtDate(p.date)}${p.learningArea ? ` &middot; ${escapeProgressText(p.learningArea)}` : ''}</span>
+        ${String(p.teacher?._id || p.teacher) === String(user.id) ? `<button type="button" class="btn btn-ghost btn-sm" data-edit-progress="${escapeProgressText(p._id)}"><i class="fa-solid fa-pen"></i> Edit</button>` : ''}
       </div>
-      ${p.milestone ? `<p style="margin-bottom:4px;"><strong>Milestone:</strong> ${p.milestone}</p>` : ''}
-      ${p.activity ? `<p style="margin-bottom:4px;"><strong>Activity:</strong> ${p.activity}</p>` : ''}
-      ${p.assessment ? `<p style="margin-bottom:4px;"><strong>Assessment:</strong> ${p.assessment}</p>` : ''}
-      ${p.notes ? `<p style="margin:0; color:var(--ink-soft); font-style:italic;">Notes: ${p.notes}</p>` : ''}
+      ${p.milestone ? `<p style="margin-bottom:4px;"><strong>Milestone:</strong> ${escapeProgressText(p.milestone)}</p>` : ''}
+      ${p.activity ? `<p style="margin-bottom:4px;"><strong>Activity:</strong> ${escapeProgressText(p.activity)}</p>` : ''}
+      ${p.assessment ? `<p style="margin-bottom:4px;"><strong>Assessment:</strong> ${escapeProgressText(p.assessment)}</p>` : ''}
+      ${p.evaluation ? `<p style="margin-bottom:4px;"><strong>Teacher evaluation:</strong> ${escapeProgressText(p.evaluation)}</p>` : ''}
+      ${p.strengths ? `<p style="margin-bottom:4px;"><strong>Strengths:</strong> ${escapeProgressText(p.strengths)}</p>` : ''}
+      ${p.areasForImprovement ? `<p style="margin-bottom:4px;"><strong>Areas for improvement:</strong> ${escapeProgressText(p.areasForImprovement)}</p>` : ''}
+      ${p.overallDevelopment ? `<p style="margin-bottom:4px;"><strong>Overall development:</strong> ${escapeProgressText(p.overallDevelopment)}</p>` : ''}
+      ${p.notes ? `<p style="margin:0; color:var(--ink-soft); font-style:italic;">Notes: ${escapeProgressText(p.notes)}</p>` : ''}
     </div>
   `).join('') : '<div class="empty-state"><i class="fa-solid fa-chart-simple"></i><p>No progress entries logged yet for this student.</p></div>';
+  list.querySelectorAll('[data-edit-progress]').forEach((button) => {
+    const entry = progress.find((item) => item._id === button.dataset.editProgress);
+    if (entry) button.addEventListener('click', () => editProgressEntry(entry));
+  });
 }
 
 document.getElementById('progressForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const sid = document.getElementById('progStudentSelect').value;
   if (!sid) return;
-  await api.post('/progress', {
-    student: sid,
-    milestone: document.getElementById('pMilestone').value.trim(),
-    activity: document.getElementById('pActivity').value.trim(),
-    assessment: document.getElementById('pAssessment').value.trim(),
-    notes: document.getElementById('pNotes').value.trim(),
-  });
-  document.getElementById('progressForm').reset();
-  renderProgressList();
+  const message = document.getElementById('progressFormMessage');
+  message.textContent = '';
+  try {
+    const values = {
+      student: sid,
+      date: document.getElementById('pDate').value,
+      milestone: document.getElementById('pMilestone').value.trim(),
+      activity: document.getElementById('pActivity').value.trim(),
+      assessment: document.getElementById('pAssessment').value.trim(),
+      learningArea: document.getElementById('pLearningArea').value,
+      evaluation: document.getElementById('pEvaluation').value.trim(),
+      strengths: document.getElementById('pStrengths').value.trim(),
+      areasForImprovement: document.getElementById('pAreasForImprovement').value.trim(),
+      overallDevelopment: document.getElementById('pOverallDevelopment').value.trim(),
+      notes: document.getElementById('pNotes').value.trim(),
+    };
+    if (editingProgressId) {
+      delete values.student;
+      await api.patch(`/progress/${editingProgressId}`, values);
+    } else {
+      await api.post('/progress', values);
+    }
+    resetProgressEdit();
+    message.textContent = '';
+    await renderProgressList();
+  } catch (err) {
+    showMsg(message, err.message);
+  }
+});
+
+document.getElementById('progressCancelEdit').addEventListener('click', () => {
+  resetProgressEdit();
+  document.getElementById('progressFormMessage').textContent = '';
 });
 
 // ---------- Messages ----------
 async function loadInbox() {
-  if (!allStudents.length) await loadMyStudents();
+  await loadMyStudents();
   const { threads } = await api.get('/messages/inbox');
   const parentsFromStudents = new Map();
-  allStudents.forEach((s) => { if (s.parent) parentsFromStudents.set(s.parent._id, s.parent); });
+  myStudents.forEach((student) => {
+    if (student.status === 'active' && student.parent) parentsFromStudents.set(relatedUserId(student.parent), student.parent);
+  });
 
   const box = document.getElementById('inboxList');
-  const known = new Map(threads.map((t) => [t.with.id, t]));
+  const known = new Map(threads
+    .filter((thread) => thread.with.role === 'parent' && parentsFromStudents.has(String(thread.with.id)))
+    .map((thread) => [String(thread.with.id), thread]));
   parentsFromStudents.forEach((p, id) => {
     if (!known.has(id)) known.set(id, { with: { id, name: p.name, role: 'parent' }, unread: 0 });
   });
 
   const items = Array.from(known.values());
   box.innerHTML = items.length ? items.map((t) => `
-    <div class="list-row" style="cursor:pointer;" data-open="${t.with.id}" data-name="${t.with.name}">
-      <span><i class="fa-solid fa-user" style="color:var(--primary); margin-right:8px;"></i>${t.with.name}${t.unread ? ` <span class="badge pending">${t.unread} new</span>` : ''}</span>
+    <button type="button" class="list-row" style="cursor:pointer;width:100%;text-align:left;border:0;font:inherit;" data-open="${escapeTeacherHtml(t.with.id)}" data-name="${escapeTeacherHtml(t.with.name)}">
+      <span><i class="fa-solid fa-user" style="color:var(--primary); margin-right:8px;"></i>${escapeTeacherHtml(t.with.name)}${t.unread ? ` <span class="badge pending">${t.unread} new</span>` : ''}</span>
       <i class="fa-solid fa-chevron-right" style="color:var(--ink-light); font-size:12px;"></i>
-    </div>
+    </button>
   `).join('') : '<div class="empty-state"><p>No parents to message yet.</p></div>';
 
-  box.querySelectorAll('[data-open]').forEach((row) => row.addEventListener('click', () => openThread(row.dataset.open, row.dataset.name)));
+  box.querySelectorAll('[data-open]').forEach((row) => row.addEventListener('click', async () => {
+    try {
+      await openThread(row.dataset.open, row.dataset.name);
+    } catch (err) {
+      showMsg(document.getElementById('messageFormMessage'), err.message);
+    }
+  }));
 }
 
 async function openThread(userId, name) {
+  const parentStudents = myStudents.filter((student) => student.status === 'active'
+    && relatedUserId(student.parent) === String(userId));
   activeThreadUserId = userId;
   document.getElementById('threadWithName').textContent = name;
+  const studentSelect = document.getElementById('messageStudentSelect');
+  const previousStudentId = studentSelect.value;
+  studentSelect.innerHTML = parentStudents.map((student) => (
+    `<option value="${escapeTeacherHtml(student._id)}">${escapeTeacherHtml(student.name)}${student.className ? ` — ${escapeTeacherHtml(student.className)}` : ''}</option>`
+  )).join('');
+  if (parentStudents.some((student) => student._id === previousStudentId)) {
+    studentSelect.value = previousStudentId;
+  }
+  studentSelect.disabled = !parentStudents.length;
+  document.getElementById('chatInput').disabled = !parentStudents.length;
+  document.getElementById('sendChatBtn').disabled = !parentStudents.length;
+  document.getElementById('messageFormMessage').textContent = '';
   const { messages } = await api.get(`/messages/thread/${userId}`);
   const thread = document.getElementById('chatThread');
-  thread.innerHTML = messages.map((m) => `<div class="chat-bubble ${m.sender === userId || m.sender._id === userId ? 'theirs' : 'mine'}">${m.content}</div>`).join('');
+  thread.innerHTML = messages.map((message) => {
+    const senderId = relatedUserId(message.sender);
+    const content = escapeTeacherHtml(message.content).replace(/\r?\n/g, '<br>');
+    return `<div class="chat-bubble ${senderId === String(userId) ? 'theirs' : 'mine'}">${content}</div>`;
+  }).join('');
   thread.scrollTop = thread.scrollHeight;
 }
 
-document.getElementById('sendChatBtn').addEventListener('click', async () => {
+document.getElementById('teacherMessageForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
   const input = document.getElementById('chatInput');
-  if (!activeThreadUserId || !input.value.trim()) return;
-  await api.post('/messages', { receiver: activeThreadUserId, content: input.value.trim() });
-  input.value = '';
-  openThread(activeThreadUserId, document.getElementById('threadWithName').textContent);
+  const studentId = document.getElementById('messageStudentSelect').value;
+  if (!activeThreadUserId || !studentId || !input.value.trim()) return;
+  const sendButton = document.getElementById('sendChatBtn');
+  sendButton.disabled = true;
+  document.getElementById('messageFormMessage').textContent = '';
+  try {
+    await api.post('/messages', {
+      receiver: activeThreadUserId,
+      student: studentId,
+      content: input.value.trim(),
+    });
+    input.value = '';
+    await openThread(activeThreadUserId, document.getElementById('threadWithName').textContent);
+    await loadInbox();
+  } catch (err) {
+    showMsg(document.getElementById('messageFormMessage'), err.message);
+  } finally {
+    sendButton.disabled = false;
+  }
 });
 
 // ---------- Events Calendar ----------
@@ -321,12 +467,13 @@ document.getElementById('addEventBtn').addEventListener('click', () => {
 
 // ---------- Pickup Verification Panel ----------
 async function loadPickupPanel() {
-  if (!allStudents.length) await loadMyStudents();
+  await loadMyStudents();
   const sel = document.getElementById('pickupStudentSelect');
-  const targetList = myStudents.length ? myStudents : allStudents;
-  sel.innerHTML = targetList.map((s) => `<option value="${s._id}">${s.name}</option>`).join('');
+  sel.innerHTML = myStudents.map((s) => `<option value="${escapeTeacherHtml(s._id)}">${escapeTeacherHtml(s.name)}</option>`).join('');
+  sel.disabled = !myStudents.length;
   sel.onchange = renderPickupList;
-  if (targetList.length) renderPickupList();
+  if (myStudents.length) renderPickupList();
+  else document.getElementById('pickupList').innerHTML = '<div class="empty-state"><i class="fa-solid fa-user-graduate"></i><p>No students are assigned to you.</p></div>';
 }
 
 async function renderPickupList() {

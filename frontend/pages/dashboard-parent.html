@@ -26,6 +26,7 @@
       </div>
     </div>
     <button class="nav-item active" data-panel="overview"><i class="fa-solid fa-gauge-high"></i> Overview</button>
+    <button class="nav-item" data-panel="enrollment"><i class="fa-solid fa-file-signature"></i> Enrollment</button>
     <button class="nav-item" data-panel="progress"><i class="fa-solid fa-chart-line"></i> Academic progress</button>
     <button class="nav-item" data-panel="attendance"><i class="fa-solid fa-clipboard-user"></i> Attendance</button>
     <button class="nav-item" data-panel="fees"><i class="fa-solid fa-credit-card"></i> Fees</button>
@@ -67,6 +68,16 @@
           <div id="upcomingEvents">Loading…</div>
         </div>
       </div>
+    </section>
+
+    <section class="panel" id="panel-enrollment">
+      <div style="margin-bottom:20px;">
+        <h1 style="margin:0;">Student Enrollment</h1>
+        <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Apply for an available school term and follow your application status.</p>
+      </div>
+      <div id="parentEnrollmentAvailability" aria-live="polite"></div>
+      <div id="parentEnrollmentFormContainer"></div>
+      <div id="parentEnrollmentApplications"></div>
     </section>
 
     <section class="panel" id="panel-progress">
@@ -115,6 +126,7 @@
           <h3 id="threadWithName" style="margin:0;">Teacher</h3>
         </div>
         <div class="chat-thread" id="chatThread"></div>
+        <div id="parentMessageFormMessage" class="form-msg" aria-live="polite"></div>
         <div class="chat-input-row">
           <input id="chatInput" placeholder="Type a message to the teacher…" />
           <button class="btn btn-primary btn-sm" id="sendChatBtn"><i class="fa-solid fa-paper-plane"></i> Send</button>
@@ -192,5 +204,6 @@
 <script src="../js/api.js"></script>
 <script src="../js/dashboard-common.js"></script>
 <script src="../js/parent.js"></script>
+<script src="../js/enrollment.js"></script>
 </body>
 </html>

@@ -26,6 +26,7 @@
       </div>
     </div>
     <button class="nav-item active" data-panel="overview"><i class="fa-solid fa-gauge-high"></i> Overview</button>
+    <button class="nav-item" data-panel="enrollment"><i class="fa-solid fa-file-signature"></i> Enrollment</button>
     <button class="nav-item" data-panel="students"><i class="fa-solid fa-user-graduate"></i> Students</button>
     <button class="nav-item" data-panel="fees"><i class="fa-solid fa-money-bill-wave"></i> Fees</button>
     <button class="nav-item" data-panel="attendance"><i class="fa-solid fa-clipboard-user"></i> Attendance</button>
@@ -57,18 +58,22 @@
       </div>
     </section>
 
+    <section class="panel" id="panel-enrollment">
+      <div style="margin-bottom:20px;">
+        <h1 style="margin:0;">Student Enrollment</h1>
+        <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Submit student enrollment applications for admin review during an open term.</p>
+      </div>
+      <div id="teacherEnrollmentAvailability" aria-live="polite"></div>
+      <div id="teacherEnrollmentFormContainer"></div>
+      <div id="teacherEnrollmentApplications"></div>
+    </section>
+
     <!-- Students Management Panel (Teacher & Admin capability) -->
     <section class="panel" id="panel-students">
       <div class="toolbar">
         <div>
-          <h1 style="margin:0;">Student Information &amp; Profiles</h1>
-          <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">View and edit student information, parent linkages, and authorized pickup persons.</p>
-        </div>
-        <div style="display:flex; gap:10px; align-items:center;">
-          <select id="teacherStudentFilter" style="padding:7px 12px; border-radius:6px; border:1px solid #CBD5E1; font-weight:600;">
-            <option value="my">My Assigned Class</option>
-            <option value="all">All School Students</option>
-          </select>
+          <h1 style="margin:0;">Assigned Student Information &amp; Profiles</h1>
+          <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Review assigned student and enrollment information, and update accurate records.</p>
         </div>
       </div>
       <div class="table-responsive">
@@ -100,9 +105,10 @@
         </div>
         <input type="date" id="attDate" style="padding:8px 12px; border-radius:6px; border:1px solid #CBD5E1;" />
       </div>
+      <div id="attendanceMessage" class="form-msg" aria-live="polite"></div>
       <div class="table-responsive">
         <table>
-          <thead><tr><th>Student</th><th>Class</th><th>Attendance Status</th><th>Remarks</th></tr></thead>
+          <thead><tr><th>Student</th><th>Class</th><th>Attendance Status</th><th>Remarks</th><th>Record</th></tr></thead>
           <tbody id="attTbody"></tbody>
         </table>
       </div>
@@ -117,15 +123,26 @@
         </div>
       </div>
       <div class="card" style="margin-bottom:20px;">
-        <h3 style="margin-bottom:14px;"><i class="fa-solid fa-plus-circle" style="color:var(--primary); margin-right:6px;"></i>Log Milestone or Activity</h3>
+        <h3 id="progressFormTitle" style="margin-bottom:14px;"><i class="fa-solid fa-plus-circle" style="color:var(--primary); margin-right:6px;"></i>Log Milestone or Activity</h3>
         <form id="progressForm">
+          <div class="field"><label for="pDate">Assessment date</label><input id="pDate" type="date" required /></div>
           <div class="grid-2">
             <div class="field"><label>Milestone</label><input id="pMilestone" placeholder="e.g. Recognizes 5 alphabet letters" /></div>
             <div class="field"><label>Activity</label><input id="pActivity" placeholder="e.g. Color sorting puzzle" /></div>
           </div>
-          <div class="field"><label>Assessment / Observation</label><input id="pAssessment" placeholder="e.g. Meeting age expectations" /></div>
+          <div class="grid-2">
+            <div class="field"><label for="pLearningArea">Learning area</label><select id="pLearningArea" required><option value="">Select learning area</option><option>Language &amp; Literacy</option><option>Numeracy</option><option>Social &amp; Emotional Development</option><option>Physical Development</option><option>Creative Arts</option><option>Science &amp; Discovery</option><option>Other</option></select></div>
+            <div class="field"><label>Assessment result</label><input id="pAssessment" placeholder="e.g. Meeting age expectations" /></div>
+          </div>
+          <div class="field"><label for="pEvaluation">Teacher evaluation</label><textarea id="pEvaluation" rows="2" placeholder="Describe the student's progress in this learning area"></textarea></div>
+          <div class="grid-2">
+            <div class="field"><label for="pStrengths">Strengths</label><textarea id="pStrengths" rows="2" placeholder="Observed strengths"></textarea></div>
+            <div class="field"><label for="pAreasForImprovement">Areas for improvement</label><textarea id="pAreasForImprovement" rows="2" placeholder="Areas where additional support may help"></textarea></div>
+          </div>
+          <div class="field"><label for="pOverallDevelopment">Overall development</label><textarea id="pOverallDevelopment" rows="2" placeholder="Summary of development and progress over time"></textarea></div>
           <div class="field"><label>Teacher Notes</label><textarea id="pNotes" rows="2" placeholder="Describe strengths or areas needing practice…"></textarea></div>
-          <button class="btn btn-primary" type="submit"><i class="fa-solid fa-floppy-disk"></i> Save Entry</button>
+          <div id="progressFormMessage" class="form-msg" aria-live="polite"></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn btn-primary" id="progressSaveButton" type="submit"><i class="fa-solid fa-floppy-disk"></i> Save Entry</button><button class="btn btn-ghost" id="progressCancelEdit" type="button" hidden>Cancel edit</button></div>
         </form>
       </div>
       <div id="progressList"></div>
@@ -144,10 +161,17 @@
         <div class="card">
           <h3 id="threadWithName" style="margin-bottom:14px;">Select a parent</h3>
           <div class="chat-thread" id="chatThread"></div>
-          <div class="chat-input-row">
-            <input id="chatInput" placeholder="Type a message to parent…" />
-            <button class="btn btn-primary btn-sm" id="sendChatBtn"><i class="fa-solid fa-paper-plane"></i> Send</button>
-          </div>
+          <form id="teacherMessageForm">
+            <div class="field" style="margin-top:12px;">
+              <label for="messageStudentSelect">About student</label>
+              <select id="messageStudentSelect" required disabled></select>
+            </div>
+            <div id="messageFormMessage" class="form-msg" aria-live="polite"></div>
+            <div class="chat-input-row">
+              <input id="chatInput" maxlength="2000" placeholder="Share an announcement, update, or concern…" required disabled />
+              <button class="btn btn-primary btn-sm" id="sendChatBtn" type="submit" disabled><i class="fa-solid fa-paper-plane"></i> Send</button>
+            </div>
+          </form>
         </div>
       </div>
     </section>
@@ -249,5 +273,6 @@
 <script src="../js/api.js"></script>
 <script src="../js/dashboard-common.js"></script>
 <script src="../js/teacher.js"></script>
+<script src="../js/enrollment.js"></script>
 </body>
 </html>
