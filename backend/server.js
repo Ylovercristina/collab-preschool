@@ -23,6 +23,8 @@ app.get('/api/health', (req, res) => res.json({ status: 'ok', name: 'Play-is-Sch
 app.use('/api/auth', authRoutes);
 app.use('/api/users', require('./routes/userRoutes'));
 app.use('/api/students', require('./routes/studentRoutes'));
+app.use('/api/enrollment', require('./routes/enrollmentRoutes'));
+app.use('/api/records', require('./routes/recordsRoutes'));
 app.use('/api/attendance', require('./routes/attendanceRoutes'));
 app.use('/api/progress', require('./routes/progressRoutes'));
 app.use('/api/fees', require('./routes/feeRoutes'));

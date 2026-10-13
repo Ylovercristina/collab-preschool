@@ -6,6 +6,9 @@ function onPanelShown(panel) {
   if (panel === 'overview') return loadOverview();
   if (panel === 'users') return loadUsers();
   if (panel === 'students') return loadStudents();
+  if (panel === 'enrollment') return loadAdminEnrollment();
+  if (panel === 'academic-progress') return window.loadAcademicProgress();
+  if (panel === 'records') return window.loadManagedRecords();
   if (panel === 'fees') return loadFees();
   if (panel === 'events') return loadEvents();
   if (panel === 'logs') return loadLogs();
@@ -270,9 +273,6 @@ function renderFilteredUsers() {
                 <i class="fa-solid fa-pen-to-square"></i>
               </a>
             ` : ''}
-            <button class="btn btn-ghost btn-sm" data-edit-user="${u.id}" style="padding:4px 7px; font-size:12px;" title="Quick edit user details">
-              <i class="fa-solid fa-pen"></i>
-            </button>
           </div>
         </td>
       </tr>
@@ -314,52 +314,21 @@ function renderFilteredUsers() {
     });
   });
 
-  tbody.querySelectorAll('[data-edit-user]').forEach((b) => {
-    b.addEventListener('click', () => {
-      const u = cachedUsers.find((user) => user.id === b.dataset.editUser);
-      if (u) openEditUserModal(u);
-    });
-  });
-}
 
-function openEditUserModal(user) {
-  Modal.open(`
-    <h3>Edit Account Details</h3>
-    <div id="modalMsg" class="form-msg"></div>
-    <form id="editUserForm">
-      <div class="field"><label>Full Name</label><input id="editUName" value="${user.name}" required /></div>
-      <div class="field">
-        <label>Email Address</label>
-        <input type="email" value="${user.email}" disabled style="background:#F1F5F9; color:#64748B;" />
-        <span class="field-hint" style="font-size:11.5px; color:var(--ink-muted); margin-top:2px;">Email address cannot be changed directly.</span>
-      </div>
-      <div class="field"><label>Phone Number</label><input id="editUPhone" value="${user.phone || ''}" placeholder="e.g. 0917-123-4567" /></div>
-      <div class="field">
-        <label>Account Role</label>
-        <select id="editURole">
-          <option value="teacher" ${user.role === 'teacher' ? 'selected' : ''}>Teacher</option>
-          <option value="parent" ${user.role === 'parent' ? 'selected' : ''}>Parent</option>
-          <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>Administrator</option>
-        </select>
-      </div>
-      <button class="btn btn-primary btn-block" type="submit" style="margin-top:14px;">Save Changes</button>
-    </form>
-  `);
-  document.getElementById('editUserForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const msg = document.getElementById('modalMsg');
+  tbody.querySelectorAll('[data-approve]').forEach((button) => button.addEventListener('click', async () => {
+    button.disabled = true;
     try {
-      await api.patch(`/users/${user.id}`, {
-        name: document.getElementById('editUName').value.trim(),
-        phone: document.getElementById('editUPhone').value.trim(),
-        role: document.getElementById('editURole').value,
-      });
-      Modal.close();
+      const result = await api.patch(`/users/${button.dataset.approve}/approve`);
+      alert(result.message);
       await loadUsers();
     } catch (err) {
-      showMsg(msg, err.message);
+      alert(err.message);
+      button.disabled = false;
     }
-  });
+  }));
+  tbody.querySelectorAll('[data-archive]').forEach((b) => b.addEventListener('click', () => api.patch(`/users/${b.dataset.archive}/archive`).then(loadUsers)));
+  tbody.querySelectorAll('[data-reactivate]').forEach((b) => b.addEventListener('click', () => api.patch(`/users/${b.dataset.reactivate}/reactivate`).then(loadUsers)));
+
 }
 
 document.getElementById('addUserBtn').addEventListener('click', () => {

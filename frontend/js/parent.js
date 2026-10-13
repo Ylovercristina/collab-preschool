@@ -7,6 +7,7 @@ let parentCalendar = null;
 
 function onPanelShown(panel) {
   if (panel === 'overview') return loadOverview(true);
+  if (panel === 'enrollment') return loadParentEnrollment();
   if (panel === 'progress') return renderProgress();
   if (panel === 'attendance') return renderAttendance();
   if (panel === 'fees') {
@@ -201,18 +202,30 @@ async function renderFees() {
 }
 
 // ---------- Messages ----------
+function escapeParentMessage(value = '') {
+  return String(value).replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[character]);
+}
+
 async function openTeacherThread() {
   if (!activeTeacherId) {
     document.getElementById('chatThread').innerHTML = '<div class="empty-state"><p>No teacher is assigned to your child yet.</p></div>';
+    document.getElementById('chatInput').disabled = true;
+    document.getElementById('sendChatBtn').disabled = true;
     return;
   }
+  document.getElementById('chatInput').disabled = false;
+  document.getElementById('sendChatBtn').disabled = false;
+  document.getElementById('parentMessageFormMessage').textContent = '';
   const child = myChildren.find((c) => c._id === activeChildId);
   document.getElementById('threadWithName').textContent = child && child.teacher ? child.teacher.name : 'Teacher';
   const { messages } = await api.get(`/messages/thread/${activeTeacherId}`);
   const thread = document.getElementById('chatThread');
   thread.innerHTML = messages.map((m) => {
-    const senderId = m.sender._id || m.sender;
-    return `<div class="chat-bubble ${senderId === activeTeacherId ? 'theirs' : 'mine'}">${m.content}</div>`;
+    const senderId = String(m.sender._id || m.sender);
+    const content = escapeParentMessage(m.content).replace(/\r?\n/g, '<br>');
+    return `<div class="chat-bubble ${senderId === String(activeTeacherId) ? 'theirs' : 'mine'}">${content}</div>`;
   }).join('');
   thread.scrollTop = thread.scrollHeight;
 }
@@ -220,9 +233,18 @@ async function openTeacherThread() {
 document.getElementById('sendChatBtn').addEventListener('click', async () => {
   const input = document.getElementById('chatInput');
   if (!activeTeacherId || !input.value.trim()) return;
-  await api.post('/messages', { receiver: activeTeacherId, student: activeChildId, content: input.value.trim() });
-  input.value = '';
-  openTeacherThread();
+  const button = document.getElementById('sendChatBtn');
+  button.disabled = true;
+  document.getElementById('parentMessageFormMessage').textContent = '';
+  try {
+    await api.post('/messages', { receiver: activeTeacherId, student: activeChildId, content: input.value.trim() });
+    input.value = '';
+    await openTeacherThread();
+  } catch (err) {
+    showMsg(document.getElementById('parentMessageFormMessage'), err.message);
+  } finally {
+    button.disabled = !activeTeacherId || !activeChildId;
+  }
 });
 
 // ---------- Events Calendar ----------

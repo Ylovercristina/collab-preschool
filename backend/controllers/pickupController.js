@@ -2,13 +2,19 @@ const PickupAuthorization = require('../models/PickupAuthorization');
 const Student = require('../models/Student');
 const logActivity = require('../utils/logActivity');
 
+async function canManageStudent(req, studentId) {
+  if (req.user.role === 'admin') return true;
+  if (!['teacher', 'parent'].includes(req.user.role)) return false;
+  const relationship = req.user.role === 'teacher' ? { teacher: req.user._id } : { parent: req.user._id };
+  return Boolean(await Student.exists({ _id: studentId, ...relationship }));
+}
+
 // POST /api/pickup   (admin, teacher, or parent registers an authorized pickup person)
 exports.addAuthorization = async (req, res) => {
   try {
     const { student, authorizedName, relationship, contact, identification } = req.body;
-    if (req.user.role === 'parent') {
-      const owns = await Student.findOne({ _id: student, parent: req.user._id });
-      if (!owns) return res.status(403).json({ message: 'You can only manage pickup info for your own child.' });
+    if (!(await canManageStudent(req, student))) {
+      return res.status(403).json({ message: 'You can only manage pickup info for students assigned to you.' });
     }
     const record = await PickupAuthorization.create({
       student,
@@ -27,9 +33,8 @@ exports.addAuthorization = async (req, res) => {
 
 // GET /api/pickup/student/:studentId
 exports.getStudentAuthorizations = async (req, res) => {
-  if (req.user.role === 'parent') {
-    const owns = await Student.findOne({ _id: req.params.studentId, parent: req.user._id });
-    if (!owns) return res.status(403).json({ message: 'Not authorized to view this record.' });
+  if (!(await canManageStudent(req, req.params.studentId))) {
+    return res.status(403).json({ message: 'Not authorized to view this record.' });
   }
   const list = await PickupAuthorization.find({ student: req.params.studentId });
   res.json({ authorizations: list });
@@ -42,9 +47,8 @@ exports.updateAuthorization = async (req, res) => {
     const record = await PickupAuthorization.findById(req.params.id);
     if (!record) return res.status(404).json({ message: 'Authorization not found.' });
 
-    if (req.user.role === 'parent') {
-      const owns = await Student.findOne({ _id: record.student, parent: req.user._id });
-      if (!owns) return res.status(403).json({ message: 'You can only manage pickup info for your own child.' });
+    if (!(await canManageStudent(req, record.student))) {
+      return res.status(403).json({ message: 'You can only manage pickup info for students assigned to you.' });
     }
 
     if (authorizedName !== undefined) record.authorizedName = authorizedName;
@@ -62,12 +66,13 @@ exports.updateAuthorization = async (req, res) => {
 
 // POST /api/pickup/:id/verify   (teacher or admin verifies a pickup at the gate)
 exports.verifyAuthorization = async (req, res) => {
-  const record = await PickupAuthorization.findByIdAndUpdate(
-    req.params.id,
-    { $push: { verified: { verifiedBy: req.user._id } } },
-    { new: true }
-  );
+  const record = await PickupAuthorization.findById(req.params.id);
   if (!record) return res.status(404).json({ message: 'Authorization not found.' });
+  if (!(await canManageStudent(req, record.student))) {
+    return res.status(403).json({ message: 'You can only verify pickups for students assigned to you.' });
+  }
+  record.verified.push({ verifiedBy: req.user._id });
+  await record.save();
   await logActivity(req.user._id, 'pickup-verified', record.authorizedName);
   res.json({ authorization: record });
 };
@@ -78,9 +83,8 @@ exports.deleteAuthorization = async (req, res) => {
     const record = await PickupAuthorization.findById(req.params.id);
     if (!record) return res.status(404).json({ message: 'Authorization not found.' });
 
-    if (req.user.role === 'parent') {
-      const owns = await Student.findOne({ _id: record.student, parent: req.user._id });
-      if (!owns) return res.status(403).json({ message: 'You can only manage pickup info for your own child.' });
+    if (!(await canManageStudent(req, record.student))) {
+      return res.status(403).json({ message: 'You can only manage pickup info for students assigned to you.' });
     }
 
     await record.deleteOne();

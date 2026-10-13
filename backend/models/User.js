@@ -1,6 +1,17 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
+const documentSchema = new mongoose.Schema(
+  {
+    originalName: { type: String, required: true, trim: true },
+    filename: { type: String, required: true },
+    mimetype: { type: String, required: true },
+    size: { type: Number, required: true },
+    uploadedAt: { type: Date, default: Date.now },
+  },
+  { _id: true }
+);
+
 const userSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true },
@@ -21,6 +32,11 @@ const userSchema = new mongoose.Schema(
     emailVerified: { type: Boolean, default: false },
     role: { type: String, enum: ['admin', 'teacher', 'parent'], required: true },
     phone: { type: String, trim: true },
+    employeeId: { type: String, unique: true, sparse: true },
+    assignedClass: { type: String, trim: true, default: '' },
+    employmentStartDate: { type: Date },
+    employmentType: { type: String, trim: true, default: '' },
+    documents: { type: [documentSchema], default: [], select: false },
 
     // Admins are auto-approved. Teachers are created by an admin (auto-approved).
     // Parents self-signup and need admin approval before they can log in.
