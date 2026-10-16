@@ -314,6 +314,21 @@ function renderFilteredUsers() {
     });
   });
 
+
+  tbody.querySelectorAll('[data-approve]').forEach((button) => button.addEventListener('click', async () => {
+    button.disabled = true;
+    try {
+      const result = await api.patch(`/users/${button.dataset.approve}/approve`);
+      alert(result.message);
+      await loadUsers();
+    } catch (err) {
+      alert(err.message);
+      button.disabled = false;
+    }
+  }));
+  tbody.querySelectorAll('[data-archive]').forEach((b) => b.addEventListener('click', () => api.patch(`/users/${b.dataset.archive}/archive`).then(loadUsers)));
+  tbody.querySelectorAll('[data-reactivate]').forEach((b) => b.addEventListener('click', () => api.patch(`/users/${b.dataset.reactivate}/reactivate`).then(loadUsers)));
+
 }
 
 document.getElementById('addUserBtn').addEventListener('click', () => {

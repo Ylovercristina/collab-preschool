@@ -1,6 +1,7 @@
 const User = require('../models/User');
 const mongoose = require('mongoose');
 const logActivity = require('../utils/logActivity');
+const { sendAccountApprovalEmail } = require('./authController');
 const fs = require('fs');
 const path = require('path');
 
@@ -320,13 +321,91 @@ exports.archiveUser = async (req, res) => {
   res.json({ user: publicUser(user) });
 };
 
-// PATCH /api/users/:id/approve   (approve a pending parent account)
+// PATCH /api/users/:id/approve
 exports.approveUser = async (req, res) => {
-  const user = await User.findByIdAndUpdate(req.params.id, { status: 'approved' }, { new: true });
-  if (!user) return res.status(404).json({ message: 'User not found.' });
-  await logActivity(req.user._id, 'user-approved', user.email);
-  res.json({ user: publicUser(user) });
+  let emailSent = false;
+  let emailFailureMessage = 'Account approved, but the notification email could not be sent.';
+  try {
+    const user = await User.findOneAndUpdate(
+      { _id: req.params.id, status: 'pending' },
+      { $set: { status: 'approved' } },
+      { new: true, runValidators: true }
+    );
+
+    if (!user) {
+      const existingUser = await User.findById(req.params.id);
+      if (!existingUser || existingUser.status === 'archived') {
+        console.info('[users] Approval request did not find an approvable account', {
+          userId: req.params.id,
+        });
+        return res.status(404).json({ message: 'User not found.' });
+      }
+
+      console.info('[users] Approval request skipped for a non-pending account', {
+        userId: String(existingUser._id),
+        role: existingUser.role,
+        status: existingUser.status,
+        googleLinked: Boolean(existingUser.googleId),
+      });
+      return res.status(409).json({
+        message: 'This account has already been processed. No notification email was sent.',
+        emailSent: false,
+        user: publicUser(existingUser),
+      });
+    }
+
+    console.info('[users] Account approval completed', {
+      userId: String(user._id),
+      role: user.role,
+      status: user.status,
+      googleLinked: Boolean(user.googleId),
+      emailNotification: 'attempting',
+    });
+
+    await logActivity(req.user._id, 'user-approved', user.email);
+
+    const email = typeof user.email === 'string' ? user.email.trim() : '';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      emailFailureMessage = 'Account approved, but no valid email address is available for the notification.';
+      console.error('[users] Account approval email skipped because the account email is invalid', {
+        userId: String(user._id),
+        role: user.role,
+      });
+    } else {
+      try {
+        await sendAccountApprovalEmail({ ...user.toObject(), email });
+        emailSent = true;
+        console.info('[users] Account approval email sent', {
+          userId: String(user._id),
+          role: user.role,
+          googleLinked: Boolean(user.googleId),
+        });
+      } catch (emailError) {
+        console.error('[users] Account approval email failed', {
+          userId: String(user._id),
+          role: user.role,
+          googleLinked: Boolean(user.googleId),
+          code: emailError.code || 'UNKNOWN',
+        });
+      }
+    }
+
+    return res.json({
+      message: emailSent
+        ? 'Account approved and notification email sent.'
+        : emailFailureMessage,
+      emailSent,
+      user: publicUser(user),
+    });
+  } catch (err) {
+    console.error('[users] Could not approve account:', err.message);
+    return res.status(500).json({
+      message: 'Could not approve account. Please try again.',
+      emailSent,
+    });
+  }
 };
+
 
 // PATCH /api/users/:id/reactivate
 exports.reactivateUser = async (req, res) => {
