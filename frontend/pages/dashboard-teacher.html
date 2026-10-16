@@ -184,7 +184,12 @@
         </div>
         <button class="btn btn-primary btn-sm" id="addEventBtn"><i class="fa-solid fa-bullhorn"></i> Send Notice / Event</button>
       </div>
+      <div id="eventEmailSummary" class="form-msg" aria-live="polite"></div>
       <div id="teacherEventsCalendarContainer"></div>
+      <section class="event-status-list" aria-labelledby="teacherEventListHeading">
+        <h2 id="teacherEventListHeading" style="font-size:18px;">Recent Events</h2>
+        <div id="teacherEventStatusList"></div>
+      </section>
     </section>
 
     <section class="panel" id="panel-pickup">
@@ -193,17 +198,28 @@
           <h1 style="margin:0;">Pickup Verification &amp; Security</h1>
           <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Verify authorized pickup persons at departure time.</p>
         </div>
-        <div style="display:flex; align-items:center; gap:8px;">
-          <label style="font-weight:600; font-size:13.5px;">Student:</label>
-          <select id="pickupStudentSelect" style="padding:7px 12px; border-radius:6px; border:1px solid #CBD5E1;"></select>
+      </div>
+      <div class="card" style="margin-bottom:18px;">
+        <div class="grid-2" style="align-items:end;">
+          <div class="field"><label for="pickupStudentSearch">Find pupil</label><input id="pickupStudentSearch" type="search" placeholder="Search by pupil name" autocomplete="off" /></div>
+          <div class="field"><label for="pickupStudentSelect">Select pupil <span class="required-mark" aria-hidden="true">*</span></label><select id="pickupStudentSelect"></select></div>
         </div>
+        <div id="pickupStudentSummary"></div>
       </div>
-
-      <div style="display:flex; justify-content:flex-end; margin-bottom:12px;">
-        <button class="btn btn-primary btn-sm" id="teacherAddPickupBtn"><i class="fa-solid fa-user-plus"></i> Add Authorized Person</button>
-      </div>
-
-      <div id="pickupList"></div>
+      <section class="card" aria-labelledby="pickupListHeading">
+        <div class="toolbar"><h2 id="pickupListHeading" style="font-size:18px;margin:0;">Who is arriving?</h2><button class="btn btn-secondary btn-sm" id="teacherAddPickupBtn" type="button"><i class="fa-solid fa-user-plus"></i> Add Person</button></div>
+        <p class="field-hint">Select one authorized person or choose Not on the list.</p>
+        <div id="pickupList" aria-live="polite"></div>
+        <div class="pickup-decision-row">
+          <button type="button" id="pickupAuthorizeBtn" class="btn pickup-authorized"><i class="fa-solid fa-circle-check" aria-hidden="true"></i> Authorized, release pupil</button>
+          <button type="button" id="pickupDenyBtn" class="btn pickup-denied"><i class="fa-solid fa-hand" aria-hidden="true"></i> Not authorized or uncertain, do not release</button>
+        </div>
+        <div id="pickupResult" class="form-msg" role="status" aria-live="polite"></div>
+      </section>
+      <section class="event-status-list" aria-labelledby="pickupHistoryHeading">
+        <h2 id="pickupHistoryHeading" style="font-size:18px;">Recent Authorized Pickups</h2>
+        <div id="pickupHistory" class="pickup-history-wrap"></div>
+      </section>
     </section>
 
     <section class="panel" id="panel-alerts">
@@ -211,14 +227,34 @@
         <h1 style="margin:0;">Emergency Alerts</h1>
         <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Broadcast urgent notices to all registered parents.</p>
       </div>
-      <div class="card">
-        <form id="alertForm">
-          <div class="field"><label>Alert Title</label><input id="aTitle" placeholder="e.g. Weather Advisory / Early Dismissal" required /></div>
-          <div class="field"><label>Message Content</label><textarea id="aMessage" rows="3" placeholder="Provide clear, urgent instructions for parents…" required></textarea></div>
-          <button class="btn btn-danger" type="submit"><i class="fa-solid fa-triangle-exclamation"></i> Send Alert to All Parents</button>
+      <div class="card alert-form-card">
+        <form id="alertForm" novalidate>
+          <section class="alert-section">
+            <h3>Emergency Type and Severity</h3>
+            <div class="grid-2">
+              <div class="field" data-teacher-alert-field="type"><label for="aType">Emergency type <span class="required-mark" aria-hidden="true">*</span></label><select id="aType"><option value="">Select type</option><option>Medical</option><option>Weather</option><option>Security</option><option>Early dismissal</option><option>Other</option></select><small class="field-error" data-teacher-alert-error="type"></small></div>
+              <fieldset class="field" style="border:0;padding:0;margin:0;"><legend style="font-weight:600;font-size:13.5px;margin-bottom:6px;">Severity</legend><div class="severity-options"><label class="severity-choice severity-moderate"><input type="radio" name="teacherAlertSeverity" value="moderate" /><span>Moderate</span></label><label class="severity-choice severity-high"><input type="radio" name="teacherAlertSeverity" value="high" checked /><span>High</span></label><label class="severity-choice severity-critical"><input type="radio" name="teacherAlertSeverity" value="critical" /><span>Critical</span></label></div></fieldset>
+            </div>
+            <div class="field" data-teacher-alert-field="title"><label for="aTitle">Alert title <span class="required-mark" aria-hidden="true">*</span></label><input id="aTitle" maxlength="120" placeholder="e.g. Weather advisory" /><small class="field-error" data-teacher-alert-error="title"></small></div>
+          </section>
+          <section class="alert-section">
+            <h3>Description</h3>
+            <div class="field" data-teacher-alert-field="description"><label for="aMessage">What happened? <span class="required-mark" aria-hidden="true">*</span></label><textarea id="aMessage" rows="3" maxlength="2000" placeholder="Describe the situation clearly"></textarea><small class="field-error" data-teacher-alert-error="description"></small></div>
+          </section>
+          <section class="alert-section">
+            <h3>Affected Pupils and Classes</h3>
+            <div id="teacherEmergencyAudience"></div>
+          </section>
+          <section class="alert-section">
+            <h3>Safety Instructions</h3>
+            <div class="field" data-teacher-alert-field="instructions"><label for="aInstructions">What should families do? <span class="required-mark" aria-hidden="true">*</span></label><textarea id="aInstructions" rows="3" maxlength="2000" placeholder="Tell families what to do now"></textarea><small class="field-error" data-teacher-alert-error="instructions"></small></div>
+          </section>
+          <div id="alertFormMessage" class="form-msg" aria-live="polite"></div>
+          <button class="btn btn-danger" type="submit"><i class="fa-solid fa-triangle-exclamation"></i> Review Emergency Alert</button>
         </form>
       </div>
-      <h3 style="margin-top:28px; margin-bottom:14px;">Recent Alerts</h3>
+      <div id="teacherAlertEmailSummary" class="form-msg" aria-live="polite"></div>
+      <div class="event-status-list"><div class="toolbar"><h2 style="font-size:18px;margin:0;">Emergency Alerts</h2></div><div class="record-category-tabs" role="tablist" aria-label="Emergency alert status"><button type="button" class="record-category-tab active" data-teacher-alert-view="active" role="tab" aria-selected="true">Active</button><button type="button" class="record-category-tab" data-teacher-alert-view="archived" role="tab" aria-selected="false">Archived</button></div></div>
       <div id="alertsList"></div>
     </section>
 

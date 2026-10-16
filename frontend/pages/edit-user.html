@@ -34,6 +34,13 @@
     <section class="card edit-user-card" id="editUserCard" hidden>
       <div id="editUserMessage" class="form-msg" aria-live="polite"></div>
       <form id="editUserForm" enctype="multipart/form-data" hidden>
+        <div id="editEmailVerification" class="field" hidden>
+          <label>Email verification</label>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <span id="editEmailVerificationBadge" class="badge pending">Not verified</span>
+            <button type="button" class="btn btn-secondary btn-sm" id="verifyEditEmailBtn"><i class="fa-solid fa-envelope-circle-check"></i> Verify email</button>
+          </div>
+        </div>
         <div class="edit-user-photo">
           <div class="profile-avatar edit-user-avatar">
             <img id="editUserAvatar" alt="" hidden />

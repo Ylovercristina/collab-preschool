@@ -3,6 +3,8 @@ const user = requireRole('teacher');
 let myStudents = [];
 let activeThreadUserId = null;
 let teacherCalendar = null;
+let teacherAudiencePicker = null;
+let teacherAlertView = 'active';
 
 function escapeTeacherHtml(value = '') {
   return String(value).replace(/[&<>"']/g, (character) => ({
@@ -18,6 +20,23 @@ function localDateValue(date = new Date()) {
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   return `${date.getFullYear()}-${month}-${day}`;
+}
+
+function formatEmailSummary(summary) {
+  const counts = `Sent ${summary.sent}, skipped ${summary.skipped} (${summary.unverified || 0} unverified email), failed ${summary.failed}`;
+  return summary.complete ? counts : `${counts} (delivery logging in progress)`;
+}
+
+async function pollEmailSummary(path, initial, target) {
+  let summary = initial;
+  target.textContent = formatEmailSummary(summary);
+  for (let attempt = 0; !summary.complete && attempt < 20; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const response = await api.get(path);
+    summary = response.emailSummary;
+    target.textContent = formatEmailSummary(summary);
+  }
+  return summary;
 }
 
 function onPanelShown(panel) {
@@ -430,50 +449,67 @@ async function loadEvents() {
         await api.patch(`/events/${eventId}`, updates);
         await loadEvents();
       },
+      canEditEvent: (event) => {
+        const ownerId = event.createdBy?._id || event.createdBy;
+        return String(ownerId) === String(user.id)
+          && ['draft', 'pending', 'rejected'].includes(event.publicationStatus);
+      },
+      canDeleteEvent: (event) => {
+        const ownerId = event.createdBy?._id || event.createdBy;
+        return String(ownerId) === String(user.id)
+          && event.publicationStatus === 'pending'
+          && event.reviewStatus === 'pending';
+      },
     });
   } else {
     teacherCalendar.setEvents(events);
   }
+  renderEventStatusList(events, document.getElementById('teacherEventStatusList'));
 }
 
-document.getElementById('addEventBtn').addEventListener('click', () => {
-  Modal.open(`
-    <h3>Publish Notice / Event</h3>
-    <div id="modalMsg" class="form-msg"></div>
-    <form id="eventForm">
-      <div class="field"><label>Title</label><input id="eTitle" placeholder="e.g. Field Trip Permission Reminder" required /></div>
-      <div class="field"><label>Date</label><input type="date" id="eDate" required /></div>
-      <div class="field"><label>Message / Description</label><textarea id="eDesc" rows="3" placeholder="Enter notice details for parents…"></textarea></div>
-      <button class="btn btn-primary btn-block" type="submit" style="margin-top:14px;">Publish Notice</button>
-    </form>
-  `);
-  document.getElementById('eventForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const msg = document.getElementById('modalMsg');
-    try {
-      await api.post('/events', {
-        title: document.getElementById('eTitle').value.trim(),
-        date: document.getElementById('eDate').value,
-        audience: 'parents',
-        description: document.getElementById('eDesc').value.trim(),
-      });
-      Modal.close();
-      await loadEvents();
-    } catch (err) {
-      showMsg(msg, err.message);
-    }
-  });
+document.getElementById('addEventBtn').addEventListener('click', async () => {
+  try {
+    await loadMyStudents();
+    const classes = [...new Set(myStudents.map((student) => student.className).filter(Boolean))].sort();
+    openEventComposer({
+      classes,
+      approvalRequired: true,
+      onSave: (event) => api.post('/events', event),
+      onComplete: async ({ event, emailSummary }) => {
+        await loadEvents();
+        const summaryTarget = document.getElementById('eventEmailSummary');
+        summaryTarget.className = 'form-msg success';
+        summaryTarget.textContent = event.publicationStatus === 'draft'
+          ? 'Draft saved.'
+          : (event.publicationStatus === 'pending'
+            ? 'Submitted for admin approval. Parents will be notified after approval.'
+            : (event.emailRecipientCount === 0 ? 'Event saved, but no parent recipients were found.' : formatEmailSummary(emailSummary)));
+        if (event.publicationStatus === 'published' && !emailSummary.complete && event.emailRecipientCount) {
+          await pollEmailSummary(`/events/${event._id}/email-summary`, emailSummary, summaryTarget);
+        }
+      },
+    });
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
 });
 
 // ---------- Pickup Verification Panel ----------
 async function loadPickupPanel() {
   await loadMyStudents();
   const sel = document.getElementById('pickupStudentSelect');
-  sel.innerHTML = myStudents.map((s) => `<option value="${escapeTeacherHtml(s._id)}">${escapeTeacherHtml(s.name)}</option>`).join('');
+  sel.innerHTML = myStudents.map((s) => `<option value="${escapeTeacherHtml(s._id)}">${escapeTeacherHtml(s.name)}${s.className ? ` (${escapeTeacherHtml(s.className)})` : ''}</option>`).join('');
   sel.disabled = !myStudents.length;
   sel.onchange = renderPickupList;
+  document.getElementById('pickupStudentSearch').oninput = (event) => {
+    const query = event.target.value.trim().toLowerCase();
+    Array.from(sel.options).forEach((option) => { option.hidden = query && !option.textContent.toLowerCase().includes(query); });
+  };
   if (myStudents.length) renderPickupList();
-  else document.getElementById('pickupList').innerHTML = '<div class="empty-state"><i class="fa-solid fa-user-graduate"></i><p>No students are assigned to you.</p></div>';
+  else {
+    document.getElementById('pickupList').innerHTML = '<div class="empty-state"><i class="fa-solid fa-user-graduate"></i><p>No students are assigned to you.</p></div>';
+    document.getElementById('pickupHistory').innerHTML = '<div class="notification-empty">No verification records yet.</div>';
+  }
 }
 
 async function renderPickupList() {
@@ -481,29 +517,17 @@ async function renderPickupList() {
   if (!sid) return;
   const { authorizations } = await api.get(`/pickup/student/${sid}`);
   const listEl = document.getElementById('pickupList');
+  const student = myStudents.find((item) => item._id === sid);
+  const initials = (student?.name || '').split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || '?';
+  document.getElementById('pickupStudentSummary').innerHTML = student ? `<div class="pickup-student-card"><div class="pickup-student-initials" aria-hidden="true">${escapeTeacherHtml(initials)}</div><div><strong>${escapeTeacherHtml(student.name)}</strong><div class="info-meta">${escapeTeacherHtml(student.className || 'Class not assigned')}</div></div></div>` : '';
 
   listEl.innerHTML = authorizations.length ? authorizations.map((a) => `
     <div class="pickup-person-card">
-      <div>
-        <div class="info-title">
-          ${a.authorizedName}
-          ${a.verified.length ? `<span class="badge approved" style="margin-left:8px;"><i class="fa-solid fa-check-double"></i> Verified ${a.verified.length}×</span>` : '<span class="badge pending" style="margin-left:8px;">Pending verification</span>'}
-        </div>
-        <div class="info-meta">
-          <strong>Relationship:</strong> ${a.relationship} &nbsp;|&nbsp;
-          <strong>Contact:</strong> ${a.contact}
-        </div>
-        ${a.identification ? `
-          <div class="info-meta" style="margin-top:4px;">
-            <strong>ID / Details:</strong> ${a.identification}
-          </div>
-        ` : ''}
-      </div>
-
+      <label class="pickup-select-card" for="pickupPerson-${escapeTeacherHtml(a._id)}">
+        <input id="pickupPerson-${escapeTeacherHtml(a._id)}" type="radio" name="pickupPerson" value="${escapeTeacherHtml(a._id)}" />
+        <span><strong>${escapeTeacherHtml(a.authorizedName)}</strong><span class="info-meta" style="display:block;">${escapeTeacherHtml(a.relationship)} · ${escapeTeacherHtml(a.contact)}</span>${a.identification ? `<span class="info-meta" style="display:block;">${escapeTeacherHtml(a.identification)}</span>` : ''}<span class="badge ${a.verified.length ? 'approved' : 'pending'}" style="margin-top:6px;">${a.verified.length ? `${a.verified.length} prior verification${a.verified.length === 1 ? '' : 's'}` : 'No previous verification'}</span></span>
+      </label>
       <div class="pickup-actions">
-        <button class="btn btn-primary btn-sm" data-verify="${a._id}">
-          <i class="fa-solid fa-user-check"></i> Verify Pickup Now
-        </button>
         <button class="btn btn-ghost btn-sm" data-edit-p="${a._id}" title="Edit Information">
           <i class="fa-solid fa-pen"></i>
         </button>
@@ -512,13 +536,28 @@ async function renderPickupList() {
         </button>
       </div>
     </div>
-  `).join('') : '<div class="empty-state"><i class="fa-solid fa-shield-halved"></i><p>No authorized pickup people registered for this student yet.</p></div>';
+  `).join('') + `
+    <label class="pickup-select-card" for="pickupNotListed"><input id="pickupNotListed" type="radio" name="pickupPerson" value="not-listed" /><span><strong>Not on the list</strong><span class="info-meta" style="display:block;">Do not release the pupil. Contact the parent or an administrator.</span></span></label>
+  ` : `
+    <div class="empty-state"><i class="fa-solid fa-shield-halved"></i><p>No authorized pickup people are listed for this pupil.</p></div>
+    <label class="pickup-select-card" for="pickupNotListed"><input id="pickupNotListed" type="radio" name="pickupPerson" value="not-listed" /><span><strong>Not on the list</strong><span class="info-meta" style="display:block;">Do not release the pupil. Contact the parent or an administrator.</span></span></label>
+  `;
 
-  // Bind Verify button
-  listEl.querySelectorAll('[data-verify]').forEach((b) => b.addEventListener('click', async () => {
-    await api.post(`/pickup/${b.dataset.verify}/verify`, {});
-    renderPickupList();
-  }));
+  const history = authorizations.flatMap((authorization) => (authorization.verified || []).map((entry) => ({
+    date: entry.date,
+    person: authorization.authorizedName,
+    teacher: String(entry.verifiedBy || '') === String(user.id) ? user.name : 'Staff',
+  }))).sort((left, right) => new Date(right.date) - new Date(left.date)).slice(0, 20);
+  document.getElementById('pickupHistory').innerHTML = history.length ? `
+    <table class="pickup-history"><thead><tr><th>Date</th><th>Pupil</th><th>Person</th><th>Result</th><th>Teacher</th></tr></thead><tbody>
+      ${history.map((entry) => `<tr><td>${new Date(entry.date).toLocaleString()}</td><td>${escapeTeacherHtml(student?.name || '—')}</td><td>${escapeTeacherHtml(entry.person)}</td><td><span class="badge approved">Authorized</span></td><td>${escapeTeacherHtml(entry.teacher)}</td></tr>`).join('')}
+    </tbody></table>
+  ` : '<div class="notification-empty">No authorized pickup verifications recorded for this pupil yet.</div>';
+
+  document.getElementById('pickupResult').className = 'form-msg';
+  document.getElementById('pickupResult').textContent = '';
+  document.getElementById('pickupAuthorizeBtn').onclick = () => reviewPickupDecision('authorized', authorizations, sid);
+  document.getElementById('pickupDenyBtn').onclick = () => reviewPickupDecision('denied', authorizations, sid);
 
   // Bind Edit button
   listEl.querySelectorAll('[data-edit-p]').forEach((b) => b.addEventListener('click', () => {
@@ -538,6 +577,45 @@ async function renderPickupList() {
   }));
 }
 
+function reviewPickupDecision(result, authorizations, studentId) {
+  const selectedId = document.querySelector('input[name="pickupPerson"]:checked')?.value;
+  const selected = authorizations.find((item) => item._id === selectedId);
+  const isListed = Boolean(selected);
+  const message = result === 'authorized'
+    ? (isListed ? `Confirm that ${selected.authorizedName} is authorized to collect ${myStudents.find((student) => student._id === studentId)?.name || 'this pupil'}.` : 'Choose a listed authorized person before releasing the pupil.')
+    : (selectedId === 'not-listed' || !isListed
+      ? 'Do not release this pupil. Contact the parent or an administrator. This outcome cannot be recorded by the current pickup API.'
+      : `Do not release the pupil if you are uncertain about ${selected.authorizedName}. The current pickup API only records authorized verifications.`);
+  if (result === 'authorized' && !isListed) {
+    showMsg(document.getElementById('pickupResult'), message);
+    return;
+  }
+  const heading = result === 'authorized' ? 'Confirm Authorized Pickup' : 'Confirm Do Not Release';
+  const actionLabel = result === 'authorized' ? 'Confirm and record' : 'Confirm decision';
+  Modal.open(`<h3>${heading}</h3><p>${escapeTeacherHtml(message)}</p><div class="event-form-actions"><button type="button" class="btn btn-ghost" id="cancelPickupDecision">Cancel</button><button type="button" class="btn ${result === 'authorized' ? 'pickup-authorized' : 'pickup-denied'}" id="confirmPickupDecision">${actionLabel}</button></div>`);
+  document.getElementById('cancelPickupDecision').addEventListener('click', () => Modal.close());
+  document.getElementById('confirmPickupDecision').addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    if (result === 'denied') {
+      Modal.close();
+      showMsg(document.getElementById('pickupResult'), `${message} No denial record was saved.`, 'error');
+      return;
+    }
+    setButtonLoading(button, true, 'Recording');
+    try {
+      await api.post(`/pickup/${selected._id}/verify`, {});
+      Modal.close();
+      const verifiedAt = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      await renderPickupList();
+      showMsg(document.getElementById('pickupResult'), `Pickup verified at ${verifiedAt}. Authorized, release pupil.`, 'success');
+      showToast(`Pickup verified for ${selected.authorizedName}.`);
+    } catch (err) {
+      showMsg(document.getElementById('pickupResult'), err.message);
+      setButtonLoading(button, false);
+    }
+  });
+}
+
 document.getElementById('teacherAddPickupBtn')?.addEventListener('click', () => {
   const sid = document.getElementById('pickupStudentSelect').value;
   if (!sid) return alert('Please select a student first.');
@@ -546,29 +624,187 @@ document.getElementById('teacherAddPickupBtn')?.addEventListener('click', () => 
 
 // ---------- Emergency Alerts ----------
 async function loadAlerts() {
-  const { alerts } = await api.get('/alerts');
+  await loadMyStudents();
+  const activeStudents = myStudents.filter((student) => student.status === 'active');
+  if (!teacherAudiencePicker) {
+    teacherAudiencePicker = createEmergencyAudiencePicker({
+      containerId: 'teacherEmergencyAudience',
+      students: activeStudents,
+      wholeDescription: 'All active pupils in your assigned roster',
+    });
+  }
+  await renderTeacherAlerts();
+}
+
+async function renderTeacherAlerts() {
+  const { alerts } = await api.get(`/alerts?view=${teacherAlertView}`);
   document.getElementById('alertsList').innerHTML = alerts.length ? alerts.map((a) => `
     <div class="alert-banner">
       <i class="fa-solid fa-triangle-exclamation"></i>
       <div>
-        <strong style="font-size:15px;">${a.title}</strong>
-        <p style="margin:4px 0 6px; color:#7F1D1D;">${a.message}</p>
+        <strong style="font-size:15px;">${escapeTeacherHtml(a.title)}</strong>
+        <p style="margin:4px 0 6px; color:#7F1D1D;">${escapeTeacherHtml(a.description || a.message)}</p>
         <div class="field-hint" style="color:#991B1B;">
-          ${new Date(a.createdAt).toLocaleString()} &bull; Sent by ${a.createdBy ? a.createdBy.name : 'Staff'}
+          ${new Date(a.createdAt).toLocaleString()} · ${escapeTeacherHtml(a.severity || 'high')} · ${a.acknowledgements?.length || 0} acknowledged · Issued by ${escapeTeacherHtml(a.createdBy ? a.createdBy.name : 'Staff')}
+        </div>
+        ${a.safetyInstructions ? `<p>${escapeTeacherHtml(a.safetyInstructions)}</p>` : ''}
+        <div class="event-form-actions">
+          ${teacherAlertView === 'archived' && a.status === 'archived' ? `<button type="button" class="btn btn-secondary btn-sm" data-alert-restore="${escapeTeacherHtml(a._id)}">Restore</button>` : ''}
+          ${a.status !== 'deleted' ? `${teacherAlertView === 'active' ? `<button type="button" class="btn btn-ghost btn-sm" data-alert-archive="${escapeTeacherHtml(a._id)}">Archive</button>` : ''}<button type="button" class="btn btn-danger btn-sm" data-alert-delete="${escapeTeacherHtml(a._id)}">Delete</button>` : '<span class="badge status-badge-rejected">Soft deleted</span>'}
+          ${teacherAlertView === 'active' && a.status !== 'all-clear' && a.status !== 'deleted' ? `<button type="button" class="btn btn-secondary btn-sm" data-alert-update="${escapeTeacherHtml(a._id)}">Send update</button><button type="button" class="btn btn-ghost btn-sm" data-alert-clear="${escapeTeacherHtml(a._id)}">Send all-clear</button>` : ''}
         </div>
       </div>
     </div>
   `).join('') : '<div class="empty-state"><i class="fa-solid fa-shield-heart"></i><p>No emergency alerts issued.</p></div>';
+
+  bindTeacherAlertManagement();
+  document.querySelectorAll('[data-alert-update]').forEach((button) => button.addEventListener('click', async () => {
+    openTeacherAlertFollowup(button.dataset.alertUpdate, 'update');
+  }));
+  document.querySelectorAll('[data-alert-clear]').forEach((button) => button.addEventListener('click', async () => {
+    openTeacherAlertFollowup(button.dataset.alertClear, 'all-clear');
+  }));
+}
+
+document.querySelectorAll('[data-teacher-alert-view]').forEach((button) => button.addEventListener('click', async () => {
+  teacherAlertView = button.dataset.teacherAlertView;
+  document.querySelectorAll('[data-teacher-alert-view]').forEach((tab) => {
+    const active = tab.dataset.teacherAlertView === teacherAlertView;
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-selected', String(active));
+  });
+  try { await renderTeacherAlerts(); } catch (error) { showToast(error.message, 'error'); }
+}));
+
+function bindTeacherAlertManagement() {
+  document.querySelectorAll('[data-alert-archive]').forEach((button) => button.addEventListener('click', async () => {
+    if (!confirm('Archive this emergency alert? It will leave the active list and can be restored later. Email logs and acknowledgments will remain.')) return;
+    try {
+      await api.patch(`/alerts/${button.dataset.alertArchive}/archive`, {});
+      showToast('Emergency alert archived.', 'info');
+      await renderTeacherAlerts();
+    } catch (error) { showToast(error.message, 'error'); }
+  }));
+  document.querySelectorAll('[data-alert-restore]').forEach((button) => button.addEventListener('click', async () => {
+    try {
+      await api.patch(`/alerts/${button.dataset.alertRestore}/restore`, {});
+      showToast('Emergency alert restored.');
+      await renderTeacherAlerts();
+    } catch (error) { showToast(error.message, 'error'); }
+  }));
+  document.querySelectorAll('[data-alert-delete]').forEach((button) => button.addEventListener('click', async () => {
+    if (!confirm('Soft-delete this alert? It will remain in the Archived tab marked as deleted. The alert, acknowledgments, and email logs are retained.')) return;
+    try {
+      await api.del(`/alerts/${button.dataset.alertDelete}`);
+      showToast('Emergency alert soft-deleted.', 'info');
+      await renderTeacherAlerts();
+    } catch (error) { showToast(error.message, 'error'); }
+  }));
+}
+
+function openTeacherAlertFollowup(alertId, status) {
+  const allClear = status === 'all-clear';
+  Modal.open(`<h3>${allClear ? 'Send All-Clear' : 'Send Emergency Update'}</h3><div class="field"><label for="teacherAlertFollowup">Message <span class="required-mark" aria-hidden="true">*</span></label><textarea id="teacherAlertFollowup" rows="4" required></textarea><small id="teacherAlertFollowupError" class="field-error"></small></div><div class="event-form-actions"><button type="button" class="btn btn-ghost" id="cancelTeacherAlertFollowup">Cancel</button><button type="button" class="btn ${allClear ? 'btn-primary' : 'btn-danger'}" id="sendTeacherAlertFollowup">${allClear ? 'Send All-Clear' : 'Send Update'}</button></div>`);
+  document.getElementById('cancelTeacherAlertFollowup').addEventListener('click', () => Modal.close());
+  document.getElementById('sendTeacherAlertFollowup').addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    const message = document.getElementById('teacherAlertFollowup').value.trim();
+    if (!message) {
+      document.getElementById('teacherAlertFollowupError').textContent = 'Enter an update message.';
+      return;
+    }
+    setButtonLoading(button, true, 'Sending');
+    try {
+      await api.post(`/alerts/${alertId}/updates`, { message, status });
+      Modal.close();
+      showToast(allClear ? 'All-clear notice sent.' : 'Emergency update sent.');
+      await loadAlerts();
+    } catch (error) {
+      showMsg(document.getElementById('teacherAlertFollowupError'), error.message);
+      setButtonLoading(button, false);
+    }
+  });
 }
 
 document.getElementById('alertForm').addEventListener('submit', async (e) => {
   e.preventDefault();
-  await api.post('/alerts', {
+  if (!teacherAudiencePicker?.validate()) return;
+  const audience = teacherAudiencePicker.getSelection();
+  const targets = teacherAudiencePicker.getTargetStudents();
+  const formValues = {
+    emergencyType: document.getElementById('aType').value,
     title: document.getElementById('aTitle').value.trim(),
-    message: document.getElementById('aMessage').value.trim(),
+    severity: document.querySelector('input[name="teacherAlertSeverity"]:checked').value,
+    description: document.getElementById('aMessage').value.trim(),
+    safetyInstructions: document.getElementById('aInstructions').value.trim(),
+  };
+  const fieldErrors = {
+    type: formValues.emergencyType ? '' : 'Select an emergency type.',
+    title: formValues.title ? '' : 'Alert title is required.',
+    description: formValues.description ? '' : 'Description is required.',
+    instructions: formValues.safetyInstructions ? '' : 'Safety instructions are required.',
+  };
+  Object.entries(fieldErrors).forEach(([field, message]) => {
+    document.querySelector(`[data-teacher-alert-error="${field}"]`).textContent = message;
+    document.querySelector(`[data-teacher-alert-field="${field}"]`).classList.toggle('has-error', Boolean(message));
   });
-  document.getElementById('alertForm').reset();
-  loadAlerts();
+  if (Object.values(fieldErrors).some(Boolean)) {
+    document.querySelector('.has-error input, .has-error textarea, .has-error select')?.focus();
+    return;
+  }
+  const parents = new Map();
+  targets.forEach((student) => {
+    if (student.parent) parents.set(relatedUserId(student.parent), student.parent);
+  });
+  const contactRows = Array.from(parents.values()).map((parent) => `
+    <li>${escapeTeacherHtml(parent.name)} · ${escapeTeacherHtml(parent.email || 'No email')} · ${parent.emailVerified && parent.emailVerifiedBy ? 'Verified' : 'Not verified'}</li>
+  `).join('');
+  const emailEligible = [...parents.values()].filter((parent) => parent && typeof parent === 'object'
+    && parent.status === 'approved' && parent.email && parent.emailVerified && parent.emailVerifiedBy).length;
+  Modal.open(`
+    <h3>Review Emergency Alert</h3>
+    <p class="alert-banner"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i><span>This will immediately notify parents by email.</span></p>
+    <p><strong>${escapeTeacherHtml(formValues.title)}</strong> · ${escapeTeacherHtml(formValues.severity)}</p>
+    <p>${escapeTeacherHtml(formValues.description)}</p>
+    <p><strong>Safety instructions:</strong> ${escapeTeacherHtml(formValues.safetyInstructions)}</p>
+    <p><strong>Affected pupils:</strong> ${targets.map((student) => escapeTeacherHtml(student.name)).join(', ') || 'None found'}</p>
+    <p><strong>Classes:</strong> ${escapeTeacherHtml([...new Set(targets.map((student) => student.className).filter(Boolean))].join(', ') || 'Individual pupils')}</p>
+    <p><strong>Parent contacts:</strong> ${parents.size} linked; ${emailEligible} eligible email addresses</p>
+    <ul>${contactRows || '<li>No linked parent accounts; use another contact method.</li>'}</ul>
+    <div id="alertReviewMessage" class="form-msg" aria-live="polite"></div>
+    <div class="event-form-actions"><button type="button" class="btn btn-ghost" id="cancelAlertReview">Cancel</button><button type="button" class="btn btn-danger" id="confirmAlertSend"><i class="fa-solid fa-triangle-exclamation"></i> Confirm and send</button></div>
+  `);
+  document.getElementById('cancelAlertReview').addEventListener('click', () => Modal.close());
+  document.getElementById('confirmAlertSend').addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    setButtonLoading(button, true, 'Sending');
+    const reviewMessage = document.getElementById('alertReviewMessage');
+    try {
+      const response = await api.post('/alerts', {
+        title: formValues.title,
+        emergencyType: formValues.emergencyType,
+        severity: formValues.severity,
+        description: formValues.description,
+        safetyInstructions: formValues.safetyInstructions,
+        students: audience.students,
+        affectedClasses: audience.affectedClasses,
+      });
+      const summary = await pollEmailSummary(`/alerts/${response.alert._id}/email-summary`, response.emailSummary, reviewMessage);
+      showMsg(reviewMessage, formatEmailSummary(summary), 'success');
+      const emailSummary = document.getElementById('teacherAlertEmailSummary');
+      emailSummary.className = 'form-msg success';
+      emailSummary.textContent = `Emergency alert email summary: ${summary.sent} sent, ${summary.failed} failed, ${summary.skipped} skipped.`;
+      showToast(emailSummary.textContent, summary.failed ? 'error' : 'success');
+      document.getElementById('alertForm').reset();
+      document.querySelectorAll('[data-teacher-alert-error]').forEach((node) => { node.textContent = ''; });
+      document.querySelectorAll('[data-teacher-alert-field]').forEach((node) => node.classList.remove('has-error'));
+      teacherAudiencePicker = createEmergencyAudiencePicker({ containerId: 'teacherEmergencyAudience', students: myStudents.filter((student) => student.status === 'active'), wholeDescription: 'All active pupils in your assigned roster' });
+      await loadAlerts();
+    } catch (err) {
+      showMsg(reviewMessage, err.message);
+      setButtonLoading(button, false);
+    }
+  });
 });
 
 loadOverview();

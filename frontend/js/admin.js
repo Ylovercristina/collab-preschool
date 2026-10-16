@@ -11,6 +11,7 @@ function onPanelShown(panel) {
   if (panel === 'records') return window.loadManagedRecords();
   if (panel === 'fees') return loadFees();
   if (panel === 'events') return loadEvents();
+  if (panel === 'alerts') return loadAdminAlerts();
   if (panel === 'logs') return loadLogs();
 }
 
@@ -245,6 +246,7 @@ function renderFilteredUsers() {
             <i class="fa-regular fa-envelope" style="color:var(--ink-muted); font-size:12px;"></i>
             ${u.email}
           </a>
+          ${u.role === 'parent' ? `<div><span class="badge ${u.emailVerified ? 'approved' : 'pending'}" style="margin-top:5px;">${u.emailVerified ? 'Verified' : 'Not verified'}</span></div>` : ''}
         </td>
         <td>
           <span class="badge ${u.status}" style="font-size:11.5px; padding:3px 9px;">${displayStatus}</span>
@@ -257,6 +259,11 @@ function renderFilteredUsers() {
             ${u.status === 'pending' ? `
               <button class="btn btn-secondary btn-sm" data-approve="${u.id}" style="padding:4px 10px; font-size:12px; font-weight:700;" title="Approve account">
                 <i class="fa-solid fa-check"></i> Approve
+              </button>
+            ` : ''}
+            ${u.role === 'parent' && !u.emailVerified && !isArchived ? `
+              <button class="btn btn-secondary btn-sm" data-verify-email="${u.id}" style="padding:4px 10px; font-size:12px;" title="Verify this parent's current email address">
+                <i class="fa-solid fa-envelope-circle-check"></i> Verify email
               </button>
             ` : ''}
             ${!isArchived ? `
@@ -284,6 +291,19 @@ function renderFilteredUsers() {
     b.addEventListener('click', async () => {
       try {
         await api.patch(`/users/${b.dataset.approve}/approve`);
+        await loadUsers();
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+  });
+
+  tbody.querySelectorAll('[data-verify-email]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const parent = cachedUsers.find((item) => item.id === button.dataset.verifyEmail);
+      if (!parent || !confirm(`Verify ${parent.email} for ${parent.name}? Only verify an address the parent controls.`)) return;
+      try {
+        await api.patch(`/users/${button.dataset.verifyEmail}/verify-email`, {});
         await loadUsers();
       } catch (err) {
         alert(err.message);
@@ -1191,10 +1211,11 @@ document.getElementById('feeSearchInput')?.addEventListener('input', () => {
 // ---------- Events Calendar ----------
 async function loadEvents() {
   const { events } = await api.get('/events');
+  const calendarEvents = events.filter((event) => !['pending', 'rejected'].includes(event.publicationStatus));
   if (!adminCalendar) {
     adminCalendar = new EventsCalendar({
       containerId: 'eventsCalendarContainer',
-      events,
+      events: calendarEvents,
       canManage: true,
       onDeleteEvent: async (eventId) => {
         await api.del(`/events/${eventId}`);
@@ -1206,47 +1227,258 @@ async function loadEvents() {
       },
     });
   } else {
-    adminCalendar.setEvents(events);
+    adminCalendar.setEvents(calendarEvents);
   }
+  renderEventStatusList(events, document.getElementById('adminEventStatusList'));
+  const pending = events.filter((event) => event.publicationStatus === 'pending' && event.reviewStatus !== 'publishing');
+  document.getElementById('pendingEventsCount').textContent = `${pending.length} pending`;
+  document.getElementById('pendingEventsList').innerHTML = pending.length ? pending.map((event) => `
+    <article class="event-review-card">
+      <div><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><strong>${escapeDashboardHtml(event.title)}</strong><span class="badge status-badge-pending">Pending approval</span></div>
+        <p class="event-review-meta">Submitted by ${escapeDashboardHtml(event.createdBy?.name || 'Teacher')} · ${fmtDate(event.date)}${event.time ? ` · ${escapeDashboardHtml(event.time)}` : ''}${event.venue ? ` · ${escapeDashboardHtml(event.venue)}` : ''}</p>
+        <p style="margin:6px 0 0;">${escapeDashboardHtml(event.description)}</p>
+        <p class="event-review-meta">Recipients: ${event.targetType === 'classes' ? escapeDashboardHtml((event.targetClasses || []).join(', ')) : 'All parents'}</p>
+      </div>
+      <div class="event-review-actions"><button type="button" class="btn btn-primary btn-sm" data-review-event="${escapeDashboardHtml(event._id)}" data-decision="approved"><i class="fa-solid fa-check" aria-hidden="true"></i> Approve &amp; Publish</button><button type="button" class="btn btn-ghost btn-sm" data-review-event="${escapeDashboardHtml(event._id)}" data-decision="rejected"><i class="fa-solid fa-xmark" aria-hidden="true"></i> Reject</button></div>
+    </article>
+  `).join('') : '<div class="notification-empty">No teacher events are waiting for approval.</div>';
+  document.querySelectorAll('[data-review-event]').forEach((button) => button.addEventListener('click', () => {
+    const event = pending.find((item) => item._id === button.dataset.reviewEvent);
+    if (event) openEventReview(event, button.dataset.decision);
+  }));
 }
 
-document.getElementById('addEventBtn').addEventListener('click', () => {
+function openEventReview(event, decision) {
+  const approving = decision === 'approved';
   Modal.open(`
-    <h3>Schedule School Event</h3>
-    <div id="modalMsg" class="form-msg"></div>
-    <form id="eventForm">
-      <div class="field"><label>Event Title</label><input id="eTitle" placeholder="e.g. Annual Sports Day" required /></div>
-      <div class="grid-2">
-        <div class="field"><label>Event Date</label><input type="date" id="eDate" required /></div>
-        <div class="field"><label>Target Audience</label>
-          <select id="eAudience">
-            <option value="all">Everyone (Parents &amp; Staff)</option>
-            <option value="parents">Parents only</option>
-            <option value="teachers">Teachers only</option>
-          </select>
-        </div>
-      </div>
-      <div class="field"><label>Description / Details</label><textarea id="eDesc" rows="3" placeholder="Provide schedule, attire, or instructions…"></textarea></div>
-      <button class="btn btn-primary btn-block" type="submit" style="margin-top:14px;">Publish Event</button>
-    </form>
-  `);
-  document.getElementById('eventForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const msg = document.getElementById('modalMsg');
+    <h3>${approving ? 'Approve and Publish Event' : 'Reject Event'}</h3>
+    <p><strong>${escapeDashboardHtml(event.title)}</strong></p>
+    <p>${escapeDashboardHtml(event.description)}</p>
+    <p><strong>Date:</strong> ${fmtDate(event.date)} · ${escapeDashboardHtml(event.time || '—')}<br><strong>Venue:</strong> ${escapeDashboardHtml(event.venue || '—')}</p>
+    <p><strong>Recipients:</strong> ${event.targetType === 'classes' ? escapeDashboardHtml((event.targetClasses || []).join(', ')) : 'All parents'}</p>
+    <p class="field-hint">${approving ? 'Parents will receive an in-app notification and eligible email after approval.' : 'Rejected events will not be shown to parents or send notifications.'}</p>
+    <div class="field"><label for="eventReviewNotes">Review note <span class="field-hint">(optional)</span></label><textarea id="eventReviewNotes" rows="2" maxlength="500"></textarea></div>
+    <div id="eventReviewError" class="form-msg" role="alert"></div>
+    <div class="event-form-actions"><button type="button" class="btn btn-ghost" id="cancelEventReview">Cancel</button><button type="button" class="btn ${approving ? 'btn-primary' : 'btn-danger'}" id="confirmEventReview">${approving ? 'Approve & Publish' : 'Confirm Rejection'}</button></div>
+  `, true);
+  document.getElementById('cancelEventReview').addEventListener('click', () => Modal.close());
+  document.getElementById('confirmEventReview').addEventListener('click', async (clickEvent) => {
+    const button = clickEvent.currentTarget;
+    setButtonLoading(button, true, approving ? 'Publishing' : 'Rejecting');
     try {
-      await api.post('/events', {
-        title: document.getElementById('eTitle').value.trim(),
-        date: document.getElementById('eDate').value,
-        audience: document.getElementById('eAudience').value,
-        description: document.getElementById('eDesc').value.trim(),
+      const response = await api.patch(`/events/${event._id}/review`, {
+        decision,
+        reviewNotes: document.getElementById('eventReviewNotes').value.trim(),
       });
       Modal.close();
+      showToast(response.message || (approving ? 'Event approved and published.' : 'Event rejected.'), approving ? 'success' : 'info');
+      const summary = document.getElementById('adminEventSummary');
+      if (approving && response.emailSummary) {
+        summary.className = 'form-msg success';
+        summary.textContent = `Sent ${response.emailSummary.sent}, skipped ${response.emailSummary.skipped}, failed ${response.emailSummary.failed}${response.emailSummary.complete ? '' : ' (delivery logs still updating)'}.`;
+      }
       await loadEvents();
+    } catch (error) {
+      showMsg(document.getElementById('eventReviewError'), error.message || 'Could not review this event.');
+      setButtonLoading(button, false);
+    }
+  });
+}
+
+document.getElementById('addEventBtn').addEventListener('click', async () => {
+  try {
+    const { students } = await api.get('/students');
+    const classes = [...new Set(students.map((student) => student.className).filter(Boolean))].sort();
+    openEventComposer({
+      classes,
+      onSave: (event) => api.post('/events', event),
+      onComplete: async ({ event, emailSummary }) => {
+        await loadEvents();
+        const output = document.getElementById('adminEventSummary');
+        output.textContent = event.publicationStatus === 'draft'
+          ? 'Draft saved.'
+          : `Sent ${emailSummary.sent}, skipped ${emailSummary.skipped}, failed ${emailSummary.failed}${emailSummary.complete ? '' : ' (delivery logs still updating)'}.`;
+        output.className = 'form-msg success';
+        if (!emailSummary.complete && event.emailRecipientCount) {
+          for (let attempt = 0; attempt < 20; attempt += 1) {
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            const latest = await api.get(`/events/${event._id}/email-summary`);
+            const summary = latest.emailSummary;
+            output.textContent = `Sent ${summary.sent}, skipped ${summary.skipped}, failed ${summary.failed}${summary.complete ? '' : ' (delivery logs still updating)'}.`;
+            if (summary.complete) break;
+          }
+        }
+      },
+    });
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+});
+
+let adminStudentCache = [];
+let adminAudiencePicker = null;
+let adminAlertView = 'active';
+
+async function loadAdminAlerts() {
+  const { students } = await api.get('/students');
+  adminStudentCache = (students || []).filter((student) => student.status === 'active');
+  if (!adminAudiencePicker) {
+    adminAudiencePicker = createEmergencyAudiencePicker({
+      containerId: 'adminEmergencyAudience',
+      students: adminStudentCache,
+      wholeDescription: 'All active pupils in the school',
+    });
+  }
+  const { alerts: displayedAlerts } = await api.get(`/alerts?view=${adminAlertView}`);
+  document.getElementById('adminAlertsList').innerHTML = displayedAlerts.length ? displayedAlerts.map((alert) => `
+    <article class="alert-banner">
+      <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
+      <div><strong>${escapeDashboardHtml(alert.title)}</strong><p>${escapeDashboardHtml(alert.description || alert.message)}</p><small>${escapeDashboardHtml(alert.severity || 'high')} · ${fmtDate(alert.createdAt)} · ${(alert.students || []).length} pupils · ${(alert.acknowledgements || []).length} acknowledged</small>
+      <div class="event-form-actions">
+        ${adminAlertView === 'archived' && alert.status === 'archived' ? `<button type="button" class="btn btn-secondary btn-sm" data-admin-alert-restore="${escapeDashboardHtml(alert._id)}">Restore</button>` : ''}
+        ${alert.status !== 'deleted' ? `${adminAlertView === 'active' ? `<button type="button" class="btn btn-ghost btn-sm" data-admin-alert-archive="${escapeDashboardHtml(alert._id)}">Archive</button>` : ''}<button type="button" class="btn btn-danger btn-sm" data-admin-alert-delete="${escapeDashboardHtml(alert._id)}">Delete</button>` : '<span class="badge status-badge-rejected">Soft deleted</span>'}
+        ${adminAlertView === 'active' && alert.status !== 'all-clear' && alert.status !== 'deleted' ? `<button type="button" class="btn btn-secondary btn-sm" data-admin-alert-update="${escapeDashboardHtml(alert._id)}">Send update</button><button type="button" class="btn btn-ghost btn-sm" data-admin-alert-clear="${escapeDashboardHtml(alert._id)}">Send all-clear</button>` : ''}
+      </div></div>
+    </article>
+  `).join('') : `<div class="notification-empty">No ${adminAlertView === 'archived' ? 'archived' : 'active'} alerts.</div>`;
+  document.querySelectorAll('[data-admin-alert-view]').forEach((tab) => {
+    const active = tab.dataset.adminAlertView === adminAlertView;
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-selected', String(active));
+  });
+  bindAdminAlertManagement();
+  bindAdminAlertUpdates();
+}
+
+document.querySelectorAll('[data-admin-alert-view]').forEach((button) => button.addEventListener('click', async () => {
+  adminAlertView = button.dataset.adminAlertView;
+  try { await loadAdminAlerts(); } catch (error) { showToast(error.message, 'error'); }
+}));
+
+function bindAdminAlertManagement() {
+  document.querySelectorAll('[data-admin-alert-archive]').forEach((button) => button.addEventListener('click', async () => {
+    if (!confirm('Archive this emergency alert? It will leave the active list and can be restored later. Email logs and acknowledgments will remain.')) return;
+    try {
+      await api.patch(`/alerts/${button.dataset.adminAlertArchive}/archive`, {});
+      showToast('Emergency alert archived.', 'info');
+      await loadAdminAlerts();
+    } catch (error) { showToast(error.message, 'error'); }
+  }));
+  document.querySelectorAll('[data-admin-alert-restore]').forEach((button) => button.addEventListener('click', async () => {
+    try {
+      await api.patch(`/alerts/${button.dataset.adminAlertRestore}/restore`, {});
+      showToast('Emergency alert restored.');
+      await loadAdminAlerts();
+    } catch (error) { showToast(error.message, 'error'); }
+  }));
+  document.querySelectorAll('[data-admin-alert-delete]').forEach((button) => button.addEventListener('click', async () => {
+    if (!confirm('Soft-delete this alert? It will remain in the Archived tab marked as deleted. The alert, acknowledgments, and email logs are retained.')) return;
+    try {
+      await api.del(`/alerts/${button.dataset.adminAlertDelete}`);
+      showToast('Emergency alert soft-deleted.', 'info');
+      await loadAdminAlerts();
+    } catch (error) { showToast(error.message, 'error'); }
+  }));
+}
+
+function bindAdminAlertUpdates() {
+  document.querySelectorAll('[data-admin-alert-update], [data-admin-alert-clear]').forEach((button) => button.addEventListener('click', async () => {
+    const allClear = Boolean(button.dataset.adminAlertClear);
+    Modal.open(`<h3>${allClear ? 'Send All-Clear' : 'Send Emergency Update'}</h3><div class="field"><label for="adminAlertFollowup">Message <span class="required-mark" aria-hidden="true">*</span></label><textarea id="adminAlertFollowup" rows="4" required></textarea></div><div id="adminAlertFollowupError" class="form-msg" role="alert"></div><div class="event-form-actions"><button type="button" class="btn btn-ghost" id="cancelAdminAlertFollowup">Cancel</button><button type="button" class="btn ${allClear ? 'btn-primary' : 'btn-danger'}" id="sendAdminAlertFollowup">${allClear ? 'Send All-Clear' : 'Send Update'}</button></div>`);
+    document.getElementById('cancelAdminAlertFollowup').addEventListener('click', () => Modal.close());
+    document.getElementById('sendAdminAlertFollowup').addEventListener('click', async (event) => {
+      const submit = event.currentTarget;
+      const message = document.getElementById('adminAlertFollowup').value.trim();
+      if (!message) return showMsg(document.getElementById('adminAlertFollowupError'), 'Enter an update message.');
+      setButtonLoading(submit, true, 'Sending');
+      try {
+        await api.post(`/alerts/${button.dataset.adminAlertUpdate || button.dataset.adminAlertClear}/updates`, { message, status: allClear ? 'all-clear' : 'update' });
+        Modal.close();
+        showToast(allClear ? 'All-clear notice sent.' : 'Emergency update sent.');
+        await loadAdminAlerts();
+      } catch (err) {
+        showMsg(document.getElementById('adminAlertFollowupError'), err.message);
+        setButtonLoading(submit, false);
+      }
+    });
+  }));
+}
+
+document.getElementById('adminAlertForm').addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (!adminAudiencePicker?.validate()) return;
+  const audience = adminAudiencePicker.getSelection();
+  const values = {
+    emergencyType: document.getElementById('adminAlertType').value,
+    title: document.getElementById('adminAlertTitle').value.trim(),
+    description: document.getElementById('adminAlertDescription').value.trim(),
+    safetyInstructions: document.getElementById('adminAlertInstructions').value.trim(),
+    severity: document.querySelector('input[name="adminAlertSeverity"]:checked').value,
+    students: audience.students,
+    affectedClasses: audience.affectedClasses,
+  };
+  const errors = {
+    type: values.emergencyType ? '' : 'Select an emergency type.',
+    title: values.title ? '' : 'Alert title is required.',
+    description: values.description ? '' : 'Description is required.',
+    instructions: values.safetyInstructions ? '' : 'Safety instructions are required.',
+  };
+  Object.entries(errors).forEach(([key, message]) => {
+    const node = document.querySelector(`[data-alert-error="${key}"]`);
+    node.textContent = message;
+    document.querySelector(`[data-alert-field="${key}"]`)?.classList.toggle('has-error', Boolean(message));
+  });
+  if (Object.values(errors).some(Boolean)) return;
+  const targets = adminAudiencePicker.getTargetStudents();
+  const parents = new Map();
+  targets.forEach((student) => {
+    if (student.parent) parents.set(String(student.parent._id || student.parent), student.parent);
+  });
+  const emailEligible = [...parents.values()].filter((parent) => parent && typeof parent === 'object'
+    && parent.status === 'approved' && parent.email && parent.emailVerified && parent.emailVerifiedBy).length;
+  const contactSummary = Array.from(parents.values()).map((parent) => `<li>${escapeDashboardHtml(parent.name || 'Parent')} · ${escapeDashboardHtml(parent.email || 'No email')} · ${parent.emailVerified && parent.emailVerifiedBy ? 'Verified' : 'Not verified'}</li>`).join('');
+  Modal.open(`<h3>Review Emergency Alert</h3><p class="alert-banner"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i><span>This will immediately notify parents by email.</span></p><p><strong>${escapeDashboardHtml(values.title)}</strong> · ${escapeDashboardHtml(values.severity)}</p><p>${escapeDashboardHtml(values.description)}</p><p><strong>Recipients:</strong> ${parents.size} linked parents; ${emailEligible} eligible email addresses</p><ul class="event-summary-list">${contactSummary || '<li>No linked parent accounts found.</li>'}</ul><div id="adminAlertConfirmError" class="form-msg" role="alert"></div><div class="event-form-actions"><button type="button" class="btn btn-ghost" id="cancelAdminAlertSend">Cancel</button><button type="button" class="btn btn-danger" id="confirmAdminAlertSend">Send Alert</button></div>`);
+  document.getElementById('cancelAdminAlertSend').addEventListener('click', () => Modal.close());
+  document.getElementById('confirmAdminAlertSend').addEventListener('click', async (confirmEvent) => {
+    const button = confirmEvent.currentTarget;
+    setButtonLoading(button, true, 'Sending');
+    try {
+      const response = await api.post('/alerts', values);
+      Modal.close();
+      document.getElementById('adminAlertForm').reset();
+      adminAudiencePicker = createEmergencyAudiencePicker({
+        containerId: 'adminEmergencyAudience',
+        students: adminStudentCache,
+        wholeDescription: 'All active pupils in the school',
+      });
+      await showAdminEmailSummary(response);
+      await loadAdminAlerts();
     } catch (err) {
-      showMsg(msg, err.message);
+      showMsg(document.getElementById('adminAlertConfirmError'), err.message);
+      setButtonLoading(button, false);
     }
   });
 });
+
+async function showAdminEmailSummary(response) {
+  const output = document.getElementById('adminAlertEmailSummary');
+  const summary = response.emailSummary || { sent: 0, skipped: 0, failed: 0, expected: response.recipientCount || 0, complete: false };
+  const renderSummary = () => {
+    output.className = 'form-msg success';
+    output.textContent = `Emergency alert processed: ${summary.sent} sent, ${summary.failed} failed, ${summary.skipped} skipped.`;
+  };
+  renderSummary();
+  if (!summary.complete && response.alert?._id) {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const latest = await api.get(`/alerts/${response.alert._id}/email-summary`);
+      Object.assign(summary, latest.emailSummary);
+      renderSummary();
+      if (summary.complete) break;
+    }
+  }
+  showToast(`Emergency alert: ${summary.sent} sent, ${summary.failed} failed, ${summary.skipped} skipped.`, summary.failed ? 'error' : 'success');
+}
 
 // ---------- Activity Logs ----------
 async function loadLogs() {

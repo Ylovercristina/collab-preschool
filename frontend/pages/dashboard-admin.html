@@ -33,6 +33,7 @@
     <button class="nav-item" data-panel="records"><i class="fa-solid fa-folder-open"></i> Records Management</button>
     <button class="nav-item" data-panel="fees"><i class="fa-solid fa-credit-card"></i> Fees</button>
     <button class="nav-item" data-panel="events"><i class="fa-solid fa-calendar-days"></i> Events &amp; Calendar</button>
+    <button class="nav-item" data-panel="alerts"><i class="fa-solid fa-triangle-exclamation"></i> Emergency Alerts</button>
     <button class="nav-item" data-panel="logs"><i class="fa-solid fa-clock-rotate-left"></i> Activity logs</button>
     <div class="sidebar-actions">
       <button class="nav-item logout" id="logoutBtn"><i class="fa-solid fa-right-from-bracket"></i> Log out</button>
@@ -309,7 +310,55 @@
         </div>
         <button class="btn btn-primary btn-sm" id="addEventBtn"><i class="fa-solid fa-calendar-plus"></i> New Event</button>
       </div>
+      <div id="adminEventSummary" class="form-msg" aria-live="polite"></div>
+      <section class="event-review-queue" aria-labelledby="pendingEventsHeading">
+        <div class="toolbar"><div><h2 id="pendingEventsHeading" style="font-size:18px;margin:0;">Teacher submissions awaiting approval</h2><p style="margin:4px 0 0;font-size:13px;color:var(--ink-muted);">Parents are not notified until you approve an event.</p></div><span id="pendingEventsCount" class="badge pending">0 pending</span></div>
+        <div id="pendingEventsList"></div>
+      </section>
       <div id="eventsCalendarContainer"></div>
+      <section class="event-status-list" aria-labelledby="adminEventListHeading">
+        <h2 id="adminEventListHeading" style="font-size:18px;">Recent Events</h2>
+        <div id="adminEventStatusList"></div>
+      </section>
+    </section>
+
+    <section class="panel" id="panel-alerts">
+      <div class="alert-panel-heading" style="margin-bottom:18px;">
+        <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
+        <div><h1 style="margin:0;">Emergency Alerts</h1><p style="margin:4px 0 0;">Urgent messages for families linked to affected pupils.</p></div>
+      </div>
+      <div class="card alert-form-card">
+        <form id="adminAlertForm" novalidate>
+          <section class="alert-section">
+            <h3>Emergency Type and Severity</h3>
+            <div class="grid-2">
+              <div class="field" data-alert-field="type"><label for="adminAlertType">Emergency type <span class="required-mark" aria-hidden="true">*</span></label><select id="adminAlertType" required><option value="">Select type</option><option>Medical</option><option>Weather</option><option>Security</option><option>Early dismissal</option><option>Other</option></select><small class="field-error" data-alert-error="type"></small></div>
+              <fieldset class="field" style="border:0;padding:0;margin:0;" data-alert-field="severity"><legend style="font-weight:600;font-size:13.5px;margin-bottom:6px;">Severity <span class="required-mark" aria-hidden="true">*</span></legend><div class="severity-options"><label class="severity-choice severity-moderate"><input type="radio" name="adminAlertSeverity" value="moderate" checked /><span>Moderate</span></label><label class="severity-choice severity-high"><input type="radio" name="adminAlertSeverity" value="high" /><span>High</span></label><label class="severity-choice severity-critical"><input type="radio" name="adminAlertSeverity" value="critical" /><span>Critical</span></label></div></fieldset>
+            </div>
+            <div class="field" data-alert-field="title"><label for="adminAlertTitle">Alert title <span class="required-mark" aria-hidden="true">*</span></label><input id="adminAlertTitle" maxlength="120" placeholder="e.g. Campus closure" required /><small class="field-error" data-alert-error="title"></small></div>
+          </section>
+          <section class="alert-section">
+            <h3>Description</h3>
+            <div class="field" data-alert-field="description"><label for="adminAlertDescription">What happened? <span class="required-mark" aria-hidden="true">*</span></label><textarea id="adminAlertDescription" rows="3" maxlength="2000" required></textarea><small class="field-error" data-alert-error="description"></small></div>
+          </section>
+          <section class="alert-section">
+            <h3>Affected Pupils and Classes</h3>
+            <div id="adminEmergencyAudience"></div>
+          </section>
+          <section class="alert-section">
+            <h3>Safety Instructions</h3>
+            <div class="field" data-alert-field="instructions"><label for="adminAlertInstructions">What should families do? <span class="required-mark" aria-hidden="true">*</span></label><textarea id="adminAlertInstructions" rows="3" maxlength="2000" required></textarea><small class="field-error" data-alert-error="instructions"></small></div>
+          </section>
+          <div id="adminAlertFormMessage" class="form-msg" role="alert"></div>
+          <button class="btn btn-danger" type="submit"><i class="fa-solid fa-shield-exclamation"></i> Review and Send Alert</button>
+        </form>
+      </div>
+      <div id="adminAlertEmailSummary" class="form-msg" aria-live="polite"></div>
+      <section class="event-status-list" aria-labelledby="adminRecentAlertsHeading">
+        <div class="toolbar"><h2 id="adminRecentAlertsHeading" style="font-size:18px;">Emergency Alerts</h2></div>
+        <div class="record-category-tabs" role="tablist" aria-label="Emergency alert status"><button type="button" class="record-category-tab active" data-admin-alert-view="active" role="tab" aria-selected="true">Active</button><button type="button" class="record-category-tab" data-admin-alert-view="archived" role="tab" aria-selected="false">Archived</button></div>
+        <div id="adminAlertsList"></div>
+      </section>
     </section>
 
     <section class="panel" id="panel-logs">
