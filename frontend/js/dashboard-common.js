@@ -406,6 +406,7 @@ async function showPaymentReceipt(feeId, paymentId) {
 const Modal = {
   el: null,
   body: null,
+  previousFocus: null,
   init() {
     this.el = document.getElementById('modalBackdrop');
     this.body = document.getElementById('modalBody');
@@ -413,37 +414,351 @@ const Modal = {
       this.el.addEventListener('click', (e) => {
         if (e.target === this.el) this.close();
       });
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && this.el.classList.contains('open')) this.close();
+      });
     }
   },
   open(html, isWide = false) {
     if (!this.el) this.init();
     if (!this.el) return;
+    if (!this.el.classList.contains('open')) this.previousFocus = document.activeElement;
     this.body.className = `modal ${isWide ? 'modal-wide' : ''}`;
+    this.body.setAttribute('role', 'dialog');
+    this.body.setAttribute('aria-modal', 'true');
     this.body.innerHTML = `
       <button class="modal-close" aria-label="Close modal" title="Close"><i class="fa-solid fa-xmark"></i></button>
       ${html}
     `;
     this.body.querySelector('.modal-close').addEventListener('click', () => this.close());
     this.el.classList.add('open');
+    this.body.querySelector('.modal-close').focus();
   },
   close() {
     if (this.el) {
       this.el.classList.remove('open');
       this.body.innerHTML = '';
+      if (this.previousFocus && this.previousFocus.isConnected) this.previousFocus.focus();
+      this.previousFocus = null;
     }
   },
 };
 
+function showToast(message, type = 'success') {
+  let stack = document.getElementById('toastStack');
+  if (!stack) {
+    stack = document.createElement('div');
+    stack.id = 'toastStack';
+    stack.className = 'toast-stack';
+    stack.setAttribute('aria-live', 'polite');
+    stack.setAttribute('aria-relevant', 'additions text');
+    document.body.appendChild(stack);
+  }
+  const toast = document.createElement('div');
+  toast.className = `toast-message toast-${type}`;
+  toast.setAttribute('role', 'status');
+  toast.textContent = message;
+  stack.appendChild(toast);
+  window.setTimeout(() => toast.remove(), 5000);
+}
+
+function setButtonLoading(button, isLoading, label = 'Saving') {
+  if (isLoading) {
+    if (!button.dataset.idleHtml) button.dataset.idleHtml = button.innerHTML;
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    button.innerHTML = `<i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i> ${label}`;
+  } else {
+    button.disabled = false;
+    button.removeAttribute('aria-busy');
+    if (button.dataset.idleHtml) {
+      button.innerHTML = button.dataset.idleHtml;
+      delete button.dataset.idleHtml;
+    }
+  }
+}
+
+function escapeDashboardHtml(value = '') {
+  return String(value).replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[character]);
+}
+
+function renderEventStatusList(events, container) {
+  if (!container) return;
+  const recent = (events || []).slice().sort((left, right) => new Date(right.date) - new Date(left.date)).slice(0, 6);
+  container.innerHTML = recent.length ? recent.map((event) => {
+    const status = event.publicationStatus || 'published';
+    const statusLabels = { draft: 'Draft', pending: 'Pending approval', rejected: 'Rejected', published: 'Published' };
+    return `<div class="event-status-row list-row"><div><strong>${escapeDashboardHtml(event.title)}</strong><p>${fmtDate(event.date)}${event.time ? ` · ${escapeDashboardHtml(event.time)}` : ''}${event.venue ? ` · ${escapeDashboardHtml(event.venue)}` : ''}</p></div><span class="badge status-badge-${status}">${statusLabels[status] || 'Published'}</span></div>`;
+  }).join('') : '<div class="notification-empty">No events scheduled yet.</div>';
+}
+
+function openEventComposer({ classes = [], onSave, onComplete, approvalRequired = false }) {
+  const dateToday = new Date();
+  const todayValue = `${dateToday.getFullYear()}-${String(dateToday.getMonth() + 1).padStart(2, '0')}-${String(dateToday.getDate()).padStart(2, '0')}`;
+  const renderForm = (values = {}, error = '') => {
+    const selectedClasses = Array.isArray(values.targetClasses) ? values.targetClasses : [];
+    Modal.open(`
+      <h3>Event Details</h3>
+      ${error ? `<div class="form-msg error" role="alert">${escapeDashboardHtml(error)}</div>` : ''}
+      <form id="eventComposerForm" novalidate>
+        <section class="event-composer-section">
+          <h4>Event Details</h4>
+          <div class="field" data-event-field="title"><label for="composerTitle">Title <span class="required-mark" aria-hidden="true">*</span></label><input id="composerTitle" maxlength="120" value="${escapeDashboardHtml(values.title || '')}" placeholder="e.g. Family Reading Morning" required aria-describedby="composerTitleError" /><small class="field-error" id="composerTitleError" data-event-error="title"></small></div>
+          <div class="field" data-event-field="description"><label for="composerDescription">Description <span class="required-mark" aria-hidden="true">*</span></label><textarea id="composerDescription" rows="3" maxlength="3000" placeholder="Share what families should know" required aria-describedby="composerDescriptionError">${escapeDashboardHtml(values.description || '')}</textarea><small class="field-error" id="composerDescriptionError" data-event-error="description"></small></div>
+        </section>
+        <section class="event-composer-section">
+          <h4>Schedule</h4>
+          <div class="grid-2">
+            <div class="field" data-event-field="date"><label for="composerDate">Date <span class="required-mark" aria-hidden="true">*</span></label><input type="date" id="composerDate" min="${todayValue}" value="${escapeDashboardHtml(values.date || '')}" required aria-describedby="composerDateError" /><small class="field-error" id="composerDateError" data-event-error="date"></small></div>
+            <div class="field" data-event-field="time"><label for="composerTime">Time <span class="required-mark" aria-hidden="true">*</span></label><input type="time" id="composerTime" value="${escapeDashboardHtml(values.time || '')}" required aria-describedby="composerTimeError" /><small class="field-error" id="composerTimeError" data-event-error="time"></small></div>
+          </div>
+        </section>
+        <section class="event-composer-section">
+          <h4>Location</h4>
+          <div class="field" data-event-field="venue"><label for="composerVenue">Venue <span class="required-mark" aria-hidden="true">*</span></label><input id="composerVenue" maxlength="160" value="${escapeDashboardHtml(values.venue || '')}" placeholder="e.g. School garden" required aria-describedby="composerVenueError" /><small class="field-error" id="composerVenueError" data-event-error="venue"></small></div>
+        </section>
+        <section class="event-composer-section">
+          <h4>Recipients</h4>
+          <div class="field"><label for="composerTarget">Target group</label><select id="composerTarget"><option value="all" ${values.targetType !== 'classes' ? 'selected' : ''}>All parents</option><option value="classes" ${values.targetType === 'classes' ? 'selected' : ''}>Selected classes</option></select></div>
+          <div class="field" data-event-field="classes" id="composerClassesField" ${values.targetType === 'classes' ? '' : 'hidden'}><label for="composerClasses">Classes <span class="required-mark" aria-hidden="true">*</span></label><select id="composerClasses" multiple size="${Math.max(2, Math.min(classes.length, 5))}" aria-describedby="composerClassesError">${classes.map((name) => `<option value="${escapeDashboardHtml(name)}" ${selectedClasses.includes(name) ? 'selected' : ''}>${escapeDashboardHtml(name)}</option>`).join('')}</select><small class="field-error" id="composerClassesError" data-event-error="classes"></small></div>
+          <div class="field"><label for="composerStatus">Publication</label><select id="composerStatus">${approvalRequired ? `<option value="pending" ${values.publicationStatus !== 'draft' ? 'selected' : ''}>Submit for admin approval</option>` : `<option value="published" ${values.publicationStatus !== 'draft' ? 'selected' : ''}>Publish now</option>`}<option value="draft" ${values.publicationStatus === 'draft' ? 'selected' : ''}>Save as draft</option></select>${approvalRequired ? '<div class="field-hint">Parents will only see the event after an admin approves it.</div>' : ''}</div>
+        </section>
+        <div class="form-msg" id="composerError" role="alert"></div>
+        <div class="event-form-actions"><button type="submit" class="btn btn-primary"><i class="fa-solid fa-calendar-check"></i> Continue</button></div>
+      </form>
+    `, true);
+
+    const form = document.getElementById('eventComposerForm');
+    const target = document.getElementById('composerTarget');
+    target.addEventListener('change', () => {
+      document.getElementById('composerClassesField').hidden = target.value !== 'classes';
+    });
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const data = {
+        title: document.getElementById('composerTitle').value.trim(),
+        description: document.getElementById('composerDescription').value.trim(),
+        date: document.getElementById('composerDate').value,
+        time: document.getElementById('composerTime').value,
+        venue: document.getElementById('composerVenue').value.trim(),
+        targetType: target.value,
+        targetClasses: Array.from(document.getElementById('composerClasses').selectedOptions, (option) => option.value),
+        publicationStatus: document.getElementById('composerStatus').value,
+      };
+      const errors = {
+        title: data.title ? '' : 'Title is required.',
+        description: data.description ? '' : 'Description is required.',
+        date: !data.date ? 'Date is required.' : (data.date < todayValue ? "Date can't be in the past." : ''),
+        time: data.time ? '' : 'Time is required.',
+        venue: data.venue ? '' : 'Venue is required.',
+        classes: data.targetType === 'classes' && !data.targetClasses.length ? 'Choose at least one class.' : '',
+      };
+      Object.entries(errors).forEach(([field, message]) => {
+        const errorNode = form.querySelector(`[data-event-error="${field}"]`);
+        if (errorNode) errorNode.textContent = message;
+        const fieldNode = form.querySelector(`[data-event-field="${field}"]`);
+        if (fieldNode) fieldNode.classList.toggle('has-error', Boolean(message));
+      });
+      const invalid = Object.values(errors).some(Boolean);
+      if (invalid) {
+        const firstInvalid = form.querySelector('.has-error input, .has-error textarea, .has-error select');
+        firstInvalid?.focus();
+        return;
+      }
+      renderConfirmation(data);
+    });
+  };
+
+  const renderConfirmation = (data) => {
+    const date = new Date(`${data.date}T00:00:00`).toLocaleDateString();
+    const recipients = data.targetType === 'all' ? 'All parents' : data.targetClasses.join(', ');
+    Modal.open(`
+      <h3>Confirm Event</h3>
+      <p>Review the details and recipients before publishing.</p>
+      <dl class="event-summary-list">
+        <dt><strong>Title</strong></dt><dd>${escapeDashboardHtml(data.title)}</dd>
+        <dt><strong>Description</strong></dt><dd>${escapeDashboardHtml(data.description)}</dd>
+        <dt><strong>Schedule</strong></dt><dd>${escapeDashboardHtml(date)} at ${escapeDashboardHtml(data.time)}</dd>
+        <dt><strong>Location</strong></dt><dd>${escapeDashboardHtml(data.venue)}</dd>
+        <dt><strong>Recipients</strong></dt><dd>${escapeDashboardHtml(recipients)}</dd>
+        <dt><strong>Status</strong></dt><dd>${data.publicationStatus === 'draft' ? 'Draft' : (data.publicationStatus === 'pending' ? 'Submit for admin approval' : 'Published')}</dd>
+      </dl>
+      <div id="eventConfirmError" class="form-msg" role="alert"></div>
+      <div class="event-form-actions"><button type="button" class="btn btn-ghost" id="eventConfirmCancel">Cancel</button><button type="button" class="btn btn-primary" id="eventConfirmPublish">${data.publicationStatus === 'draft' ? 'Confirm and Save Draft' : (data.publicationStatus === 'pending' ? 'Submit for Approval' : 'Confirm and Publish')}</button></div>
+    `, true);
+    document.getElementById('eventConfirmCancel').addEventListener('click', () => renderForm(data));
+    document.getElementById('eventConfirmPublish').addEventListener('click', async (event) => {
+      const button = event.currentTarget;
+      setButtonLoading(button, true, data.publicationStatus === 'draft' ? 'Saving' : (data.publicationStatus === 'pending' ? 'Submitting' : 'Publishing'));
+      let response;
+      try {
+        response = await onSave({ ...data, audience: 'parents' });
+      } catch (error) {
+        const errorNode = document.getElementById('eventConfirmError');
+        errorNode.textContent = error.message || 'Could not save the event.';
+        errorNode.className = 'form-msg error';
+        setButtonLoading(button, false);
+        return;
+      }
+      Modal.close();
+      showToast(data.publicationStatus === 'draft'
+        ? 'Event draft saved.'
+        : (data.publicationStatus === 'pending'
+          ? 'Event submitted for admin approval. Parents will be notified after approval.'
+          : `Event published. ${response.event?.emailRecipientCount || 0} parent notifications created.`));
+      if (onComplete) {
+        try {
+          await onComplete(response);
+        } catch (error) {
+          showToast(error.message || 'Event saved, but its status could not refresh.', 'error');
+        }
+      }
+    });
+  };
+
+  renderForm();
+}
+
+
+function createEmergencyAudiencePicker({ containerId, students = [], wholeDescription }) {
+  const root = document.getElementById(containerId);
+  const activeStudents = students.filter((student) => student.status === 'active');
+  const classes = [...new Set(activeStudents.map((student) => String(student.className || '').trim()).filter(Boolean))].sort();
+  const state = { mode: 'school', selectedClasses: new Set(), selectedStudents: new Set(), query: '' };
+
+  function selectedPupils() {
+    if (state.mode === 'school') return activeStudents;
+    if (state.mode === 'class') return activeStudents.filter((student) => state.selectedClasses.has(String(student.className || '').trim()));
+    return activeStudents.filter((student) => state.selectedStudents.has(String(student._id)));
+  }
+
+  function selectionStats() {
+    const pupils = selectedPupils();
+    const classNames = state.mode === 'class'
+      ? [...state.selectedClasses]
+      : [...new Set(pupils.map((student) => String(student.className || '').trim()).filter(Boolean))];
+    const parents = new Map();
+    pupils.forEach((student) => {
+      const parent = student.parent;
+      if (!parent) return;
+      const id = String(parent._id || parent);
+      if (!parents.has(id)) parents.set(id, parent);
+    });
+    const eligibleParents = [...parents.values()].filter((parent) => parent && typeof parent === 'object'
+      && parent.status === 'approved' && parent.email && parent.emailVerified && parent.emailVerifiedBy).length;
+    return { pupils, classNames, linkedParents: parents.size, eligibleParents };
+  }
+
+  function render() {
+    if (!root) return;
+    const stats = selectionStats();
+    const selectedChips = state.mode === 'school'
+      ? `<span class="audience-chip">${escapeDashboardHtml(wholeDescription || 'Whole school')}<button type="button" data-remove-school aria-label="Clear whole school selection"><i class="fa-solid fa-xmark"></i></button></span>`
+      : state.mode === 'class'
+        ? [...state.selectedClasses].map((className) => `<span class="audience-chip">${escapeDashboardHtml(className)}<button type="button" data-remove-class="${escapeDashboardHtml(className)}" aria-label="Remove ${escapeDashboardHtml(className)}"><i class="fa-solid fa-xmark"></i></button></span>`).join('')
+        : [...state.selectedStudents].map((studentId) => {
+          const student = activeStudents.find((item) => String(item._id) === studentId);
+          return student ? `<span class="audience-chip">${escapeDashboardHtml(student.name)}<button type="button" data-remove-student="${escapeDashboardHtml(studentId)}" aria-label="Remove ${escapeDashboardHtml(student.name)}"><i class="fa-solid fa-xmark"></i></button></span>` : '';
+        }).join('');
+    const classCards = classes.map((className) => {
+      const count = activeStudents.filter((student) => String(student.className || '').trim() === className).length;
+      return `<label class="audience-class-card"><input type="checkbox" data-audience-class="${escapeDashboardHtml(className)}" ${state.selectedClasses.has(className) ? 'checked' : ''}><span><strong>${escapeDashboardHtml(className)}</strong><small>${count} pupil${count === 1 ? '' : 's'}</small></span></label>`;
+    }).join('');
+    const groupedClasses = classes.map((className) => {
+      const pupils = activeStudents.filter((student) => String(student.className || '').trim() === className
+        && `${student.name} ${className}`.toLowerCase().includes(state.query));
+      if (!pupils.length) return '';
+      return `<section class="audience-pupil-group"><div class="audience-pupil-group-heading"><strong>${escapeDashboardHtml(className)}</strong><button type="button" class="btn btn-ghost btn-sm" data-select-class="${escapeDashboardHtml(className)}">Select all in class</button></div><div class="audience-pupil-list">${pupils.map((student) => `<label class="audience-pupil-option"><input type="checkbox" data-audience-student="${escapeDashboardHtml(student._id)}" ${state.selectedStudents.has(String(student._id)) ? 'checked' : ''}><span>${escapeDashboardHtml(student.name)}</span></label>`).join('')}</div></section>`;
+    }).join('');
+
+    root.innerHTML = `
+      <div class="record-category-tabs audience-mode-tabs" role="tablist" aria-label="Emergency alert audience">
+        ${[['school', 'Whole School'], ['class', 'By Class'], ['pupil', 'By Pupil']].map(([mode, label]) => `<button type="button" class="record-category-tab ${state.mode === mode ? 'active' : ''}" role="tab" aria-selected="${state.mode === mode}" data-audience-mode="${mode}">${label}</button>`).join('')}
+      </div>
+      ${state.mode === 'school' ? `<div class="audience-school-note"><i class="fa-solid fa-school" aria-hidden="true"></i><span>${escapeDashboardHtml(wholeDescription || 'All active pupils in the school')}</span></div>` : ''}
+      ${state.mode === 'class' ? `<div class="audience-class-grid">${classCards || '<div class="notification-empty">No active classes available.</div>'}</div>` : ''}
+      ${state.mode === 'pupil' ? `<div class="field audience-pupil-search"><label for="${containerId}Search">Search pupils</label><input id="${containerId}Search" type="search" value="${escapeDashboardHtml(state.query)}" placeholder="Search by name or class" autocomplete="off"></div><div class="audience-pupil-groups">${groupedClasses || '<div class="notification-empty">No pupils match this search.</div>'}</div>` : ''}
+      <div class="audience-selected"><strong>Selected</strong><div class="audience-chips">${selectedChips || '<span class="field-hint">No pupils selected yet.</span>'}</div></div>
+      <p class="audience-summary" aria-live="polite">${stats.classNames.length} class${stats.classNames.length === 1 ? '' : 'es'}, ${stats.pupils.length} pupil${stats.pupils.length === 1 ? '' : 's'}, ${stats.eligibleParents} verified parent${stats.eligibleParents === 1 ? '' : 's'} expected to receive email (${stats.linkedParents} linked)</p>
+      <small class="field-error" data-audience-error></small>
+    `;
+
+    root.querySelectorAll('[data-audience-mode]').forEach((button) => button.addEventListener('click', () => {
+      state.mode = button.dataset.audienceMode;
+      state.query = '';
+      render();
+    }));
+    root.querySelectorAll('[data-audience-class]').forEach((checkbox) => checkbox.addEventListener('change', () => {
+      if (checkbox.checked) state.selectedClasses.add(checkbox.dataset.audienceClass);
+      else state.selectedClasses.delete(checkbox.dataset.audienceClass);
+      render();
+    }));
+    root.querySelectorAll('[data-audience-student]').forEach((checkbox) => checkbox.addEventListener('change', () => {
+      if (checkbox.checked) state.selectedStudents.add(String(checkbox.dataset.audienceStudent));
+      else state.selectedStudents.delete(String(checkbox.dataset.audienceStudent));
+      render();
+    }));
+    root.querySelectorAll('[data-select-class]').forEach((button) => button.addEventListener('click', () => {
+      activeStudents.filter((student) => String(student.className || '').trim() === button.dataset.selectClass)
+        .forEach((student) => state.selectedStudents.add(String(student._id)));
+      render();
+    }));
+    root.querySelectorAll('[data-remove-school]').forEach((button) => button.addEventListener('click', () => {
+      state.mode = 'pupil';
+      state.selectedStudents.clear();
+      render();
+    }));
+    root.querySelectorAll('[data-remove-class]').forEach((button) => button.addEventListener('click', () => {
+      state.selectedClasses.delete(button.dataset.removeClass);
+      render();
+    }));
+    root.querySelectorAll('[data-remove-student]').forEach((button) => button.addEventListener('click', () => {
+      state.selectedStudents.delete(String(button.dataset.removeStudent));
+      render();
+    }));
+    const search = root.querySelector(`#${containerId}Search`);
+    search?.addEventListener('input', (event) => {
+      state.query = event.target.value.trim().toLowerCase();
+      render();
+      const nextSearch = root.querySelector(`#${containerId}Search`);
+      nextSearch?.focus();
+      nextSearch?.setSelectionRange(state.query.length, state.query.length);
+    });
+  }
+
+  render();
+  return {
+    validate() {
+      const valid = selectedPupils().length > 0;
+      const error = root?.querySelector('[data-audience-error]');
+      if (error) error.textContent = valid ? '' : 'Select at least one class or pupil.';
+      return valid;
+    },
+    getSelection() {
+      if (state.mode === 'school') return { students: activeStudents.map((student) => String(student._id)), affectedClasses: [] };
+      if (state.mode === 'class') return { students: [], affectedClasses: [...state.selectedClasses] };
+      return { students: [...state.selectedStudents], affectedClasses: [] };
+    },
+    getTargetStudents() {
+      return selectedPupils();
+    },
+  };
+}
 // ==========================================================================
 // EVENTS CALENDAR COMPONENT
 // ==========================================================================
 class EventsCalendar {
-  constructor({ containerId, events = [], canManage = false, onDeleteEvent, onEventAdded }) {
+  constructor({ containerId, events = [], canManage = false, onDeleteEvent, onEventAdded, onEventUpdated, canEditEvent, canDeleteEvent }) {
     this.container = document.getElementById(containerId);
     this.events = events;
     this.canManage = canManage;
     this.onDeleteEvent = onDeleteEvent;
     this.onEventAdded = onEventAdded;
+    this.onEventUpdated = onEventUpdated;
+    this.canEditEventFn = canEditEvent;
+    this.canDeleteEventFn = canDeleteEvent;
     this.currentDate = new Date();
     this.viewMode = 'calendar'; // 'calendar' or 'schedule'
     this.render();
@@ -482,7 +797,20 @@ class EventsCalendar {
     this.render();
   }
 
+  canEdit(ev) {
+    return this.canManage && (!this.canEditEventFn || this.canEditEventFn(ev));
+  }
+
+  canDelete(ev) {
+    return this.canManage && (!this.canDeleteEventFn || this.canDeleteEventFn(ev));
+  }
+
   showEventDetails(ev) {
+    const canEditEvent = this.canEdit(ev);
+    const canDeleteEvent = this.canDelete(ev);
+    const escapeValue = (value = '') => String(value).replace(/[&<>"']/g, (character) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[character]);
     const formattedDate = this.getEventDate(ev).toLocaleDateString(undefined, {
       weekday: 'long',
       year: 'numeric',
@@ -500,35 +828,36 @@ class EventsCalendar {
       <h3>Event Details</h3>
       <div class="event-detail-item">
         <div class="event-detail-label">Event Title</div>
-        <div class="event-detail-val" style="font-weight:700; font-size:17px; color:var(--primary);">${ev.title}</div>
+        <div class="event-detail-val" style="font-weight:700; font-size:17px; color:var(--primary);">${escapeValue(ev.title)}</div>
       </div>
       <div class="event-detail-item">
         <div class="event-detail-label">Date</div>
-        <div class="event-detail-val"><i class="fa-regular fa-calendar" style="margin-right:6px; color:var(--primary);"></i> ${formattedDate}</div>
+        <div class="event-detail-val"><i class="fa-regular fa-calendar" style="margin-right:6px; color:var(--primary);"></i> ${formattedDate}${ev.time ? ` · ${escapeValue(ev.time)}` : ''}</div>
       </div>
+      ${ev.venue ? `<div class="event-detail-item"><div class="event-detail-label">Venue</div><div class="event-detail-val">${escapeValue(ev.venue)}</div></div>` : ''}
       <div class="event-detail-item">
         <div class="event-detail-label">Audience</div>
         <div class="event-detail-val">
           <span class="badge ${ev.audience === 'teachers' ? 'pending' : (ev.audience === 'parents' ? 'partial' : 'approved')}">
-            ${audienceLabels[ev.audience] || ev.audience || 'All'}
+            ${escapeValue(audienceLabels[ev.audience] || ev.audience || 'All')}
           </span>
         </div>
       </div>
       ${ev.description ? `
         <div class="event-detail-item">
           <div class="event-detail-label">Description</div>
-          <div class="event-detail-val" style="background:#F8FAFC; padding:12px; border-radius:8px; border:1px solid #E2E8F0; line-height:1.5;">${ev.description}</div>
+          <div class="event-detail-val" style="background:#F8FAFC; padding:12px; border-radius:8px; border:1px solid #E2E8F0; line-height:1.5;">${escapeValue(ev.description).replace(/\r?\n/g, '<br>')}</div>
         </div>
       ` : ''}
 
       <div style="display:flex; justify-content:space-between; align-items:center; margin-top:24px; padding-top:16px; border-top:1px solid #E2E8F0;">
         <div style="display:flex; gap:8px;">
-          ${this.canManage && this.onEventUpdated ? `
+          ${canEditEvent && this.onEventUpdated ? `
             <button class="btn btn-secondary btn-sm" id="calEditEventBtn">
               <i class="fa-solid fa-pen-to-square"></i> Edit Event
             </button>
           ` : ''}
-          ${this.canManage ? `
+          ${canDeleteEvent && this.onDeleteEvent ? `
             <button class="btn btn-danger btn-sm" id="calDeleteEventBtn">
               <i class="fa-solid fa-trash-can"></i> Remove Event
             </button>
@@ -541,8 +870,9 @@ class EventsCalendar {
     document.getElementById('calCloseEventBtn').addEventListener('click', () => Modal.close());
     const editBtn = document.getElementById('calEditEventBtn');
     if (editBtn) editBtn.addEventListener('click', () => this.showEditEvent(ev));
-    if (this.canManage && this.onDeleteEvent) {
-      document.getElementById('calDeleteEventBtn').addEventListener('click', async () => {
+    const deleteBtn = document.getElementById('calDeleteEventBtn');
+    if (deleteBtn && canDeleteEvent && this.onDeleteEvent) {
+      deleteBtn.addEventListener('click', async () => {
         if (confirm(`Are you sure you want to remove the event "${ev.title}"?`)) {
           Modal.close();
           await this.onDeleteEvent(ev._id);
@@ -552,14 +882,21 @@ class EventsCalendar {
   }
 
   showEditEvent(ev) {
+    const escapeValue = (value = '') => String(value).replace(/[&<>"']/g, (character) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[character]);
     const date = this.getEventDate(ev);
     const dateValue = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
     Modal.open(`
       <h3>Edit School Event</h3>
       <div id="editEventMsg" class="form-msg"></div>
       <form id="editEventForm">
-        <div class="field"><label>Event Title</label><input id="editEventTitle" value="${ev.title}" required /></div>
+        <div class="field"><label>Event Title</label><input id="editEventTitle" value="${escapeValue(ev.title)}" required /></div>
         <div class="field"><label>Event Date</label><input type="date" id="editEventDate" value="${dateValue}" required /></div>
+        <div class="grid-2">
+          <div class="field"><label for="editEventTime">Time</label><input type="time" id="editEventTime" value="${escapeValue(ev.time || '09:00')}" required /></div>
+          <div class="field"><label for="editEventVenue">Venue</label><input id="editEventVenue" value="${escapeValue(ev.venue || '')}" required /></div>
+        </div>
         <div class="field"><label>Target Audience</label>
           <select id="editEventAudience">
             <option value="all" ${ev.audience === 'all' ? 'selected' : ''}>Everyone (Parents &amp; Staff)</option>
@@ -567,7 +904,7 @@ class EventsCalendar {
             <option value="teachers" ${ev.audience === 'teachers' ? 'selected' : ''}>Teachers only</option>
           </select>
         </div>
-        <div class="field"><label>Description / Details</label><textarea id="editEventDescription" rows="3">${ev.description || ''}</textarea></div>
+        <div class="field"><label>Description / Details</label><textarea id="editEventDescription" rows="3">${escapeValue(ev.description || '')}</textarea></div>
         <button class="btn btn-primary btn-block" type="submit" style="margin-top:14px;">Save Changes</button>
       </form>
     `);
@@ -578,6 +915,8 @@ class EventsCalendar {
         await this.onEventUpdated(ev._id, {
           title: document.getElementById('editEventTitle').value.trim(),
           date: document.getElementById('editEventDate').value,
+          time: document.getElementById('editEventTime').value,
+          venue: document.getElementById('editEventVenue').value.trim(),
           audience: document.getElementById('editEventAudience').value,
           description: document.getElementById('editEventDescription').value.trim(),
         });
@@ -753,7 +1092,7 @@ class EventsCalendar {
                     </div>
                     <div class="schedule-event-actions">
                       <button class="btn btn-secondary btn-sm" data-view-event-id="${ev._id}"><i class="fa-solid fa-eye"></i> Details</button>
-                      ${this.canManage ? `<button class="btn btn-ghost btn-sm" data-del-event-id="${ev._id}" aria-label="Remove ${ev.title}" title="Remove event"><i class="fa-solid fa-trash-can"></i></button>` : ''}
+                      ${this.canDelete(ev) && this.onDeleteEvent ? `<button class="btn btn-ghost btn-sm" data-del-event-id="${ev._id}" aria-label="Remove ${ev.title}" title="Remove event"><i class="fa-solid fa-trash-can"></i></button>` : ''}
                     </div>
                   </article>
                 `;
@@ -1177,12 +1516,6 @@ function openPickupFormModal({ studentId, pickup = null }, onSaved) {
         <input type="tel" id="ppContact" value="${isEditing ? pickup.contact : ''}" placeholder="e.g. 0917 123 4567" required />
       </div>
 
-      <div class="field">
-        <label for="ppId">Identification / Additional Details</label>
-        <input type="text" id="ppId" value="${isEditing ? (pickup.identification || '') : ''}" placeholder="e.g. Driver's License #, Authorized on Fridays" />
-        <div class="field-hint">Specify ID type, number, or any specific pickup authorization instructions.</div>
-      </div>
-
       <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:20px;">
         <button type="button" class="btn btn-ghost" id="cancelPickupBtn">Cancel</button>
         <button type="submit" class="btn btn-primary">${isEditing ? 'Save Changes' : 'Add Person'}</button>
@@ -1200,7 +1533,6 @@ function openPickupFormModal({ studentId, pickup = null }, onSaved) {
       authorizedName: document.getElementById('ppName').value.trim(),
       relationship: document.getElementById('ppRel').value.trim(),
       contact: document.getElementById('ppContact').value.trim(),
-      identification: document.getElementById('ppId').value.trim(),
     };
 
     try {
