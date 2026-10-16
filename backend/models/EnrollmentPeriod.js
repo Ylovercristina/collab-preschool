@@ -7,6 +7,7 @@ const enrollmentPeriodSchema = new mongoose.Schema(
     opensAt: { type: Date, required: true },
     closesAt: { type: Date, required: true },
     enabled: { type: Boolean, default: true },
+    startedAt: { type: Date },
   },
   { timestamps: true }
 );

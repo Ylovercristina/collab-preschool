@@ -11,11 +11,12 @@ const enrollmentApplicationSchema = new mongoose.Schema(
     schoolYear: { type: String, required: true, trim: true, maxlength: 40 },
     studentName: { type: String, required: true, trim: true, maxlength: 120 },
     birthdate: { type: Date, required: true },
+    identityKey: { type: String, select: false },
     guardianName: { type: String, trim: true, maxlength: 120, default: '' },
     requestedClass: { type: String, trim: true, maxlength: 80, default: '' },
     guardianPhone: { type: String, trim: true, maxlength: 30, default: '' },
     notes: { type: String, trim: true, maxlength: 1000, default: '' },
-    status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
+    status: { type: String, enum: ['pending', 'approving', 'approved', 'rejected'], default: 'pending' },
     student: { type: mongoose.Schema.Types.ObjectId, ref: 'Student' },
     reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     reviewedAt: { type: Date },
@@ -24,5 +25,6 @@ const enrollmentApplicationSchema = new mongoose.Schema(
 );
 
 enrollmentApplicationSchema.index({ applicant: 1, period: 1, studentName: 1 });
+enrollmentApplicationSchema.index({ identityKey: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model('EnrollmentApplication', enrollmentApplicationSchema);

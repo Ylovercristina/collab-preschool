@@ -150,27 +150,80 @@
     </section>
 
     <section class="panel" id="panel-enrollment">
-      <div style="margin-bottom:20px;">
-        <h1 style="margin:0;">Enrollment Management</h1>
-        <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Set the term currently accepting applications and review parent submissions.</p>
+      <div class="enrollment-page-heading">
+        <h1>Enrollment Management</h1>
+        <p>Set the term currently accepting applications and review parent and teacher submissions.</p>
       </div>
-      <div class="card" style="max-width:760px; margin-bottom:20px;">
-        <h3 style="margin-top:0;">Enrollment availability</h3>
-        <div id="adminEnrollmentMessage" class="form-msg" aria-live="polite"></div>
-        <form id="enrollmentPeriodForm">
-          <div class="grid-2">
-            <div class="field"><label for="enrollmentTerm">Term / semester</label><input id="enrollmentTerm" maxlength="80" placeholder="e.g. First Semester" required /></div>
-            <div class="field"><label for="enrollmentSchoolYear">School year</label><input id="enrollmentSchoolYear" maxlength="40" placeholder="e.g. 2026–2027" required /></div>
-            <div class="field"><label for="enrollmentOpensAt">Opens on</label><input id="enrollmentOpensAt" type="date" required /></div>
-            <div class="field"><label for="enrollmentClosesAt">Closes on</label><input id="enrollmentClosesAt" type="date" required /></div>
+      <div class="enrollment-category-tabs" role="tablist" aria-label="Enrollment management sections">
+        <button type="button" class="enrollment-category-tab active" id="enrollmentAvailabilityTab" data-enrollment-view="availability" role="tab" aria-controls="enrollmentAvailabilityView" aria-selected="true"><i class="fa-solid fa-calendar-check"></i> Availability</button>
+        <button type="button" class="enrollment-category-tab" id="enrollmentApplicationsTab" data-enrollment-view="applications" role="tab" aria-controls="enrollmentApplicationsView" aria-selected="false"><i class="fa-solid fa-file-signature"></i> Applications <span id="enrollmentPendingTabCount" class="enrollment-tab-count">0</span></button>
+        <button type="button" class="enrollment-category-tab" id="enrollmentCompletedTab" data-enrollment-view="completed" role="tab" aria-controls="enrollmentCompletedView" aria-selected="false"><i class="fa-solid fa-circle-check"></i> Completed <span id="enrollmentCompletedTabCount" class="enrollment-tab-count">0</span></button>
+      </div>
+      <div class="enrollment-workspace">
+        <section class="enrollment-view active" id="enrollmentAvailabilityView" role="tabpanel" aria-labelledby="enrollmentAvailabilityTab">
+          <div class="card enrollment-settings-card">
+            <div class="enrollment-settings-heading">
+              <span class="icon-box enrollment-settings-icon"><i class="fa-solid fa-calendar-check"></i></span>
+              <div>
+                <h2>Enrollment availability</h2>
+                <p>Choose when families and staff can submit applications.</p>
+              </div>
+              <span id="adminEnrollmentAvailabilityBadge" class="enrollment-settings-status">Loading status</span>
+            </div>
+            <div id="adminEnrollmentMessage" class="form-msg" aria-live="polite"></div>
+            <form id="enrollmentPeriodForm">
+              <div class="grid-2">
+                <div class="field"><label for="enrollmentTerm">Term / semester</label><input id="enrollmentTerm" maxlength="80" placeholder="e.g. First Semester" required /></div>
+                <div class="field"><label for="enrollmentSchoolYear">School year</label><input id="enrollmentSchoolYear" maxlength="40" placeholder="e.g. 2026–2027" required /></div>
+                <div class="field"><label for="enrollmentOpensAt">Opens on</label><input id="enrollmentOpensAt" type="date" required /></div>
+                <div class="field"><label for="enrollmentClosesAt">Closes on</label><input id="enrollmentClosesAt" type="date" required /></div>
+              </div>
+              <div class="enrollment-period-toggle">
+                <div>
+                  <strong>Accept applications</strong>
+                  <span>Allow parents and teachers to submit during this enrollment period.</span>
+                </div>
+                <label class="enrollment-switch" for="enrollmentEnabled" aria-label="Accept applications during this period">
+                  <input id="enrollmentEnabled" type="checkbox" checked />
+                  <span aria-hidden="true"></span>
+                </label>
+              </div>
+              <div class="enrollment-settings-footer">
+                <div class="enrollment-settings-actions">
+                  <button class="btn btn-primary" id="enrollmentSubmitButton" type="submit"><i class="fa-solid fa-floppy-disk"></i> Save changes</button>
+                  <button class="btn btn-ghost" id="cancelEnrollmentEdit" type="button" hidden>Cancel edit</button>
+                </div>
+                <p id="adminEnrollmentStatus" aria-live="polite"></p>
+              </div>
+            </form>
           </div>
-          <label style="display:flex; align-items:center; gap:8px; margin:4px 0 14px;"><input id="enrollmentEnabled" type="checkbox" checked /> Accept applications during this period</label>
-          <button class="btn btn-primary" type="submit"><i class="fa-solid fa-floppy-disk"></i> Save availability</button>
-        </form>
-        <p id="adminEnrollmentStatus" style="margin:12px 0 0; color:var(--ink-muted);"></p>
+          <section class="card enrollment-saved-period" id="adminEnrollmentSavedPeriod" hidden aria-live="polite"></section>
+        </section>
+        <section class="enrollment-view" id="enrollmentApplicationsView" role="tabpanel" aria-labelledby="enrollmentApplicationsTab" hidden>
+          <section class="card enrollment-applications-panel">
+            <div class="enrollment-applications-panel-heading">
+              <div>
+                <h2>Enrollment applications</h2>
+                <p>Review applications submitted by parents and teachers.</p>
+              </div>
+              <div id="adminEnrollmentApplicationCounts" class="enrollment-application-counts" aria-live="polite"></div>
+            </div>
+            <div id="adminEnrollmentApplications" class="table-responsive enrollment-applications-table"></div>
+          </section>
+        </section>
+        <section class="enrollment-view" id="enrollmentCompletedView" role="tabpanel" aria-labelledby="enrollmentCompletedTab" hidden>
+          <section class="card enrollment-completed-panel">
+            <div class="enrollment-applications-panel-heading">
+              <div>
+                <h2>Completed enrollments</h2>
+                <p>Approved students added to the official roster.</p>
+              </div>
+              <span id="adminEnrollmentCompletedCount" class="enrollment-application-total">0 students</span>
+            </div>
+            <div id="adminEnrollmentCompleted"></div>
+          </section>
+        </section>
       </div>
-      <h2 style="font-size:19px;">Enrollment applications</h2>
-      <div id="adminEnrollmentApplications" class="table-responsive"></div>
     </section>
 
     <section class="panel" id="panel-academic-progress">
