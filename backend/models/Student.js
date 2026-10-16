@@ -24,10 +24,13 @@ const studentSchema = new mongoose.Schema(
     documents: { type: [documentSchema], default: [], select: false },
     parent: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     teacher: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    enrollmentApplication: { type: mongoose.Schema.Types.ObjectId, ref: 'EnrollmentApplication' },
     status: { type: String, enum: ['active', 'archived'], default: 'active' },
     notes: { type: String, trim: true },
   },
   { timestamps: true }
 );
+
+studentSchema.index({ enrollmentApplication: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model('Student', studentSchema);
