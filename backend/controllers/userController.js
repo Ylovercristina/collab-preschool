@@ -6,7 +6,18 @@ const fs = require('fs');
 const path = require('path');
 
 function publicUser(u) {
-  return { id: u._id, name: u.name, email: u.email, role: u.role, status: u.status, phone: u.phone, createdAt: u.createdAt };
+  return {
+    id: u._id,
+    name: u.name,
+    email: u.email,
+    role: u.role,
+    status: u.status,
+    phone: u.phone,
+    emailVerified: u.emailVerified === true && Boolean(u.emailVerifiedBy),
+    emailVerifiedAt: u.emailVerifiedAt || null,
+    emailVerifiedBy: u.emailVerifiedBy || null,
+    createdAt: u.createdAt,
+  };
 }
 
 function profileUser(user) {
@@ -21,6 +32,8 @@ function profileUser(user) {
     middleName,
     lastName,
     email: user.email,
+    emailVerified: user.role === 'parent' && user.emailVerified === true && Boolean(user.emailVerifiedBy),
+    emailVerifiedAt: user.emailVerifiedAt || null,
     role: user.role,
     phone: user.phone || '',
     address: user.address || '',
@@ -137,6 +150,11 @@ exports.updateMyProfile = async (req, res) => {
     user.firstName = firstName;
     user.middleName = middleName;
     user.lastName = lastName;
+    if (user.role === 'parent' && user.email !== email) {
+      user.emailVerified = false;
+      user.emailVerifiedAt = null;
+      user.emailVerifiedBy = null;
+    }
     user.email = email;
     user.address = address;
     user.phone = phone;
@@ -243,6 +261,8 @@ exports.updateUserProfile = async (req, res) => {
     }
 
     const previousAvatar = user.avatar;
+    const emailChanged = user.email !== email;
+    const becomingParent = user.role !== 'parent' && role === 'parent';
     user.firstName = firstName;
     user.middleName = middleName;
     user.lastName = lastName;
@@ -251,6 +271,11 @@ exports.updateUserProfile = async (req, res) => {
     user.phone = phone;
     user.address = address;
     user.role = role;
+    if ((emailChanged && role === 'parent') || becomingParent) {
+      user.emailVerified = false;
+      user.emailVerifiedAt = null;
+      user.emailVerifiedBy = null;
+    }
     user.childrenNames = role === 'parent' ? childrenNames : [];
     if (req.file) user.avatar = `/uploads/profiles/${req.file.filename}`;
 
@@ -413,4 +438,21 @@ exports.reactivateUser = async (req, res) => {
   if (!user) return res.status(404).json({ message: 'User not found.' });
   await logActivity(req.user._id, 'user-reactivated', user.email);
   res.json({ user: publicUser(user) });
+};
+
+// PATCH /api/users/:id/verify-email (admin verifies a parent's current address)
+exports.verifyParentEmail = async (req, res) => {
+  try {
+    const user = await User.findOneAndUpdate(
+      { _id: req.params.id, role: 'parent', status: { $ne: 'archived' } },
+      { $set: { emailVerified: true, emailVerifiedAt: new Date(), emailVerifiedBy: req.user._id } },
+      { new: true, runValidators: true }
+    );
+    if (!user) return res.status(404).json({ message: 'Parent account not found.' });
+    await logActivity(req.user._id, 'parent-email-verified', user.email);
+    return res.json({ user: publicUser(user) });
+  } catch (err) {
+    console.error('Could not verify parent email:', err.message);
+    return res.status(500).json({ message: 'Could not verify this email address.' });
+  }
 };

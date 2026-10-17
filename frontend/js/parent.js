@@ -4,9 +4,15 @@ let myChildren = [];
 let activeChildId = null;
 let activeTeacherId = null;
 let parentCalendar = null;
+let notificationFilter = 'all';
+let notificationSearchQuery = '';
+let knownNotificationIds = new Set();
+let notificationsInitialized = false;
+let notificationPolling = false;
 
 function onPanelShown(panel) {
   if (panel === 'overview') return loadOverview(true);
+  if (panel === 'notifications') return loadPaymentNotifications();
   if (panel === 'enrollment') return loadParentEnrollment();
   if (panel === 'progress') return renderProgress();
   if (panel === 'attendance') return renderAttendance();
@@ -60,18 +66,7 @@ async function loadChildren() {
 async function loadOverview(skipChildLoad) {
   if (!skipChildLoad) await loadChildren();
 
-  await loadPaymentNotifications();
-  const { alerts } = await api.get('/alerts');
-  const recent = alerts.slice(0, 2);
-  document.getElementById('alertsBanner').innerHTML = recent.map((a) => `
-    <div class="alert-banner">
-      <i class="fa-solid fa-triangle-exclamation"></i>
-      <div>
-        <strong style="font-size:15px;">${a.title}</strong>
-        <p style="margin:4px 0 0; color:#7F1D1D;">${a.message}</p>
-      </div>
-    </div>
-  `).join('');
+  await Promise.all([loadPaymentNotifications(), renderEmergencyBanners()]);
 
   if (!activeChildId) {
     document.getElementById('latestProgress').innerHTML = '<div class="empty-state"><p>No child selected.</p></div>';
@@ -93,52 +88,217 @@ async function loadOverview(skipChildLoad) {
   document.getElementById('upcomingEvents').innerHTML = upcoming.length
     ? upcoming.map((e) => `
       <div class="list-row">
-        <span><strong>${e.title}</strong></span>
+        <span><strong>${escapeParentMessage(e.title)}</strong></span>
         <span style="font-size:13px; color:var(--primary); font-weight:600;"><i class="fa-regular fa-calendar"></i> ${fmtDate(e.date)}</span>
       </div>
     `).join('')
     : '<div class="empty-state"><p>No upcoming school events scheduled.</p></div>';
 }
 
-async function loadPaymentNotifications() {
-  const container = document.getElementById('paymentNotifications');
+async function renderEmergencyBanners() {
+  const container = document.getElementById('alertsBanner');
   if (!container) return;
-  const { notifications } = await api.get('/notifications');
-  const unreadCount = notifications.filter((notification) => !notification.readAt).length;
-  container.innerHTML = notifications.length ? `
-    <div class="card" style="margin-bottom:20px;">
-      <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
-        <i class="fa-solid fa-bell" style="color:var(--primary);"></i>
-        <h3 style="margin:0;">Fee Payment Updates</h3>
-        ${unreadCount ? `<span class="badge pending">${unreadCount} unread</span>` : ''}
+  const { alerts } = await api.get('/alerts');
+  const unresolved = alerts.filter((alert) => alert.status !== 'all-clear'
+    && !(alert.acknowledgements || []).some((item) => String(item.parent?._id || item.parent) === String(user.id))).slice(0, 3);
+  container.innerHTML = unresolved.map((a) => {
+    const latestUpdate = (a.updates || []).slice(-1)[0];
+    return `
+    <div class="alert-banner">
+      <i class="fa-solid fa-triangle-exclamation"></i>
+      <div>
+        <strong style="font-size:15px;">URGENT: ${escapeParentMessage(a.title)}</strong>
+        <p style="margin:4px 0 0; color:#7F1D1D;">${escapeParentMessage(latestUpdate ? latestUpdate.message : (a.description || a.message))}</p>
+        ${a.safetyInstructions ? `<p style="margin:4px 0 0;"><strong>Instructions:</strong> ${escapeParentMessage(a.safetyInstructions)}</p>` : ''}
+        <p style="margin:4px 0 0;font-size:12px;">${escapeParentMessage(a.severity || 'high')} · Issued ${fmtDate(a.createdAt)}</p>
+        <button type="button" class="btn btn-danger btn-sm" data-ack-alert="${escapeParentMessage(a._id)}" style="margin-top:8px;">Acknowledge</button>
       </div>
-      ${notifications.map((notification) => `
-        <div class="list-row">
-          <div>
-            <strong>${notification.title}</strong>
-            <p style="margin:2px 0 4px; font-size:13.5px;">${notification.message}</p>
-            <span style="font-size:12px; color:var(--ink-muted);">${fmtDate(notification.createdAt)}</span>
-            <span class="badge ${notification.readAt ? 'approved' : 'pending'}" style="margin-left:6px;">${notification.readAt ? 'Read' : 'Unread'}</span>
-          </div>
-          <span style="display:flex; gap:6px;">
-            ${notification.payment && notification.fee ? `<button class="btn btn-ghost btn-sm" data-view-notification-receipt="${notification.payment._id}" data-fee-id="${notification.fee._id}">View Receipt</button>` : ''}
-            ${notification.readAt ? '' : `<button class="btn btn-ghost btn-sm" data-read-notification="${notification._id}">Mark read</button>`}
-          </span>
-        </div>
-      `).join('')}
     </div>
-  ` : '';
-
-  container.querySelectorAll('[data-read-notification]').forEach((button) => {
-    button.addEventListener('click', async () => {
-      await api.patch(`/notifications/${button.dataset.readNotification}/read`, {});
-      await loadPaymentNotifications();
-    });
-  });
-  container.querySelectorAll('[data-view-notification-receipt]').forEach((button) => {
-    button.addEventListener('click', () => showPaymentReceipt(button.dataset.feeId, button.dataset.viewNotificationReceipt));
-  });
+  `;
+  }).join('');
+  document.querySelectorAll('[data-ack-alert]').forEach((button) => button.addEventListener('click', async () => {
+    try {
+      await api.patch(`/alerts/${button.dataset.ackAlert}/acknowledge`, {});
+      showToast('Emergency acknowledged.', 'info');
+      await renderEmergencyBanners();
+    } catch (err) { alert(err.message); }
+  }));
 }
+
+function relativeNotificationTime(date) {
+  const minutes = Math.max(0, Math.floor((Date.now() - new Date(date).getTime()) / 60000));
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'} ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  const days = Math.floor(hours / 24);
+  return `${days} day${days === 1 ? '' : 's'} ago`;
+}
+
+async function loadPaymentNotifications({ silent = false } = {}) {
+  const fullContainer = document.getElementById('parentNotificationsList');
+  if (fullContainer && !notificationsInitialized) fullContainer.innerHTML = '<div class="notification-loading"><i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i> Loading notifications</div>';
+  let notifications;
+  let unreadCount;
+  try {
+    ({ notifications, unreadCount } = await api.get('/notifications'));
+  } catch (error) {
+    if (fullContainer) fullContainer.innerHTML = `<div class="notification-empty">${escapeParentMessage(error.message || 'Notifications could not be loaded.')}</div>`;
+    if (!silent) showToast(error.message || 'Notifications could not be loaded.', 'error');
+    return;
+  }
+  notifications = (notifications || []).slice().sort((left, right) => {
+    const priority = (right.priority || 0) - (left.priority || 0);
+    return priority || new Date(right.createdAt) - new Date(left.createdAt);
+  });
+  const nextIds = new Set(notifications.map((item) => item._id));
+  if (notificationsInitialized && !silent) {
+    notifications.filter((item) => !knownNotificationIds.has(item._id)).forEach((item) => showToast(`New ${item.type === 'emergency' ? 'emergency' : 'school'} notification: ${item.title}`, item.type === 'emergency' ? 'error' : 'info'));
+  }
+  knownNotificationIds = nextIds;
+  notificationsInitialized = true;
+  const badge = document.getElementById('notificationUnreadBadge');
+  if (badge) {
+    badge.hidden = unreadCount === 0;
+    badge.textContent = unreadCount;
+    badge.setAttribute('aria-label', `${unreadCount} unread notifications`);
+  }
+  const renderList = (container, compact = false) => {
+    if (!container) return;
+    const filtered = compact ? notifications.filter((notification) => !notification.readAt).slice(0, 3) : notifications.filter((notification) => (
+      notificationFilter === 'all'
+      || (notificationFilter === 'events' && notification.type === 'event')
+      || (notificationFilter === 'emergencies' && notification.type === 'emergency')
+      || (notificationFilter === 'unread' && !notification.readAt)
+    )).filter((notification) => !notificationSearchQuery
+      || `${notification.title} ${notification.message} ${notification.type}`.toLowerCase().includes(notificationSearchQuery));
+    if (!filtered.length) {
+      if (compact) {
+        container.innerHTML = '<div class="notification-empty">No new notifications.</div>';
+      } else {
+        container.innerHTML = `<div class="record-category-tabs" role="tablist" aria-label="Notification type">${[['all', 'All'], ['events', 'Events'], ['emergencies', 'Emergencies'], ['unread', 'Unread']].map(([value, label]) => `<button type="button" class="record-category-tab ${notificationFilter === value ? 'active' : ''}" data-notification-filter="${value}" role="tab" aria-selected="${notificationFilter === value}">${label}</button>`).join('')}</div><div class="records-filterbar"><input id="notificationSearchInput" data-notification-search type="search" value="${escapeParentMessage(notificationSearchQuery)}" placeholder="Search title or message..." aria-label="Search notifications" /><button type="button" class="btn btn-secondary btn-sm" data-mark-all-read ${unreadCount ? '' : 'disabled'}><i class="fa-solid fa-check-double" aria-hidden="true"></i> Mark all as read</button><span class="records-result-count">0 notifications</span></div><div class="notification-empty">${notifications.length ? 'No notifications match these filters.' : 'No notifications yet.'}</div>`;
+        bindFullNotificationControls(container, notifications, renderList);
+      }
+      return;
+    }
+    if (!compact) {
+      container.innerHTML = `
+        <div class="record-category-tabs" role="tablist" aria-label="Notification type">
+          ${[['all', 'All'], ['events', 'Events'], ['emergencies', 'Emergencies'], ['unread', 'Unread']].map(([value, label]) => `<button type="button" class="record-category-tab ${notificationFilter === value ? 'active' : ''}" data-notification-filter="${value}" role="tab" aria-selected="${notificationFilter === value}">${label}</button>`).join('')}
+        </div>
+        <div class="records-filterbar">
+          <input id="notificationSearchInput" data-notification-search type="search" value="${escapeParentMessage(notificationSearchQuery)}" placeholder="Search title or message..." aria-label="Search notifications" />
+          <button type="button" class="btn btn-secondary btn-sm" data-mark-all-read ${unreadCount ? '' : 'disabled'}><i class="fa-solid fa-check-double" aria-hidden="true"></i> Mark all as read</button>
+          <span class="records-result-count">Showing ${filtered.length} of ${notifications.length} notifications</span>
+        </div>
+        <div class="table-responsive">
+          <table class="notification-table">
+            <thead><tr><th>Type</th><th>Notification</th><th>Received</th><th>Status</th><th>Action</th></tr></thead>
+            <tbody>${filtered.map((notification) => {
+              const emergency = notification.type === 'emergency';
+              const icon = emergency ? 'fa-triangle-exclamation' : (notification.type === 'event' ? 'fa-calendar-days' : 'fa-receipt');
+              return `<tr class="${emergency ? 'notification-emergency-row' : ''} ${notification.readAt ? '' : 'notification-unread-row'}">
+                <td><span class="badge ${emergency ? 'archived' : 'approved'}"><i class="fa-solid ${icon}" aria-hidden="true"></i> ${emergency ? 'Emergency' : (notification.type === 'event' ? 'Event' : 'Fee')}</span></td>
+                <td><strong>${escapeParentMessage(notification.title)}</strong><div class="notification-preview">${escapeParentMessage(notification.message)}</div></td>
+                <td><time datetime="${escapeParentMessage(notification.createdAt)}">${relativeNotificationTime(notification.createdAt)}</time></td>
+                <td><span class="badge ${notification.readAt ? 'approved' : 'pending'}">${notification.readAt ? 'Read' : 'Unread'}</span></td>
+                <td><div class="notification-row-actions"><button type="button" class="btn btn-ghost btn-sm" data-open-notification="${escapeParentMessage(notification._id)}">Details</button>${notification.payment && notification.fee ? `<button type="button" class="btn btn-ghost btn-sm" data-view-notification-receipt="${escapeParentMessage(notification.payment._id)}" data-fee-id="${escapeParentMessage(notification.fee._id)}">Receipt</button>` : ''}</div></td>
+              </tr>`;
+            }).join('')}</tbody>
+          </table>
+        </div>
+      `;
+      bindFullNotificationControls(container, notifications, renderList);
+      return;
+    }
+    container.innerHTML = `
+      <div class="${compact ? 'card' : ''}" style="${compact ? 'margin-bottom:20px;' : ''}">
+        ${compact ? `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;"><i class="fa-solid fa-bell" style="color:var(--primary);"></i><h3 style="margin:0;">Recent unread notifications</h3>${unreadCount ? `<span class="badge pending">${unreadCount} unread</span>` : ''}<button type="button" class="btn btn-ghost btn-sm" data-open-notifications-panel>All</button></div>` : `
+          <div class="parent-notification-toolbar">
+            <div class="notification-filters" role="group" aria-label="Filter notifications">
+              ${[['all', 'All'], ['events', 'Events'], ['emergencies', 'Emergencies'], ['unread', 'Unread']].map(([value, label]) => `<button type="button" class="btn btn-ghost btn-sm notification-filter" data-notification-filter="${value}" aria-pressed="${notificationFilter === value}">${label}</button>`).join('')}
+            </div>
+            <button type="button" class="btn btn-secondary btn-sm" data-mark-all-read ${unreadCount ? '' : 'disabled'}><i class="fa-solid fa-check-double" aria-hidden="true"></i> Mark all as read</button>
+          </div>
+        `}
+        ${filtered.map((notification) => {
+          const emergency = notification.type === 'emergency';
+          const icon = emergency ? 'fa-triangle-exclamation' : (notification.type === 'event' ? 'fa-calendar-days' : 'fa-receipt');
+          return `<article class="notification-row ${!notification.readAt ? 'unread' : ''} ${emergency ? 'notification-type-emergency' : ''}">
+            <span class="notification-type-icon"><i class="fa-solid ${icon}" aria-hidden="true"></i></span>
+            <div><div class="notification-title">${escapeParentMessage(notification.title)}</div><p style="margin:2px 0 4px;font-size:13px;">${escapeParentMessage(notification.message)}</p><time datetime="${escapeParentMessage(notification.createdAt)}" style="font-size:12px;color:var(--ink-muted);">${relativeNotificationTime(notification.createdAt)}</time></div>
+            <div style="display:flex;align-items:center;gap:6px;">${!notification.readAt ? '<span class="notification-unread-dot" aria-label="Unread"></span>' : ''}<button type="button" class="btn btn-ghost btn-sm" data-open-notification="${escapeParentMessage(notification._id)}">Details</button>${notification.payment && notification.fee ? `<button type="button" class="btn btn-ghost btn-sm" data-view-notification-receipt="${escapeParentMessage(notification.payment._id)}" data-fee-id="${escapeParentMessage(notification.fee._id)}">Receipt</button>` : ''}</div>
+          </article>`;
+        }).join('')}
+      </div>
+    `;
+  };
+  renderList(document.getElementById('paymentNotifications'), true);
+  renderList(document.getElementById('parentNotificationsList'));
+  document.querySelectorAll('[data-open-notifications-panel]').forEach((button) => button.addEventListener('click', () => {
+    document.querySelector('.nav-item[data-panel="notifications"]')?.click();
+  }));
+}
+
+function bindFullNotificationControls(container, notifications, renderList) {
+  container.querySelectorAll('[data-notification-filter]').forEach((button) => button.addEventListener('click', () => {
+    notificationFilter = button.dataset.notificationFilter;
+    renderList(container);
+    bindFullNotificationControls(container, notifications, renderList);
+  }));
+  container.querySelector('[data-notification-search]')?.addEventListener('input', (event) => {
+    notificationSearchQuery = event.target.value.trim().toLowerCase();
+    renderList(container);
+    bindFullNotificationControls(container, notifications, renderList);
+    const search = container.querySelector('[data-notification-search]');
+    search?.focus();
+    search?.setSelectionRange(notificationSearchQuery.length, notificationSearchQuery.length);
+  });
+  container.querySelector('[data-mark-all-read]')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    const unread = notifications.filter((notification) => !notification.readAt);
+    button.disabled = true;
+    try {
+      await Promise.all(unread.map((notification) => api.patch(`/notifications/${notification._id}/read`, {})));
+      await loadPaymentNotifications({ silent: true });
+      showToast('All notifications marked as read.');
+    } catch (error) {
+      showToast(error.message || 'Could not mark all notifications as read.', 'error');
+      button.disabled = false;
+    }
+  });
+  container.querySelectorAll('[data-open-notification]').forEach((button) => button.addEventListener('click', async () => {
+    const notification = notifications.find((item) => item._id === button.dataset.openNotification);
+    if (!notification) return;
+    if (!notification.readAt) await api.patch(`/notifications/${notification._id}/read`, {});
+    const event = notification.event;
+    const alert = notification.alert;
+    const details = event ? `
+      <p>${escapeParentMessage(event.description || notification.message)}</p>
+      <p><strong>Date:</strong> ${fmtDate(event.date)}<br><strong>Time:</strong> ${escapeParentMessage(event.time || '—')}<br><strong>Venue:</strong> ${escapeParentMessage(event.venue || '—')}</p>
+    ` : alert ? `
+      <p>${escapeParentMessage(notification.message)}</p>
+      ${alert.safetyInstructions ? `<p><strong>Safety instructions:</strong> ${escapeParentMessage(alert.safetyInstructions)}</p>` : ''}
+      <p><strong>Severity:</strong> ${escapeParentMessage(alert.severity || 'high')}<br><strong>Status:</strong> ${escapeParentMessage(alert.status || 'active')}</p>
+    ` : `<p>${escapeParentMessage(notification.message)}</p>`;
+    Modal.open(`<h3>${escapeParentMessage(notification.title)}</h3>${details}`);
+    await loadPaymentNotifications({ silent: true });
+  }));
+  container.querySelectorAll('[data-view-notification-receipt]').forEach((button) => button.addEventListener('click', () => {
+    showPaymentReceipt(button.dataset.feeId, button.dataset.viewNotificationReceipt);
+  }));
+}
+
+window.setInterval(async () => {
+  if (notificationPolling) return;
+  if (document.visibilityState !== 'visible') return;
+  notificationPolling = true;
+  try {
+    await Promise.all([loadPaymentNotifications({ silent: false }), renderEmergencyBanners()]);
+  } finally {
+    notificationPolling = false;
+  }
+}, 30000);
 
 // ---------- Progress ----------
 async function renderProgress() {

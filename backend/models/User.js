@@ -30,6 +30,8 @@ const userSchema = new mongoose.Schema(
     address: { type: String, trim: true, default: '' },
     childrenNames: { type: [String], default: [] },
     emailVerified: { type: Boolean, default: false },
+    emailVerifiedAt: { type: Date, default: null },
+    emailVerifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     role: { type: String, enum: ['admin', 'teacher', 'parent'], required: true },
     phone: { type: String, trim: true },
     employeeId: { type: String, unique: true, sparse: true },

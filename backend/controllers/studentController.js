@@ -14,7 +14,7 @@ exports.listStudents = async (req, res) => {
   const filter = { ...scopeFilter(req.user) };
   if (req.query.status) filter.status = req.query.status;
   const students = await Student.find(filter)
-    .populate('parent', 'name email phone')
+    .populate('parent', 'name email phone status emailVerified emailVerifiedBy')
     .populate('teacher', 'name email')
     .sort({ name: 1 });
   res.json({ students });
@@ -23,7 +23,7 @@ exports.listStudents = async (req, res) => {
 // GET /api/students/:id
 exports.getStudent = async (req, res) => {
   const student = await Student.findOne({ _id: req.params.id, ...scopeFilter(req.user) })
-    .populate('parent', 'name email phone')
+    .populate('parent', 'name email phone status emailVerified emailVerifiedBy')
     .populate('teacher', 'name email');
   if (!student) return res.status(404).json({ message: 'Student not found.' });
   res.json({ student });
@@ -36,7 +36,7 @@ exports.createStudent = async (req, res) => {
     const student = await Student.create({ name, birthdate, className, parent, teacher, notes });
     await logActivity(req.user._id, 'student-created', name);
     const populated = await Student.findById(student._id)
-      .populate('parent', 'name email phone')
+      .populate('parent', 'name email phone status emailVerified emailVerifiedBy')
       .populate('teacher', 'name email');
     res.status(201).json({ student: populated });
   } catch (err) {
@@ -59,7 +59,7 @@ exports.updateStudent = async (req, res) => {
     const filter = { _id: req.params.id };
     if (req.user.role === 'teacher') filter.teacher = req.user._id;
     const student = await Student.findOneAndUpdate(filter, update, { new: true, runValidators: true })
-      .populate('parent', 'name email phone')
+      .populate('parent', 'name email phone status emailVerified emailVerifiedBy')
       .populate('teacher', 'name email');
     if (!student) return res.status(404).json({ message: 'Student not found.' });
     await logActivity(req.user._id, 'student-updated', student.name);

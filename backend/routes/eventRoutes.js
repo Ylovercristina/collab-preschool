@@ -5,7 +5,9 @@ const ctrl = require('../controllers/eventController');
 router.use(protect);
 router.get('/', ctrl.listEvents);
 router.post('/', allowRoles('admin', 'teacher'), ctrl.createEvent);
+router.get('/:id/email-summary', allowRoles('admin', 'teacher'), ctrl.emailSummary);
+router.patch('/:id/review', allowRoles('admin'), ctrl.reviewEvent);
 router.patch('/:id', allowRoles('admin', 'teacher'), ctrl.updateEvent);
-router.delete('/:id', allowRoles('admin'), ctrl.deleteEvent);
+router.delete('/:id', allowRoles('admin', 'teacher'), ctrl.deleteEvent);
 
 module.exports = router;

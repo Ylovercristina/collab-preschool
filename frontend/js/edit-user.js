@@ -8,6 +8,20 @@ const editUserRole = document.getElementById('editRole');
 const editChildrenField = document.getElementById('editChildrenField');
 const editUserImage = document.getElementById('editUserImage');
 let editUserPreviewUrl = '';
+let loadedEditUser = null;
+
+function renderEmailVerification(user) {
+  const section = document.getElementById('editEmailVerification');
+  const badge = document.getElementById('editEmailVerificationBadge');
+  const button = document.getElementById('verifyEditEmailBtn');
+  const isParent = user.role === 'parent';
+  const verified = user.emailVerified === true;
+  const sameEmail = document.getElementById('editEmail').value.trim().toLowerCase() === user.email;
+  section.hidden = !isParent;
+  badge.textContent = verified ? `Verified${user.emailVerifiedAt ? ` on ${fmtDate(user.emailVerifiedAt)}` : ''}` : 'Not verified';
+  badge.className = `badge ${verified ? 'approved' : 'pending'}`;
+  button.hidden = !isParent || verified || !sameEmail || loadedEditUser?.role !== 'parent';
+}
 
 function imageUrl(avatar) {
   if (!avatar) return '';
@@ -46,6 +60,7 @@ function syncChildrenVisibility() {
 }
 
 function populateEditUser(user) {
+  loadedEditUser = user;
   document.getElementById('editFirstName').value = user.firstName || '';
   document.getElementById('editMiddleName').value = user.middleName || '';
   document.getElementById('editLastName').value = user.lastName || '';
@@ -55,6 +70,7 @@ function populateEditUser(user) {
   editUserRole.value = user.role;
   document.getElementById('editChildrenNames').value = (user.childrenNames || []).join('\n');
   syncChildrenVisibility();
+  renderEmailVerification(user);
   renderEditAvatar(user.avatar, user.name);
 }
 
@@ -76,6 +92,29 @@ async function loadEditUser() {
 }
 
 editUserRole.addEventListener('change', syncChildrenVisibility);
+editUserRole.addEventListener('change', () => renderEmailVerification({
+  ...loadedEditUser,
+  role: editUserRole.value,
+  emailVerified: loadedEditUser?.emailVerified && document.getElementById('editEmail').value === loadedEditUser.email,
+}));
+document.getElementById('editEmail').addEventListener('input', () => {
+  if (loadedEditUser) renderEmailVerification({
+    ...loadedEditUser,
+    role: editUserRole.value,
+    emailVerified: loadedEditUser.emailVerified && document.getElementById('editEmail').value.trim().toLowerCase() === loadedEditUser.email,
+  });
+});
+document.getElementById('verifyEditEmailBtn').addEventListener('click', async () => {
+  if (!loadedEditUser || editUserRole.value !== 'parent' || document.getElementById('editEmail').value.trim().toLowerCase() !== loadedEditUser.email) return;
+  if (!confirm(`Verify ${loadedEditUser.email} for ${loadedEditUser.name}? Only verify an address the parent controls.`)) return;
+  try {
+    const { user } = await api.patch(`/users/${encodeURIComponent(editUserId)}/verify-email`, {});
+    loadedEditUser = { ...loadedEditUser, ...user };
+    renderEmailVerification(loadedEditUser);
+  } catch (err) {
+    showMsg(document.getElementById('editUserMessage'), err.message);
+  }
+});
 editUserImage.addEventListener('change', () => {
   const file = editUserImage.files[0];
   if (!file) return;

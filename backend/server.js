@@ -1,12 +1,13 @@
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
-const path = require('path');
 const connectDB = require('./config/db');
 const ensureSeedAdmin = require('./utils/seed');
 const authController = require('./controllers/authController');
 const authRoutes = require('./routes/authRoutes');
+const emailService = require('./services/emailService');
 
 const app = express();
 
@@ -59,10 +60,10 @@ function logRegisteredAuthRoutes() {
 connectDB().then(async () => {
   await ensureSeedAdmin();
   try {
-    await authController.verifyEmailTransport();
+    await emailService.verifyEmailTransport();
     console.log('Email server ready');
   } catch (err) {
-    console.error('[email] SMTP verification failed:', authController.emailTransportError(err));
+    console.error('[email] SMTP verification failed:', emailService.emailTransportError(err));
   }
   logRegisteredAuthRoutes();
   app.listen(PORT, () => console.log(`[server] Play-is-School API running on port ${PORT}`));

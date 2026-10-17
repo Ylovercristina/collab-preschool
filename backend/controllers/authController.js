@@ -1,11 +1,11 @@
 
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
-const nodemailer = require('nodemailer');
 const bcrypt = require('bcryptjs');
 const { OAuth2Client } = require('google-auth-library');
 const User = require('../models/User');
 const logActivity = require('../utils/logActivity');
+const { sendEmail, verifyEmailTransport, emailTransportError } = require('../services/emailService');
 
 const RESET_OTP_TTL_MS = 5 * 60 * 1000;
 const RESET_OTP_COOLDOWN_MS = 60 * 1000;
@@ -16,29 +16,8 @@ const RESET_FIELDS = '+passwordResetOtpHash +passwordResetOtpExpires +passwordRe
 const GOOGLE_STATE_COOKIE = 'play_google_oauth_state';
 const GOOGLE_STATE_TTL_MS = 10 * 60 * 1000;
 const GOOGLE_HANDOFF_TTL_MS = 2 * 60 * 1000;
-const emailTransporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465,
-  secure: true,
-  auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS },
-});
-
 function logResetDebug(...args) {
   if (process.env.NODE_ENV !== 'production') console.log(...args);
-}
-
-function redactEmailSecret(value) {
-  let text = String(value || '');
-  if (process.env.EMAIL_PASS) text = text.split(process.env.EMAIL_PASS).join('[redacted]');
-  return text;
-}
-
-function emailTransportError(error) {
-  return {
-    message: redactEmailSecret(error.message),
-    code: error.code,
-    response: redactEmailSecret(error.response),
-  };
 }
 
 function isValidEmail(email) {
@@ -56,8 +35,7 @@ function clearResetOtp(user) {
 }
 
 async function sendResetOtp(user, otp) {
-  await emailTransporter.sendMail({
-    from: `Play-is-School <${process.env.EMAIL_USER}>`,
+  const result = await sendEmail({
     to: user.email,
     subject: 'Your Play-is-School password reset OTP',
     text: `Your Play-is-School password reset OTP is ${otp}. It expires in 5 minutes. If you did not request this, you can ignore this email.`,
@@ -70,9 +48,10 @@ async function sendResetOtp(user, otp) {
         <p style="font-size:13px;color:#64748b">For your security, never share this code. If you did not request a password reset, ignore this email.</p>
       </div>`,
   });
+  if (!result.success) throw new Error(result.error);
 }
 
-exports.verifyEmailTransport = () => emailTransporter.verify();
+exports.verifyEmailTransport = verifyEmailTransport;
 exports.emailTransportError = emailTransportError;
 
 
@@ -530,7 +509,7 @@ exports.googleCallback = async (req, res) => {
           email,
           googleId,
           avatar: typeof profile.picture === 'string' && profile.picture.startsWith('https://') ? profile.picture : null,
-          emailVerified: true,
+          emailVerified: false,
           role: 'parent',
           status: 'pending',
         });
@@ -551,7 +530,7 @@ exports.googleCallback = async (req, res) => {
     }
 
     if (!user.googleId) user.googleId = googleId;
-    if (resetEmail(user.email) === email) user.emailVerified = true;
+    if (user.role === 'parent' && !user.emailVerifiedBy) user.emailVerified = false;
     if (typeof profile.picture === 'string' && profile.picture.startsWith('https://')) user.avatar = profile.picture;
     await user.save();
 
