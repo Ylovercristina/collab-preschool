@@ -38,10 +38,6 @@ async function deliverOne(job) {
       await recordSkipped(job, parent, 'Parent account is not active.');
       return;
     }
-    if (!parent.emailVerified || !parent.emailVerifiedBy) {
-      await recordSkipped(job, parent, 'Email address not verified by an admin.');
-      return;
-    }
     if (!parent.email) {
       await recordSkipped(job, parent, 'Parent account has no email address.');
       return;
