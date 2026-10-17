@@ -1289,30 +1289,23 @@ document.getElementById('addEventBtn').addEventListener('click', async () => {
   try {
     const { students } = await api.get('/students');
     const classes = [...new Set(students.map((student) => student.className).filter(Boolean))].sort();
-    openEventComposer({
+      openEventComposer({
       classes,
-      onSave: (event) => api.post('/events', event),
-      onComplete: async ({ event, emailSummary }) => {
-        await loadEvents();
-        const output = document.getElementById('adminEventSummary');
-        output.textContent = event.publicationStatus === 'draft'
-          ? 'Draft saved.'
-          : `Sent ${emailSummary.sent}, skipped ${emailSummary.skipped}, failed ${emailSummary.failed}${emailSummary.complete ? '' : ' (delivery logs still updating)'}.`;
-        output.className = 'form-msg success';
-        if (!emailSummary.complete && event.emailRecipientCount) {
-          for (let attempt = 0; attempt < 20; attempt += 1) {
-            await new Promise((resolve) => setTimeout(resolve, 500));
-            const latest = await api.get(`/events/${event._id}/email-summary`);
-            const summary = latest.emailSummary;
-            output.textContent = `Sent ${summary.sent}, skipped ${summary.skipped}, failed ${summary.failed}${summary.complete ? '' : ' (delivery logs still updating)'}.`;
-            if (summary.complete) break;
-          }
-        }
-      },
-    });
-  } catch (err) {
-    showToast(err.message, 'error');
-  }
+  onSave: (event) => api.post('/events', event),
+
+  onComplete: async ({ event, emailSummary }) => {
+    await loadEvents();
+
+    const output = document.getElementById('adminEventSummary');
+
+    output.textContent = '';
+    output.className = 'form-msg';
+  },
+
+      });
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
 });
 
 let adminStudentCache = [];
@@ -1434,9 +1427,13 @@ document.getElementById('adminAlertForm').addEventListener('submit', (event) => 
   targets.forEach((student) => {
     if (student.parent) parents.set(String(student.parent._id || student.parent), student.parent);
   });
-  const emailEligible = [...parents.values()].filter((parent) => parent && typeof parent === 'object'
-    && parent.status === 'approved' && parent.email && parent.emailVerified && parent.emailVerifiedBy).length;
-  const contactSummary = Array.from(parents.values()).map((parent) => `<li>${escapeDashboardHtml(parent.name || 'Parent')} · ${escapeDashboardHtml(parent.email || 'No email')} · ${parent.emailVerified && parent.emailVerifiedBy ? 'Verified' : 'Not verified'}</li>`).join('');
+  const emailEligible = [...parents.values()].filter((parent) =>
+  parent &&
+  typeof parent === 'object' &&
+  parent.status === 'approved' &&
+  parent.email
+).length;
+    const contactSummary = Array.from(parents.values()).map((parent) => `<li>${escapeDashboardHtml(parent.name || 'Parent')} · ${escapeDashboardHtml(parent.email || 'No email')} · ${parent.emailVerified && parent.emailVerifiedBy ? 'Verified' : 'Not verified'}</li>`).join('');
   Modal.open(`<h3>Review Emergency Alert</h3><p class="alert-banner"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i><span>This will immediately notify parents by email.</span></p><p><strong>${escapeDashboardHtml(values.title)}</strong> · ${escapeDashboardHtml(values.severity)}</p><p>${escapeDashboardHtml(values.description)}</p><p><strong>Recipients:</strong> ${parents.size} linked parents; ${emailEligible} eligible email addresses</p><ul class="event-summary-list">${contactSummary || '<li>No linked parent accounts found.</li>'}</ul><div id="adminAlertConfirmError" class="form-msg" role="alert"></div><div class="event-form-actions"><button type="button" class="btn btn-ghost" id="cancelAdminAlertSend">Cancel</button><button type="button" class="btn btn-danger" id="confirmAdminAlertSend">Send Alert</button></div>`);
   document.getElementById('cancelAdminAlertSend').addEventListener('click', () => Modal.close());
   document.getElementById('confirmAdminAlertSend').addEventListener('click', async (confirmEvent) => {
@@ -1452,7 +1449,9 @@ document.getElementById('adminAlertForm').addEventListener('submit', (event) => 
         wholeDescription: 'All active pupils in the school',
       });
       await showAdminEmailSummary(response);
-      await loadAdminAlerts();
+await loadAdminAlerts();
+
+showToast('Emergency alert posted.');
     } catch (err) {
       showMsg(document.getElementById('adminAlertConfirmError'), err.message);
       setButtonLoading(button, false);
@@ -1460,25 +1459,28 @@ document.getElementById('adminAlertForm').addEventListener('submit', (event) => 
   });
 });
 
+
 async function showAdminEmailSummary(response) {
-  const output = document.getElementById('adminAlertEmailSummary');
-  const summary = response.emailSummary || { sent: 0, skipped: 0, failed: 0, expected: response.recipientCount || 0, complete: false };
-  const renderSummary = () => {
-    output.className = 'form-msg success';
-    output.textContent = `Emergency alert processed: ${summary.sent} sent, ${summary.failed} failed, ${summary.skipped} skipped.`;
+  const summary = response.emailSummary || {
+    sent: 0,
+    skipped: 0,
+    failed: 0,
+    expected: response.recipientCount || 0,
+    complete: false
   };
-  renderSummary();
+
   if (!summary.complete && response.alert?._id) {
     for (let attempt = 0; attempt < 20; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 500));
-      const latest = await api.get(`/alerts/${response.alert._id}/email-summary`);
+      const latest = await api.get(
+        `/alerts/${response.alert._id}/email-summary`
+      );
       Object.assign(summary, latest.emailSummary);
-      renderSummary();
       if (summary.complete) break;
     }
   }
-  showToast(`Emergency alert: ${summary.sent} sent, ${summary.failed} failed, ${summary.skipped} skipped.`, summary.failed ? 'error' : 'success');
 }
+
 
 // ---------- Activity Logs ----------
 async function loadLogs() {
