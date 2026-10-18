@@ -1242,10 +1242,24 @@ async function loadEvents() {
       <div class="event-review-actions"><button type="button" class="btn btn-primary btn-sm" data-review-event="${escapeDashboardHtml(event._id)}" data-decision="approved"><i class="fa-solid fa-check" aria-hidden="true"></i> Approve &amp; Publish</button><button type="button" class="btn btn-ghost btn-sm" data-review-event="${escapeDashboardHtml(event._id)}" data-decision="rejected"><i class="fa-solid fa-xmark" aria-hidden="true"></i> Reject</button></div>
     </article>
   `).join('') : '<div class="notification-empty">No teacher events are waiting for approval.</div>';
-  document.querySelectorAll('[data-review-event]').forEach((button) => button.addEventListener('click', () => {
-    const event = pending.find((item) => item._id === button.dataset.reviewEvent);
-    if (event) openEventReview(event, button.dataset.decision);
-  }));
+  document.querySelectorAll('[data-review-event]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const event = pending.find((item) => item._id === button.dataset.reviewEvent);
+      if (!event) return;
+      if (button.dataset.decision === 'approved') {
+        if (!confirm(`Approve and publish "${event.title}"? Parents will be notified and the event will appear on the parent calendar.`)) return;
+        try {
+          await api.put(`/events/${event._id}/approve`);
+          await loadEvents();
+          showToast('Event approved and published.', 'success');
+        } catch (err) {
+          showToast(err.message || 'Could not approve event.', 'error');
+        }
+      } else {
+        openEventReview(event, button.dataset.decision);
+      }
+    });
+  });
 }
 
 function openEventReview(event, decision) {

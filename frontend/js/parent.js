@@ -86,12 +86,16 @@ async function loadOverview(skipChildLoad) {
   const { events } = await api.get('/events');
   const upcoming = events.filter((e) => new Date(e.date) >= new Date()).slice(0, 3);
   document.getElementById('upcomingEvents').innerHTML = upcoming.length
-    ? upcoming.map((e) => `
+    ? upcoming.map((e) => {
+      const evStatus = computeEventStatus(e);
+      return `
       <div class="list-row">
         <span><strong>${escapeParentMessage(e.title)}</strong></span>
         <span style="font-size:13px; color:var(--primary); font-weight:600;"><i class="fa-regular fa-calendar"></i> ${fmtDate(e.date)}</span>
+        <span class="status-badge ${evStatus}" style="font-size:10px; padding:2px 6px;">${evStatus.charAt(0).toUpperCase() + evStatus.slice(1)}</span>
       </div>
-    `).join('')
+    `;
+    }).join('')
     : '<div class="empty-state"><p>No upcoming school events scheduled.</p></div>';
 }
 

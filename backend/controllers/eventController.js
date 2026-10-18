@@ -88,11 +88,15 @@ async function publishEvent(event) {
       },
     })));
   }
+  const alreadyNotified = event.emailRecipientCount > 0;
   event.emailRecipientCount = parents.length;
   event.publicationStatus = 'published';
+  event.approvalStatus = 'approved';
+  event.approvedAt = new Date();
   if (event.reviewStatus === 'publishing') event.reviewStatus = 'approved';
   await event.save();
-  if (parents.length) {
+  // Only queue emails if they haven't been sent yet
+  if (parents.length && !alreadyNotified) {
     queueEmailDelivery({ ...eventEmail(event), parents, type: 'event', eventId: event._id });
   }
   return parents.length;
@@ -118,7 +122,12 @@ exports.listEvents = async (req, res) => {
     const classNames = await Student.distinct('className', { parent: req.user._id, status: 'active' });
     filter.$and = [
       { audience: { $in: ['all', 'parents'] } },
-      { $or: [{ publicationStatus: 'published' }, { publicationStatus: { $exists: false } }] },
+      {
+        $or: [
+          { approvalStatus: 'approved' },
+          { publicationStatus: 'published' },
+        ],
+      },
       { $or: [{ targetType: 'all' }, { targetType: { $exists: false } }, { targetClasses: { $in: classNames } }] },
     ];
   } else if (req.user.role === 'teacher') {
@@ -143,20 +152,25 @@ exports.createEvent = async (req, res) => {
       values.reviewedBy = null;
       values.reviewedAt = null;
       values.reviewNotes = '';
+      values.approvalStatus = 'pending';
     } else if (values.publicationStatus === 'published') {
       values.reviewStatus = 'approved';
       values.reviewedBy = req.user._id;
       values.reviewedAt = new Date();
+      values.approvalStatus = 'approved';
+      values.approvedAt = new Date();
+      values.approvedBy = req.user._id;
     } else if (values.publicationStatus === 'pending') {
       values.reviewStatus = 'pending';
+      values.approvalStatus = 'pending';
     }
     const event = await Event.create(values);
-    if (event.publicationStatus === 'published') await publishEvent(event);
+    if (event.approvalStatus === 'approved') await publishEvent(event);
     await logActivity(req.user._id, 'event-created', event.title);
     res.status(201).json({
       event,
       emailSummary: await getEmailSummary(event),
-      message: event.publicationStatus === 'pending' ? 'Event submitted for admin approval.' : undefined,
+      message: event.approvalStatus === 'pending' ? 'Event submitted for admin approval.' : undefined,
     });
   } catch (err) {
     const status = err.name === 'ValidationError' || err.name === 'CastError' ? 400 : 500;
@@ -202,10 +216,12 @@ exports.updateEvent = async (req, res) => {
       validated.value.reviewedBy = null;
       validated.value.reviewedAt = null;
       validated.value.reviewNotes = '';
+      validated.value.approvalStatus = 'pending';
     }
+    const previousApproval = event.approvalStatus;
     Object.assign(event, validated.value);
     await event.save();
-    if (previousStatus !== 'published' && event.publicationStatus === 'published') await publishEvent(event);
+    if (previousApproval !== 'approved' && event.approvalStatus === 'approved') await publishEvent(event);
     res.json({ event, emailSummary: await getEmailSummary(event) });
   } catch (err) {
     const status = err.name === 'ValidationError' || err.name === 'CastError' ? 400 : 500;
@@ -241,6 +257,9 @@ exports.reviewEvent = async (req, res) => {
       return res.json({ event, message: 'Event rejected. Parents were not notified.' });
     }
 
+    event.approvalStatus = 'approved';
+    event.approvedAt = new Date();
+    event.approvedBy = req.user._id;
     try {
       await publishEvent(event);
       await logActivity(req.user._id, 'event-approved', event.title);
@@ -256,6 +275,55 @@ exports.reviewEvent = async (req, res) => {
   } catch (err) {
     console.error('[events] Could not review event:', err.message);
     return res.status(500).json({ message: 'Could not review event.' });
+  }
+};
+
+// PUT /api/events/:id/approve (admin approves a pending event)
+exports.approveEvent = async (req, res) => {
+  try {
+    const event = await Event.findOne({
+      _id: req.params.id,
+      publicationStatus: 'pending',
+    });
+    if (!event) {
+      const existing = await Event.findById(req.params.id);
+      if (!existing) return res.status(404).json({ message: 'Event not found.' });
+      const isApproved = existing.approvalStatus === 'approved'
+        || existing.publicationStatus === 'published';
+      if (isApproved) {
+        return res.status(409).json({ message: 'This event has already been approved.' });
+      }
+      return res.status(409).json({ message: 'This event is not waiting for approval.' });
+    }
+
+    event.approvalStatus = 'approved';
+    event.approvedAt = new Date();
+    event.approvedBy = req.user._id;
+    event.publicationStatus = 'published';
+    event.reviewStatus = 'approved';
+    event.reviewedBy = req.user._id;
+    event.reviewedAt = new Date();
+    await event.save();
+
+    try {
+      await publishEvent(event);
+      await logActivity(req.user._id, 'event-approved', event.title);
+      return res.json({
+        event,
+        emailSummary: await getEmailSummary(event),
+        message: 'Event approved and published.',
+      });
+    } catch (error) {
+      await Event.findOneAndUpdate(
+        { _id: event._id },
+        { $set: { approvalStatus: 'pending', approvedAt: null, approvedBy: null } }
+      );
+      console.error('[events] Could not publish approved event:', error.message);
+      return res.status(500).json({ message: 'Approval was not completed. The event remains pending and can be retried.' });
+    }
+  } catch (err) {
+    console.error('[events] Could not approve event:', err.message);
+    return res.status(500).json({ message: 'Could not approve event.' });
   }
 };
 

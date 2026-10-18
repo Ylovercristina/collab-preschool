@@ -49,6 +49,14 @@
 
   --font-body: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-display: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+  /* Event status colors */
+  --status-done: #15803d;
+  --status-done-bg: #f0fdf4;
+  --status-ongoing: #0284c7;
+  --status-ongoing-bg: #eff6ff;
+  --status-pending: #d97706;
+  --status-pending-bg: #fef3c7;
 }
 
 * { box-sizing: border-box; }
@@ -1615,6 +1623,39 @@ tr:hover td { background: rgba(248, 250, 252, 0.7); }
 .schedule-event-info h4 { margin: 0; color: var(--ink); font-size: 15px; }
 .schedule-event-info p { margin: 3px 0 0; color: var(--ink-soft); font-size: 13.5px; }
 .schedule-event-actions { display: flex; align-items: center; gap: 8px; }
+
+/* ---------- Event status badges (color-coded) ---------- */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-size: 11.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.status-done { background: var(--status-done-bg); color: var(--status-done); }
+.status-ongoing { background: var(--status-ongoing-bg); color: var(--status-ongoing); }
+.status-approved { background: var(--status-ongoing-bg); color: var(--status-ongoing); }
+.status-pending { background: var(--status-pending-bg); color: var(--status-pending); }
+
+/* Status tint on schedule-event time */
+.schedule-event.status-done .schedule-event-time { color: var(--status-done); }
+.schedule-event.status-ongoing .schedule-event-time { color: var(--status-ongoing); }
+.schedule-event.status-approved .schedule-event-time { color: var(--status-ongoing); }
+.schedule-event.status-pending .schedule-event-time { color: var(--status-pending); }
+
+/* Status tint on calendar event pills */
+.event-pill.status-done { border-color: var(--status-done); background: var(--status-done-bg); color: var(--status-done); }
+.event-pill.status-ongoing { border-color: var(--status-ongoing); background: var(--status-ongoing-bg); color: var(--status-ongoing); }
+.event-pill.status-approved { border-color: var(--status-ongoing); background: var(--status-ongoing-bg); color: var(--status-ongoing); }
+.event-pill.status-pending { border-color: var(--status-pending); background: var(--status-pending-bg); color: var(--status-pending); }
+
+/* Status legend */
+.status-legend { display: flex; gap: 16px; font-size: 12px; color: var(--ink-muted); margin: 0 0 10px 0; }
+.status-legend-item { display: inline-flex; align-items: center; gap: 5px; }
+.status-legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 
 /* Event Details Modal */
 .event-detail-item {
