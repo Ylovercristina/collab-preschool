@@ -484,13 +484,47 @@ function escapeDashboardHtml(value = '') {
   })[character]);
 }
 
+// ---------- Event status calculation ----------
+// Status is derived from approvalStatus and date/time in JavaScript.
+// Approval workflow: teacher-created events start as "pending" (amber, waiting
+// for admin approval); admin-created events are "approved" (blue) automatically.
+// Pending events stay amber even after their date passes. Done (green) takes
+// priority: an approved event whose date has passed becomes green.
+function computeEventStatus(event) {
+  // Determine approval status. Existing events without approvalStatus:
+  // publicationStatus === 'published' means already approved (backward compat).
+  // Note: Mongoose applies schema defaults (approvalStatus: 'pending') when
+  // hydrating documents, so we cannot rely on approvalStatus === undefined.
+  const isApproved =
+    event.approvalStatus === 'approved' ||
+    event.publicationStatus === 'published';
+  if (!isApproved) return 'pending'; // amber — waiting for approval, always
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const eventDate = new Date(event.date);
+  eventDate.setHours(0, 0, 0, 0);
+  if (eventDate < today) return 'done'; // green — approved but date has passed
+  return 'approved'; // blue — approved and upcoming
+}
+
+function statusClass(status) {
+  return `status-${status}`;
+}
+
+function statusLabel(status) {
+  const labels = { done: 'Done', approved: 'Approved', pending: 'Pending' };
+  return labels[status] || status;
+}
+
 function renderEventStatusList(events, container) {
   if (!container) return;
   const recent = (events || []).slice().sort((left, right) => new Date(right.date) - new Date(left.date)).slice(0, 6);
   container.innerHTML = recent.length ? recent.map((event) => {
     const status = event.publicationStatus || 'published';
     const statusLabels = { draft: 'Draft', pending: 'Pending approval', rejected: 'Rejected', published: 'Published' };
-    return `<div class="event-status-row list-row"><div><strong>${escapeDashboardHtml(event.title)}</strong><p>${fmtDate(event.date)}${event.time ? ` · ${escapeDashboardHtml(event.time)}` : ''}${event.venue ? ` · ${escapeDashboardHtml(event.venue)}` : ''}</p></div><span class="badge status-badge-${status}">${statusLabels[status] || 'Published'}</span></div>`;
+    const evStatus = computeEventStatus(event);
+    return `<div class="event-status-row list-row"><div><strong>${escapeDashboardHtml(event.title)}</strong><p>${fmtDate(event.date)}${event.time ? ` · ${escapeDashboardHtml(event.time)}` : ''}${event.venue ? ` · ${escapeDashboardHtml(event.venue)}` : ''}</p></div><span class="badge status-badge-${status}">${statusLabels[status] || 'Published'}</span><span class="status-badge ${evStatus}">${statusLabel(evStatus)}</span></div>`;
   }).join('') : '<div class="notification-empty">No events scheduled yet.</div>';
 }
 
@@ -764,6 +798,9 @@ class EventsCalendar {
     this.canDeleteEventFn = canDeleteEvent;
     this.currentDate = new Date();
     this.viewMode = 'calendar'; // 'calendar' or 'schedule'
+    // Auto-register for periodic status refresh
+    if (!window.__eventCalendars) window.__eventCalendars = [];
+    window.__eventCalendars.push(this);
     this.render();
   }
 
@@ -826,12 +863,14 @@ class EventsCalendar {
       parents: 'Parents only',
       teachers: 'Teachers only',
     };
+    const evStatus = computeEventStatus(ev);
 
     Modal.open(`
       <h3>Event Details</h3>
       <div class="event-detail-item">
         <div class="event-detail-label">Event Title</div>
         <div class="event-detail-val" style="font-weight:700; font-size:17px; color:var(--primary);">${escapeValue(ev.title)}</div>
+        <span class="status-badge ${evStatus}">${statusLabel(evStatus)}</span>
       </div>
       <div class="event-detail-item">
         <div class="event-detail-label">Date</div>
@@ -974,6 +1013,13 @@ class EventsCalendar {
             </div>
           </div>
         </div>
+
+        <!-- Status Legend -->
+        <div class="status-legend">
+          <div class="status-legend-item"><div class="status-legend-dot" style="background:var(--status-done);"></div><span>Done</span></div>
+          <div class="status-legend-item"><div class="status-legend-dot" style="background:var(--status-ongoing);"></div><span>Approved</span></div>
+          <div class="status-legend-item"><div class="status-legend-dot" style="background:var(--status-pending);"></div><span>Pending</span></div>
+        </div>
     `;
 
     if (this.viewMode === 'calendar') {
@@ -1037,11 +1083,12 @@ class EventsCalendar {
               ${hasEvents ? `<span class="has-events-badge">${matchingEvents.length}</span>` : ''}
             </div>
             <div class="calendar-events-container">
-              ${matchingEvents.slice(0, 3).map((ev) => `
-                <div class="event-pill audience-${ev.audience || 'all'}" data-event-id="${ev._id}" title="${ev.title}">
+              ${matchingEvents.slice(0, 3).map((ev) => {
+                const evStatus = computeEventStatus(ev);
+                return `<div class="event-pill audience-${ev.audience || 'all'} status-${evStatus}" data-event-id="${ev._id}" title="${ev.title}">
                   ${ev.title}
-                </div>
-              `).join('')}
+                </div>`;
+              }).join('')}
               ${matchingEvents.length > 3 ? `<div style="font-size:10px; color:var(--primary); font-weight:700;">+${matchingEvents.length - 3} more</div>` : ''}
             </div>
           </div>
@@ -1086,10 +1133,12 @@ class EventsCalendar {
                 const hasTime = eventDate.getHours() || eventDate.getMinutes() || eventDate.getSeconds();
                 const time = hasTime ? eventDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : 'All day';
                 const detail = ev.location || ev.description;
+                const evStatus = computeEventStatus(ev);
                 return `
-                  <article class="schedule-event">
+                  <article class="schedule-event status-${evStatus}">
                     <time class="schedule-event-time">${time}</time>
                     <div class="schedule-event-info">
+                      <span class="status-badge ${evStatus}">${statusLabel(evStatus)}</span>
                       <h4>${ev.title}</h4>
                       ${detail ? `<p>${detail}</p>` : ''}
                     </div>
@@ -1192,6 +1241,11 @@ class EventsCalendar {
         });
       });
     }
+  }
+
+  // Re-render to recalculate statuses (Done/Ongoing/Pending) without re-fetching
+  refreshStatuses() {
+    this.render();
   }
 }
 
@@ -1568,6 +1622,12 @@ function initDashboardSync() {
       refreshInProgress = false;
     }
   }, 5000);
+
+  // Recalculate event statuses (Done/Ongoing/Pending) every minute without re-fetching
+  window.setInterval(() => {
+    if (document.hidden || document.querySelector('.modal-backdrop.open')) return;
+    (window.__eventCalendars || []).forEach((cal) => cal.refreshStatuses());
+  }, 60000);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
