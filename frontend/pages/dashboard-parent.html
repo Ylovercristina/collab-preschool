@@ -110,14 +110,16 @@
       </div>
     </section>
 
-    <section class="panel" id="panel-fees">
-      <div style="margin-bottom:20px;">
+    <section class="panel fee-panel" id="panel-fees">
+      <div class="fee-page-heading">
         <h1 style="margin:0;">Tuition &amp; Fees Statement</h1>
-        <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Billing overview, payment history, and due dates.</p>
-        <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Payments are accepted in cash at the school office only.</p>
+        <div>
+          <p class="fee-page-subtitle">View balances, payment history, and due dates.</p>
+          <p class="fee-payment-note"><i class="fa-solid fa-circle-info" aria-hidden="true"></i> Payments are accepted in cash at the school office.</p>
+        </div>
       </div>
-      <div class="table-responsive">
-        <table>
+      <div class="table-responsive fee-table-wrap">
+        <table class="fee-table fee-table-parent">
           <thead><tr><th>Description</th><th>Total Amount</th><th>Total Paid</th><th>Remaining Balance</th><th>Due Date</th><th>Status</th></tr></thead>
           <tbody id="feesTbody"></tbody>
         </table>

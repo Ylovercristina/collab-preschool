@@ -498,6 +498,33 @@ document.getElementById('addStudentBtn').addEventListener('click', async () => {
 // ---------- Fees ----------
 let cachedFees = [];
 
+document.getElementById('remindAllFeesBtn').addEventListener('click', async (event) => {
+  const button = event.currentTarget;
+  const unpaidFeeCount = cachedFees.filter((fee) => {
+    const totalPaid = (fee.payments || [])
+      .filter((payment) => payment.receiptState !== 'voided')
+      .reduce((sum, payment) => sum + Number(payment.amountPaid || 0), 0);
+    return Number(fee.amount) - totalPaid > 0;
+  }).length;
+  if (!unpaidFeeCount) {
+    showToast('There are no unpaid fees to remind.', 'info');
+    return;
+  }
+  if (!window.confirm(`Send reminders for all ${unpaidFeeCount} unpaid fees? Each reminder creates an in-app notification and sends an email to the parent.`)) return;
+
+  button.disabled = true;
+  try {
+    const result = await api.post('/fees/reminders/all', {});
+    const skipped = result.skippedCount ? ` ${result.skippedCount} fee reminder(s) skipped because no active parent email was available.` : '';
+    showToast(`${result.message}${skipped}`, result.skippedCount ? 'info' : 'success');
+    await loadFees();
+  } catch (error) {
+    showToast(error.message || 'Could not send all balance reminders.', 'error');
+  } finally {
+    button.disabled = false;
+  }
+});
+
 async function loadFees() {
   const { fees } = await api.get('/fees');
   cachedFees = fees || [];
@@ -546,14 +573,14 @@ function renderFeesTable(fees, query = '') {
     const statusLabel = { unpaid: 'Unpaid', partial: 'Partial Payment', paid: 'Paid' }[status];
     return `
       <tr>
-        <td><strong>${f.student ? f.student.name : '—'}</strong></td>
-        <td>${f.description}${renderAdminPaymentHistory(f)}</td>
-        <td><strong>${fmtMoney(f.amount)}</strong></td>
-        <td>${fmtMoney(totalPaid)}</td>
-        <td>${fmtMoney(remainingBalance)}</td>
-        <td>${fmtDate(f.dueDate)}</td>
-        <td><span class="badge ${status}">${statusLabel}</span></td>
-        <td>${status !== 'paid' ? `<button class="btn btn-secondary btn-sm" data-pay="${f._id}" data-remaining="${remainingBalance}" data-total-fee="${f.amount}"><i class="fa-solid fa-money-bill-wave"></i> Record Cash</button>` : '<span style="color:var(--primary); font-weight:700;"><i class="fa-solid fa-check"></i> Paid</span>'}</td>
+        <td data-label="Student"><strong class="fee-primary-value">${escapeDashboardHtml(f.student ? f.student.name : '—')}</strong></td>
+        <td data-label="Description">${escapeDashboardHtml(f.description)}${renderAdminPaymentHistory(f)}</td>
+        <td data-label="Total Amount" class="fee-numeric"><strong class="fee-primary-value">${fmtMoney(f.amount)}</strong></td>
+        <td data-label="Total Paid" class="fee-numeric">${fmtMoney(totalPaid)}</td>
+        <td data-label="Remaining" class="fee-numeric"><span class="fee-balance">${fmtMoney(remainingBalance)}</span></td>
+        <td data-label="Due Date">${fmtDate(f.dueDate)}</td>
+        <td data-label="Status"><span class="badge ${status}">${statusLabel}</span></td>
+        <td data-label="Actions"><div class="fee-row-actions">${status !== 'paid' ? `<button class="btn btn-secondary btn-sm" title="Record cash payment" aria-label="Record cash payment for ${escapeDashboardHtml(f.student ? f.student.name : 'student')}" data-pay="${f._id}" data-remaining="${remainingBalance}" data-total-fee="${f.amount}"><i class="fa-solid fa-money-bill-wave" aria-hidden="true"></i></button><button type="button" class="btn btn-ghost btn-sm" title="Remind parent" aria-label="Remind parent about ${escapeDashboardHtml(f.student ? f.student.name : 'student')}" data-fee-reminder="${f._id}"><i class="fa-solid fa-envelope" aria-hidden="true"></i></button>` : '<span class="badge paid"><i class="fa-solid fa-check"></i> Settled</span>'}</div></td>
       </tr>
     `;
   }).join('');
@@ -565,14 +592,37 @@ function renderFeesTable(fees, query = '') {
       if (fee) openPaymentHistoryModal(fee);
     });
   });
+  tbody.querySelectorAll('[data-fee-reminder]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      try {
+        const feeId = button.dataset.feeReminder;
+        const { notification, emailSummary } = await api.post(`/fees/${feeId}/reminders`, {});
+        let summary = emailSummary;
+        for (let attempt = 0; !summary.complete && attempt < 20; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          const response = await api.get(`/fees/${feeId}/reminders/${notification._id}/email-summary`);
+          summary = response.emailSummary;
+        }
+        const emailStatus = summary.complete
+          ? `Email: sent ${summary.sent}, skipped ${summary.skipped}, failed ${summary.failed}.`
+          : 'Email delivery is still processing; check the parent email address if it does not arrive.';
+        showToast(`In-app reminder sent. ${emailStatus}`, summary.failed || summary.skipped ? 'error' : (summary.complete ? 'success' : 'info'));
+      } catch (error) {
+        showToast(error.message || 'Could not send the balance reminder.', 'error');
+      } finally {
+        button.disabled = false;
+      }
+    });
+  });
 }
 
 function renderAdminPaymentHistory(fee) {
   if (!fee.payments || !fee.payments.length) return '';
   return `
-    <div style="margin-top:5px;">
-      <button type="button" class="btn btn-ghost btn-sm" data-open-fee-history="${fee._id}" style="color:var(--primary); font-weight:600; padding:2px 8px; font-size:12px; border:1px solid rgba(46,125,50,0.25); background:rgba(46,125,50,0.06); border-radius:4px; cursor:pointer; display:inline-flex; align-items:center; gap:5px;">
-        <i class="fa-solid fa-clock-rotate-left"></i> Payment History (${fee.payments.length})
+    <div class="fee-history-link">
+      <button type="button" class="btn btn-ghost btn-sm" data-open-fee-history="${fee._id}">
+        <i class="fa-solid fa-clock-rotate-left"></i> History (${fee.payments.length})
       </button>
     </div>
   `;
@@ -1237,7 +1287,7 @@ async function loadEvents() {
       <div><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><strong>${escapeDashboardHtml(event.title)}</strong><span class="badge status-badge-pending">Pending approval</span></div>
         <p class="event-review-meta">Submitted by ${escapeDashboardHtml(event.createdBy?.name || 'Teacher')} · ${fmtDate(event.date)}${event.time ? ` · ${escapeDashboardHtml(event.time)}` : ''}${event.venue ? ` · ${escapeDashboardHtml(event.venue)}` : ''}</p>
         <p style="margin:6px 0 0;">${escapeDashboardHtml(event.description)}</p>
-        <p class="event-review-meta">Recipients: ${event.targetType === 'classes' ? escapeDashboardHtml((event.targetClasses || []).join(', ')) : 'All parents'}</p>
+        <p class="event-review-meta">Recipients: ${event.audience === 'parents' ? 'Parents' : (event.audience === 'teachers' ? 'Teachers' : 'Parents and teachers')}${event.targetType === 'classes' ? ` · ${escapeDashboardHtml((event.targetClasses || []).join(', '))}` : ' · All classes'}</p>
       </div>
       <div class="event-review-actions"><button type="button" class="btn btn-primary btn-sm" data-review-event="${escapeDashboardHtml(event._id)}" data-decision="approved"><i class="fa-solid fa-check" aria-hidden="true"></i> Approve &amp; Publish</button><button type="button" class="btn btn-ghost btn-sm" data-review-event="${escapeDashboardHtml(event._id)}" data-decision="rejected"><i class="fa-solid fa-xmark" aria-hidden="true"></i> Reject</button></div>
     </article>
@@ -1255,8 +1305,8 @@ function openEventReview(event, decision) {
     <p><strong>${escapeDashboardHtml(event.title)}</strong></p>
     <p>${escapeDashboardHtml(event.description)}</p>
     <p><strong>Date:</strong> ${fmtDate(event.date)} · ${escapeDashboardHtml(event.time || '—')}<br><strong>Venue:</strong> ${escapeDashboardHtml(event.venue || '—')}</p>
-    <p><strong>Recipients:</strong> ${event.targetType === 'classes' ? escapeDashboardHtml((event.targetClasses || []).join(', ')) : 'All parents'}</p>
-    <p class="field-hint">${approving ? 'Parents will receive an in-app notification and eligible email after approval.' : 'Rejected events will not be shown to parents or send notifications.'}</p>
+    <p><strong>Recipients:</strong> ${event.audience === 'parents' ? 'Parents' : (event.audience === 'teachers' ? 'Teachers' : 'Parents and teachers')}${event.targetType === 'classes' ? ` · ${escapeDashboardHtml((event.targetClasses || []).join(', '))}` : ' · All classes'}</p>
+    <p class="field-hint">${approving ? 'Selected recipients will receive an in-app notification and an email after approval.' : 'Rejected events will not be shown or send notifications.'}</p>
     <div class="field"><label for="eventReviewNotes">Review note <span class="field-hint">(optional)</span></label><textarea id="eventReviewNotes" rows="2" maxlength="500"></textarea></div>
     <div id="eventReviewError" class="form-msg" role="alert"></div>
     <div class="event-form-actions"><button type="button" class="btn btn-ghost" id="cancelEventReview">Cancel</button><button type="button" class="btn ${approving ? 'btn-primary' : 'btn-danger'}" id="confirmEventReview">${approving ? 'Approve & Publish' : 'Confirm Rejection'}</button></div>

@@ -521,9 +521,10 @@ function openEventComposer({ classes = [], onSave, onComplete, approvalRequired 
         </section>
         <section class="event-composer-section">
           <h4>Recipients</h4>
-          <div class="field"><label for="composerTarget">Target group</label><select id="composerTarget"><option value="all" ${values.targetType !== 'classes' ? 'selected' : ''}>All parents</option><option value="classes" ${values.targetType === 'classes' ? 'selected' : ''}>Selected classes</option></select></div>
+          <div class="field"><label for="composerTarget">Target group</label><select id="composerTarget"><option value="all" ${values.targetType !== 'classes' ? 'selected' : ''}>All recipients</option><option value="classes" ${values.targetType === 'classes' ? 'selected' : ''}>Selected classes</option></select></div>
           <div class="field" data-event-field="classes" id="composerClassesField" ${values.targetType === 'classes' ? '' : 'hidden'}><label for="composerClasses">Classes <span class="required-mark" aria-hidden="true">*</span></label><select id="composerClasses" multiple size="${Math.max(2, Math.min(classes.length, 5))}" aria-describedby="composerClassesError">${classes.map((name) => `<option value="${escapeDashboardHtml(name)}" ${selectedClasses.includes(name) ? 'selected' : ''}>${escapeDashboardHtml(name)}</option>`).join('')}</select><small class="field-error" id="composerClassesError" data-event-error="classes"></small></div>
-          <div class="field"><label for="composerStatus">Publication</label><select id="composerStatus">${approvalRequired ? `<option value="pending" ${values.publicationStatus !== 'draft' ? 'selected' : ''}>Submit for admin approval</option>` : `<option value="published" ${values.publicationStatus !== 'draft' ? 'selected' : ''}>Publish now</option>`}<option value="draft" ${values.publicationStatus === 'draft' ? 'selected' : ''}>Save as draft</option></select>${approvalRequired ? '<div class="field-hint">Parents will only see the event after an admin approves it.</div>' : ''}</div>
+          <div class="field"><label for="composerAudience">Notify</label><select id="composerAudience"><option value="all" ${(values.audience || 'all') === 'all' ? 'selected' : ''}>Parents and teachers</option><option value="parents" ${values.audience === 'parents' ? 'selected' : ''}>Parents only</option><option value="teachers" ${values.audience === 'teachers' ? 'selected' : ''}>Teachers only</option></select></div>
+          <div class="field"><label for="composerStatus">Publication</label><select id="composerStatus">${approvalRequired ? `<option value="pending" ${values.publicationStatus !== 'draft' ? 'selected' : ''}>Submit for admin approval</option>` : `<option value="published" ${values.publicationStatus !== 'draft' ? 'selected' : ''}>Publish now</option>`}<option value="draft" ${values.publicationStatus === 'draft' ? 'selected' : ''}>Save as draft</option></select>${approvalRequired ? '<div class="field-hint">Selected recipients will be notified after admin approval.</div>' : ''}</div>
         </section>
         <div class="form-msg" id="composerError" role="alert"></div>
         <div class="event-form-actions"><button type="submit" class="btn btn-primary"><i class="fa-solid fa-calendar-check"></i> Continue</button></div>
@@ -545,6 +546,7 @@ function openEventComposer({ classes = [], onSave, onComplete, approvalRequired 
         venue: document.getElementById('composerVenue').value.trim(),
         targetType: target.value,
         targetClasses: Array.from(document.getElementById('composerClasses').selectedOptions, (option) => option.value),
+        audience: document.getElementById('composerAudience').value,
         publicationStatus: document.getElementById('composerStatus').value,
       };
       const errors = {
@@ -573,7 +575,8 @@ function openEventComposer({ classes = [], onSave, onComplete, approvalRequired 
 
   const renderConfirmation = (data) => {
     const date = new Date(`${data.date}T00:00:00`).toLocaleDateString();
-    const recipients = data.targetType === 'all' ? 'All parents' : data.targetClasses.join(', ');
+    const audienceLabels = { all: 'Parents and teachers', parents: 'Parents only', teachers: 'Teachers only' };
+    const recipients = `${audienceLabels[data.audience] || 'Parents and teachers'}${data.targetType === 'classes' ? ` · Classes: ${data.targetClasses.join(', ')}` : ''}`;
     Modal.open(`
       <h3>Confirm Event</h3>
       <p>Review the details and recipients before publishing.</p>
@@ -594,7 +597,7 @@ function openEventComposer({ classes = [], onSave, onComplete, approvalRequired 
       setButtonLoading(button, true, data.publicationStatus === 'draft' ? 'Saving' : (data.publicationStatus === 'pending' ? 'Submitting' : 'Publishing'));
       let response;
       try {
-        response = await onSave({ ...data, audience: 'parents' });
+        response = await onSave(data);
       } catch (error) {
         const errorNode = document.getElementById('eventConfirmError');
         errorNode.textContent = error.message || 'Could not save the event.';
@@ -606,8 +609,8 @@ function openEventComposer({ classes = [], onSave, onComplete, approvalRequired 
       showToast(data.publicationStatus === 'draft'
         ? 'Event draft saved.'
         : (data.publicationStatus === 'pending'
-          ? 'Event submitted for admin approval. Parents will be notified after approval.'
-          : `Event published. ${response.event?.emailRecipientCount || 0} parent notifications created.`));
+          ? 'Event submitted for admin approval. Selected recipients will be notified after approval.'
+          : `Event published. ${response.event?.emailRecipientCount || 0} recipient accounts notified.`));
       if (onComplete) {
         try {
           await onComplete(response);

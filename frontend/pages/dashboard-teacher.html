@@ -33,6 +33,9 @@
     <button class="nav-item" data-panel="progress"><i class="fa-solid fa-chart-line"></i> Academic Progress</button>
     <button class="nav-item" data-panel="messages"><i class="fa-solid fa-comments"></i> Messages</button>
     <button class="nav-item" data-panel="events"><i class="fa-solid fa-calendar-days"></i> Events &amp; Calendar</button>
+    <button class="nav-item" data-panel="notifications"><i class="fa-solid fa-bell"></i> Notifications <span id="teacherNotificationUnreadBadge" class="badge pending" hidden>0</span></button>
+    <button class="nav-item" data-panel="pickup"><i class="fa-solid fa-shield-halved"></i> Pickup verification</button>
+    <button class="nav-item" data-panel="alerts"><i class="fa-solid fa-triangle-exclamation"></i> Emergency alert</button>
     <button class="nav-item" data-panel="pickup"><i class="fa-solid fa-shield-halved"></i> Pickup Verification</button>
     <button class="nav-item" data-panel="alerts"><i class="fa-solid fa-triangle-exclamation"></i> Emergency Alert</button>
     <div class="sidebar-actions">
@@ -84,14 +87,17 @@
       </div>
     </section>
 
-    <section class="panel" id="panel-fees">
-      <div style="margin-bottom:20px;">
-        <h1 style="margin:0;">Student Fee Status</h1>
-        <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Read-only fee balances for students assigned to your class.</p>
+    <section class="panel fee-panel" id="panel-fees">
+      <div class="fee-page-heading">
+        <div>
+          <h1 style="margin:0;">Student Fee Status</h1>
+          <p class="fee-page-subtitle">Review balances and remind parents of students assigned to your class.</p>
+        </div>
+        <button type="button" class="btn btn-secondary btn-sm" id="remindAllFeesBtn"><i class="fa-solid fa-envelope"></i> Remind All Unpaid</button>
       </div>
-      <div class="table-responsive">
-        <table>
-          <thead><tr><th>Student</th><th>Class</th><th>Fee</th><th>Total</th><th>Paid</th><th>Remaining</th><th>Due Date</th><th>Status</th></tr></thead>
+      <div class="table-responsive fee-table-wrap">
+        <table class="fee-table fee-table-teacher">
+          <thead><tr><th>Student</th><th>Class</th><th>Fee</th><th>Total</th><th>Paid</th><th>Remaining</th><th>Due Date</th><th>Status</th><th>Actions</th></tr></thead>
           <tbody id="teacherFeesTbody"></tbody>
         </table>
       </div>
@@ -190,6 +196,17 @@
         <h2 id="teacherEventListHeading" style="font-size:18px;">Recent Events</h2>
         <div id="teacherEventStatusList"></div>
       </section>
+    </section>
+
+    <section class="panel" id="panel-notifications">
+      <div class="fee-page-heading">
+        <div>
+          <h1 style="margin:0;">Notifications</h1>
+          <p class="fee-page-subtitle">School event updates and other notices for your account.</p>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm" id="refreshTeacherNotifications"><i class="fa-solid fa-rotate"></i> Refresh</button>
+      </div>
+      <div id="teacherNotificationsList" aria-live="polite"></div>
     </section>
 
     <section class="panel" id="panel-pickup">

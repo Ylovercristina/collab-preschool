@@ -5,10 +5,10 @@ const { sendEmail } = require('./emailService');
 const queue = [];
 let processing = false;
 
-function queueEmailDelivery({ parents, type, subject, html, text, eventId, alertId }) {
+function queueEmailDelivery({ parents, type, subject, html, text, eventId, alertId, feeId, notificationId }) {
   const priority = type === 'emergency' ? 2 : 1;
   parents.forEach((parent) => {
-    queue.push({ parentId: parent._id, email: parent.email, type, subject, html, text, eventId, alertId, priority });
+    queue.push({ parentId: parent._id, email: parent.email, type, subject, html, text, eventId, alertId, feeId, notificationId, priority });
   });
   queue.sort((left, right) => right.priority - left.priority);
   setImmediate(processQueue);
@@ -21,6 +21,8 @@ async function recordSkipped(job, parent, reason) {
     type: job.type,
     event: job.eventId || null,
     alert: job.alertId || null,
+    fee: job.feeId || null,
+    notification: job.notificationId || null,
     status: 'skipped',
     errorMessage: reason,
   });
@@ -30,16 +32,16 @@ async function deliverOne(job) {
   let parent;
   try {
     parent = await User.findById(job.parentId).select('email role status emailVerified emailVerifiedBy');
-    if (!parent || parent.role !== 'parent') {
-      await recordSkipped(job, parent, 'Parent account is unavailable.');
+    if (!parent || !['parent', 'teacher'].includes(parent.role)) {
+      await recordSkipped(job, parent, 'Recipient account is unavailable.');
       return;
     }
     if (parent.status !== 'approved') {
-      await recordSkipped(job, parent, 'Parent account is not active.');
+      await recordSkipped(job, parent, 'Recipient account is not active.');
       return;
     }
     if (!parent.email) {
-      await recordSkipped(job, parent, 'Parent account has no email address.');
+      await recordSkipped(job, parent, 'Recipient account has no email address.');
       return;
     }
 
@@ -55,6 +57,8 @@ async function deliverOne(job) {
       type: job.type,
       event: job.eventId || null,
       alert: job.alertId || null,
+      fee: job.feeId || null,
+      notification: job.notificationId || null,
       status: result.success ? 'sent' : 'failed',
       errorMessage: result.success ? '' : result.error,
       sentAt: result.success ? new Date() : null,
