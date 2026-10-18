@@ -2,7 +2,9 @@
 const user = requireRole('teacher');
 let myStudents = [];
 let cachedTeacherFees = [];
-let activeThreadUserId = null;
+let activeMessageThread = null;
+let messageSearchTimer = null;
+let messageSearchRequest = 0;
 let teacherCalendar = null;
 let teacherAudiencePicker = null;
 let teacherAlertView = 'active';
@@ -13,6 +15,11 @@ function escapeTeacherHtml(value = '') {
   return String(value).replace(/[&<>"']/g, (character) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   })[character]);
+}
+
+function showMessageFeedback(node, text) {
+  node.textContent = text;
+  node.hidden = !text;
 }
 
 function relatedUserId(value) {
@@ -291,31 +298,107 @@ document.getElementById('remindAllFeesBtn').addEventListener('click', async (eve
 // ---------- Attendance ----------
 const attDateInput = document.getElementById('attDate');
 attDateInput.value = localDateValue();
-attDateInput.addEventListener('change', loadAttendance);
+let generatedAttendanceReport = null;
+let attendanceReportStudentName = '';
+attDateInput.addEventListener('change', () => loadAttendance());
+document.getElementById('openAttendanceReport').addEventListener('click', openAttendanceReport);
+
+function openAttendanceReport() {
+  const template = document.getElementById('attendanceReportModalTemplate');
+  Modal.open(template.innerHTML, true);
+  Modal.body.classList.add('modal-attendance-report');
+
+  const reportToday = new Date();
+  const period = Modal.body.querySelector('#attendanceReportPeriod');
+  const monthField = Modal.body.querySelector('#attendanceReportMonthField');
+  const month = Modal.body.querySelector('#attendanceReportMonth');
+  const year = Modal.body.querySelector('#attendanceReportYear');
+  populateAttendanceReportStudents(Modal.body.querySelector('#attendanceReportStudent'));
+  year.value = reportToday.getFullYear();
+  month.value = String(reportToday.getMonth() + 1);
+  monthField.hidden = period.value === 'year';
+  period.addEventListener('change', () => {
+    monthField.hidden = period.value === 'year';
+  });
+  Modal.body.querySelector('#attendanceReportForm').addEventListener('submit', generateAttendanceReport);
+  Modal.body.querySelector('#downloadAttendanceReport').addEventListener('click', downloadAttendanceReport);
+  generatedAttendanceReport = null;
+  attendanceReportStudentName = '';
+}
+
+function previousDateValue(value) {
+  const date = new Date(`${value}T12:00:00`);
+  date.setDate(date.getDate() - 1);
+  return localDateValue(date);
+}
+
+function attendanceStatusLabel(status) {
+  const labels = { present: 'Present', absent: 'Absent', late: 'Tardy', tardy: 'Tardy', excused: 'Excused' };
+  return labels[status] || 'Not recorded';
+}
+
+function renderAttendanceSummary(roster) {
+  const counts = { present: 0, absent: 0, tardy: 0, excused: 0, unrecorded: 0 };
+  roster.forEach(({ attendance }) => {
+    if (!attendance) counts.unrecorded += 1;
+    else if (attendance.status === 'late' || attendance.status === 'tardy') counts.tardy += 1;
+    else if (Object.prototype.hasOwnProperty.call(counts, attendance.status)) counts[attendance.status] += 1;
+  });
+  document.getElementById('attendanceDailySummary').innerHTML = `
+    <div class="attendance-summary-card"><span>Students</span><strong>${roster.length}</strong></div>
+    <div class="attendance-summary-card"><span>Present</span><strong>${counts.present}</strong></div>
+    <div class="attendance-summary-card attendance-summary-absent"><span>Absent</span><strong>${counts.absent}</strong></div>
+    <div class="attendance-summary-card"><span>Tardy</span><strong>${counts.tardy}</strong></div>
+    <div class="attendance-summary-card"><span>Excused</span><strong>${counts.excused}</strong></div>
+    <div class="attendance-summary-card"><span>Not recorded</span><strong>${counts.unrecorded}</strong></div>
+  `;
+}
+
+async function loadYesterdayAbsences() {
+  const card = document.getElementById('yesterdayAbsenceCard');
+  const yesterday = previousDateValue(localDateValue());
+  const { roster } = await api.get(`/attendance/class?date=${encodeURIComponent(yesterday)}`);
+  const absentStudents = roster.filter((row) => row.attendance && row.attendance.status === 'absent');
+  card.hidden = absentStudents.length === 0;
+  document.getElementById('yesterdayAbsenceCount').textContent = absentStudents.length;
+  document.getElementById('yesterdayAbsenceList').innerHTML = absentStudents.map(({ student }) => `
+    <span class="attendance-yesterday-student"><i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i> ${escapeTeacherHtml(student.name)}${student.className ? ` · ${escapeTeacherHtml(student.className)}` : ''}</span>
+  `).join('');
+}
 
 async function loadAttendance() {
-  const date = attDateInput.value || new Date().toISOString().slice(0, 10);
+  const date = attDateInput.value || localDateValue();
   const tbody = document.getElementById('attTbody');
   const message = document.getElementById('attendanceMessage');
   message.textContent = '';
   try {
-    const { roster } = await api.get(`/attendance/class?date=${encodeURIComponent(date)}`);
+    await loadMyStudents();
+    const [dailyResult, yesterdayResult] = await Promise.allSettled([
+      api.get(`/attendance/class?date=${encodeURIComponent(date)}`),
+      loadYesterdayAbsences(),
+    ]);
+    if (dailyResult.status === 'rejected') throw dailyResult.reason;
+    const { roster } = dailyResult.value;
+    if (yesterdayResult.status === 'rejected') {
+      showMsg(message, `Attendance loaded, but yesterday’s absences could not be checked: ${yesterdayResult.reason.message}`);
+    }
+    renderAttendanceSummary(roster);
     if (!roster.length) {
       tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state"><i class="fa-solid fa-clipboard-user"></i><p>No students assigned to you.</p></div></td></tr>`;
       return;
     }
 
     tbody.innerHTML = roster.map((r) => `
-      <tr data-student="${escapeTeacherHtml(r.student.id)}">
+      <tr class="${r.attendance && r.attendance.status === 'absent' ? 'attendance-absent-row' : ''}" data-student="${escapeTeacherHtml(r.student.id)}">
         <td><strong>${escapeTeacherHtml(r.student.name)}</strong></td>
         <td>${escapeTeacherHtml(r.student.className || '—')}</td>
         <td>
-          <select class="statusSelect" aria-label="Attendance status for ${escapeTeacherHtml(r.student.name)}" style="padding:6px 10px; border-radius:6px; border:1px solid #CBD5E1;">
+          <select class="statusSelect attendance-status-select" aria-label="Attendance status for ${escapeTeacherHtml(r.student.name)}" data-status="${r.attendance ? escapeTeacherHtml(r.attendance.status) : ''}">
             ${[['present', 'Present'], ['absent', 'Absent'], ['tardy', 'Tardy'], ['excused', 'Excused']].map(([value, label]) => `<option value="${value}" ${r.attendance && (r.attendance.status === value || (value === 'tardy' && r.attendance.status === 'late')) ? 'selected' : ''}>${label}</option>`).join('')}
           </select>
         </td>
-        <td><input class="remarksInput" maxlength="500" value="${escapeTeacherHtml(r.attendance ? (r.attendance.remarks || '') : '')}" aria-label="Attendance remarks for ${escapeTeacherHtml(r.student.name)}" placeholder="Optional remarks" style="padding:6px 10px; border-radius:6px; border:1px solid #CBD5E1; width:100%; max-width:240px;" /></td>
-        <td><div style="display:flex;align-items:center;gap:8px;"><button type="button" class="btn btn-secondary btn-sm" data-save-attendance>Save</button><span data-attendance-state aria-live="polite">${r.attendance ? 'Saved' : 'Not recorded'}</span></div></td>
+        <td><input class="remarksInput attendance-remarks-input" maxlength="500" value="${escapeTeacherHtml(r.attendance ? (r.attendance.remarks || '') : '')}" aria-label="Attendance remarks for ${escapeTeacherHtml(r.student.name)}" placeholder="Optional remarks" /></td>
+        <td><div class="attendance-record-actions"><button type="button" class="btn btn-secondary btn-sm" data-save-attendance>Save</button><span data-attendance-state aria-live="polite">${r.attendance ? 'Saved' : 'Not recorded'}</span></div></td>
       </tr>
     `).join('');
 
@@ -323,7 +406,12 @@ async function loadAttendance() {
       const saveButton = row.querySelector('[data-save-attendance]');
       const state = row.querySelector('[data-attendance-state]');
       const markUnsaved = () => { state.textContent = 'Unsaved changes'; };
-      row.querySelector('.statusSelect').addEventListener('change', markUnsaved);
+      const statusSelect = row.querySelector('.statusSelect');
+      statusSelect.addEventListener('change', () => {
+        row.classList.toggle('attendance-absent-row', statusSelect.value === 'absent');
+        statusSelect.dataset.status = statusSelect.value;
+        markUnsaved();
+      });
       row.querySelector('.remarksInput').addEventListener('input', markUnsaved);
       saveButton.addEventListener('click', async () => {
         saveButton.disabled = true;
@@ -337,6 +425,7 @@ async function loadAttendance() {
             remarks: row.querySelector('.remarksInput').value.trim(),
           });
           state.textContent = 'Saved';
+          await loadAttendance();
         } catch (err) {
           state.textContent = 'Not saved';
           showMsg(document.getElementById('attendanceMessage'), err.message);
@@ -348,6 +437,143 @@ async function loadAttendance() {
   } catch (err) {
     tbody.innerHTML = '<tr><td colspan="5"><div class="empty-state"><p>Attendance roster could not be loaded.</p></div></td></tr>';
     showMsg(message, err.message);
+  }
+}
+
+function csvField(value) {
+  let text = String(value == null ? '' : value);
+  if (/^[\t\r ]*[=+\-@]/.test(text)) text = `'${text}`;
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+async function generateAttendanceReport(event) {
+  event.preventDefault();
+  const modal = Modal.body;
+  const studentId = modal.querySelector('#attendanceReportStudent').value;
+  const year = Number(modal.querySelector('#attendanceReportYear').value);
+  const month = Number(modal.querySelector('#attendanceReportMonth').value);
+  const selectedPeriod = modal.querySelector('#attendanceReportPeriod').value;
+  const tbody = modal.querySelector('#attendanceReportTbody');
+  const downloadButton = modal.querySelector('#downloadAttendanceReport');
+  const summary = modal.querySelector('#attendanceReportSummary');
+  const results = modal.querySelector('#attendanceReportResults');
+  downloadButton.disabled = true;
+  generatedAttendanceReport = null;
+  if (!Number.isInteger(year) || year < 1900 || year > 9999
+      || (selectedPeriod === 'month' && (!Number.isInteger(month) || month < 1 || month > 12))) {
+    results.hidden = false;
+    showMsg(summary, 'Choose a valid month and year for the report.');
+    return;
+  }
+  const from = selectedPeriod === 'year'
+    ? `${year}-01-01`
+    : new Date(Date.UTC(year, month - 1, 1)).toISOString().slice(0, 10);
+  const to = selectedPeriod === 'year'
+    ? `${year}-12-31`
+    : new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+  results.hidden = false;
+  summary.textContent = '';
+  tbody.innerHTML = '<tr><td colspan="5">Loading attendance report…</td></tr>';
+  try {
+    const reportPath = studentId === 'all'
+      ? `/attendance/class/report?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+      : `/attendance/student/${encodeURIComponent(studentId)}`;
+    const { attendance } = await api.get(reportPath);
+    if (!Array.isArray(attendance)) {
+      throw new Error('Attendance report could not be loaded. Please try again.');
+    }
+    const selectedStudent = studentId === 'all'
+      ? null
+      : myStudents.find((entry) => relatedUserId(entry) === studentId);
+    if (studentId !== 'all' && !selectedStudent) {
+      throw new Error('The selected student is not assigned to your account.');
+    }
+    generatedAttendanceReport = attendance
+      .filter((record) => {
+        const recordDate = new Date(record.date).toISOString().slice(0, 10);
+        return recordDate >= from && recordDate <= to;
+      })
+      .map((record) => {
+        const recordStudent = record.student && typeof record.student === 'object' && record.student.name
+          ? record.student
+          : selectedStudent;
+        if (!recordStudent) {
+          throw new Error('An attendance record is missing its student details.');
+        }
+        return {
+          ...record,
+          studentName: recordStudent.name,
+          className: recordStudent.className || '',
+        };
+      })
+      .sort((left, right) => (
+        new Date(right.date) - new Date(left.date)
+        || left.studentName.localeCompare(right.studentName)
+      ));
+    attendanceReportStudentName = studentId === 'all' ? 'all-students' : selectedStudent.name;
+    const reportCounts = { present: 0, absent: 0, tardy: 0, excused: 0 };
+    generatedAttendanceReport.forEach((record) => {
+      const status = record.status === 'late' ? 'tardy' : record.status;
+      if (Object.prototype.hasOwnProperty.call(reportCounts, status)) reportCounts[status] += 1;
+    });
+    summary.className = 'attendance-report-summary';
+    summary.innerHTML = `
+      <span><strong>${selectedPeriod === 'year' ? year : `${new Date(Date.UTC(year, month - 1, 1)).toLocaleString('en', { month: 'long', timeZone: 'UTC' })} ${year}`}</strong></span>
+      <span><strong>${studentId === 'all' ? myStudents.length : 1}</strong> ${studentId === 'all' ? 'assigned students' : 'student'}</span>
+      <span><strong>${generatedAttendanceReport.length}</strong> recorded days</span>
+      <span><strong>${reportCounts.present}</strong> present</span>
+      <span class="${reportCounts.absent ? 'attendance-report-absent' : ''}"><strong>${reportCounts.absent}</strong> absent</span>
+      <span><strong>${reportCounts.tardy}</strong> tardy</span>
+      <span><strong>${reportCounts.excused}</strong> excused</span>
+    `;
+    tbody.innerHTML = generatedAttendanceReport.length ? generatedAttendanceReport.map((record) => `
+      <tr class="${record.status === 'absent' ? 'attendance-absent-row' : ''}">
+        <td>${escapeTeacherHtml(new Date(record.date).toLocaleDateString())}</td>
+        <td>${escapeTeacherHtml(record.studentName)}</td>
+        <td>${escapeTeacherHtml(record.className || '—')}</td>
+        <td><span class="attendance-report-status ${record.status === 'absent' ? 'is-absent' : ''}">${escapeTeacherHtml(attendanceStatusLabel(record.status))}</span></td>
+        <td>${escapeTeacherHtml(record.remarks || '—')}</td>
+      </tr>
+    `).join('') : '<tr><td colspan="5">No attendance records found for this selection and date range.</td></tr>';
+    downloadButton.disabled = generatedAttendanceReport.length === 0;
+  } catch (err) {
+    generatedAttendanceReport = null;
+    summary.className = 'attendance-report-summary';
+    showMsg(summary, err.message);
+    tbody.innerHTML = '<tr><td colspan="5">Attendance report could not be generated.</td></tr>';
+  }
+}
+
+function downloadAttendanceReport() {
+  if (!generatedAttendanceReport || !generatedAttendanceReport.length) return;
+  const rows = [
+    ['Date', 'Student', 'Class', 'Status', 'Remarks'],
+    ...generatedAttendanceReport.map((record) => [
+      new Date(record.date).toLocaleDateString(),
+      record.studentName,
+      record.className,
+      attendanceStatusLabel(record.status),
+      record.remarks || '',
+    ]),
+  ];
+  const csv = `\uFEFF${rows.map((row) => row.map(csvField).join(',')).join('\r\n')}`;
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `attendance-${attendanceReportStudentName.trim().replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'student'}.csv`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function populateAttendanceReportStudents(select) {
+  const previousStudentId = select.value;
+  select.innerHTML = myStudents.length
+    ? `<option value="all">All assigned students</option>${myStudents.map((student) => `<option value="${escapeTeacherHtml(relatedUserId(student))}">${escapeTeacherHtml(student.name)}${student.className ? ` — ${escapeTeacherHtml(student.className)}` : ''}</option>`).join('')}`
+    : '<option value="">No assigned students</option>';
+  if (previousStudentId === 'all' || myStudents.some((student) => relatedUserId(student) === previousStudentId)) {
+    select.value = previousStudentId;
   }
 }
 
@@ -466,86 +692,292 @@ document.getElementById('progressCancelEdit').addEventListener('click', () => {
 
 // ---------- Messages ----------
 async function loadInbox() {
-  await loadMyStudents();
-  const { threads } = await api.get('/messages/inbox');
-  const parentsFromStudents = new Map();
-  myStudents.forEach((student) => {
-    if (student.status === 'active' && student.parent) parentsFromStudents.set(relatedUserId(student.parent), student.parent);
-  });
-
   const box = document.getElementById('inboxList');
-  const known = new Map(threads
-    .filter((thread) => thread.with.role === 'parent' && parentsFromStudents.has(String(thread.with.id)))
-    .map((thread) => [String(thread.with.id), thread]));
-  parentsFromStudents.forEach((p, id) => {
-    if (!known.has(id)) known.set(id, { with: { id, name: p.name, role: 'parent' }, unread: 0 });
+  try {
+    await loadMyStudents();
+    const { threads } = await api.get('/messages/inbox');
+    box.innerHTML = threads.length ? threads.map((thread) => {
+      const isGroup = thread.type === 'group';
+      const title = isGroup ? thread.name : thread.with.name;
+      const preview = thread.lastMessage ? thread.lastMessage.content : 'Start a conversation';
+      const icon = isGroup ? 'fa-users' : (thread.with.role === 'teacher' ? 'fa-chalkboard-user' : 'fa-user');
+      const isActive = activeMessageThread
+        && (isGroup
+          ? activeMessageThread.type === 'group' && activeMessageThread.groupId === thread.id
+          : activeMessageThread.type === 'direct' && activeMessageThread.userId === thread.with.id);
+      return `
+        <button type="button" class="messenger-conversation${isActive ? ' active' : ''}" data-thread-type="${isGroup ? 'group' : 'direct'}" data-thread-id="${escapeTeacherHtml(thread.id)}">
+          <span class="messenger-avatar"><i class="fa-solid ${icon}"></i></span>
+          <span class="messenger-conversation-copy">
+            <strong>${escapeTeacherHtml(title)}</strong>
+            <span>${escapeTeacherHtml(preview)}</span>
+          </span>
+          ${thread.unread ? `<span class="messenger-unread" aria-label="${thread.unread} unread messages">${thread.unread}</span>` : ''}
+        </button>
+      `;
+    }).join('') : '<div class="messenger-list-empty">No conversations yet. Search for a parent or teacher to start chatting.</div>';
+
+    box.querySelectorAll('[data-thread-type]').forEach((row) => row.addEventListener('click', async () => {
+      try {
+        if (row.dataset.threadType === 'group') await openGroupThread(row.dataset.threadId);
+        else {
+          const thread = threads.find((item) => item.id === row.dataset.threadId);
+          if (thread) await openDirectThread(thread.with.id, thread.with.name, thread.with.role);
+        }
+      } catch (err) {
+        showMessageFeedback(document.getElementById('messageFormMessage'), err.message);
+      }
+    }));
+  } catch (err) {
+    box.innerHTML = `<div class="messenger-list-empty">${escapeTeacherHtml(err.message || 'Could not load conversations.')}</div>`;
+  }
+}
+
+function showMessengerView(viewId) {
+  document.getElementById('chatEmptyState').hidden = viewId !== 'empty';
+  document.getElementById('teacherGroupComposer').hidden = viewId !== 'compose';
+  document.getElementById('chatConversationView').hidden = viewId !== 'conversation';
+}
+
+function setActiveInboxThread(type, threadId) {
+  document.querySelectorAll('#inboxList [data-thread-type]').forEach((row) => {
+    row.classList.toggle('active', row.dataset.threadType === type && row.dataset.threadId === String(threadId));
   });
+}
 
-  const items = Array.from(known.values());
-  box.innerHTML = items.length ? items.map((t) => `
-    <button type="button" class="list-row" style="cursor:pointer;width:100%;text-align:left;border:0;font:inherit;" data-open="${escapeTeacherHtml(t.with.id)}" data-name="${escapeTeacherHtml(t.with.name)}">
-      <span><i class="fa-solid fa-user" style="color:var(--primary); margin-right:8px;"></i>${escapeTeacherHtml(t.with.name)}${t.unread ? ` <span class="badge pending">${t.unread} new</span>` : ''}</span>
-      <i class="fa-solid fa-chevron-right" style="color:var(--ink-light); font-size:12px;"></i>
-    </button>
-  `).join('') : '<div class="empty-state"><p>No parents to message yet.</p></div>';
+function renderMessages(messages, groupMessage) {
+  const thread = document.getElementById('chatThread');
+  const currentUserId = relatedUserId(user);
+  thread.innerHTML = messages.map((message) => {
+    const senderId = relatedUserId(message.sender);
+    const sender = message.sender && typeof message.sender === 'object' ? message.sender : {};
+    const senderName = sender.name || 'User';
+    const content = escapeTeacherHtml(message.content).replace(/\r?\n/g, '<br>');
+    if (!groupMessage) return `<div class="chat-bubble ${senderId === currentUserId ? 'mine' : 'theirs'}">${content}</div>`;
+    const initials = senderName.trim().split(/\s+/).slice(0, 2).map((part) => part.charAt(0)).join('').toUpperCase() || '?';
+    const avatar = sender.avatar ? `data-avatar="${escapeTeacherHtml(sender.avatar)}"` : '';
+    return `
+      <div class="chat-message-row ${senderId === currentUserId ? 'mine' : 'theirs'}">
+        <span class="chat-author-avatar" ${avatar} aria-label="${escapeTeacherHtml(senderName)}">
+          <img alt="" hidden />
+          <span>${escapeTeacherHtml(initials)}</span>
+        </span>
+        <div class="chat-bubble ${senderId === currentUserId ? 'mine' : 'theirs'}">
+          <span class="chat-message-sender">${escapeTeacherHtml(senderName)}</span>${content}
+        </div>
+      </div>
+    `;
+  }).join('') || '<div class="messenger-thread-empty">Say hello to start the conversation.</div>';
+  thread.querySelectorAll('.chat-author-avatar[data-avatar]').forEach((avatar) => {
+    const image = avatar.querySelector('img');
+    image.onerror = () => { image.hidden = true; };
+    image.onload = () => { image.hidden = false; avatar.querySelector('span').hidden = true; };
+    image.src = profileImageUrl(avatar.dataset.avatar);
+  });
+  thread.scrollTop = thread.scrollHeight;
+}
 
-  box.querySelectorAll('[data-open]').forEach((row) => row.addEventListener('click', async () => {
+async function openDirectThread(userId, name, role) {
+  const parentStudents = role === 'parent'
+    ? myStudents.filter((student) => student.status === 'active'
+      && relatedUserId(student.parent) === String(userId))
+    : [];
+  activeMessageThread = { type: 'direct', userId: String(userId), name, role };
+  setActiveInboxThread('direct', userId);
+  showMessengerView('conversation');
+  document.getElementById('threadWithName').textContent = name;
+  document.getElementById('threadSubtitle').textContent = role === 'teacher' ? 'Teacher · Direct message' : 'Parent or guardian';
+  document.getElementById('threadAvatar').innerHTML = `<i class="fa-solid ${role === 'teacher' ? 'fa-chalkboard-user' : 'fa-user'}"></i>`;
+  document.getElementById('groupMembersSummary').hidden = true;
+  const input = document.getElementById('chatInput');
+  const sendButton = document.getElementById('sendChatBtn');
+  input.disabled = role === 'parent' && !parentStudents.length;
+  sendButton.disabled = input.disabled;
+  showMessageFeedback(document.getElementById('messageFormMessage'), '');
+  const { messages } = await api.get(`/messages/thread/${encodeURIComponent(userId)}`);
+  renderMessages(messages, false);
+}
+
+async function openGroupThread(groupId) {
+  activeMessageThread = { type: 'group', groupId: String(groupId) };
+  setActiveInboxThread('group', groupId);
+  showMessengerView('conversation');
+  document.getElementById('threadAvatar').innerHTML = '<i class="fa-solid fa-users"></i>';
+  showMessageFeedback(document.getElementById('messageFormMessage'), '');
+  const { conversation, messages } = await api.get(`/messages/groups/${encodeURIComponent(groupId)}`);
+  activeMessageThread.name = conversation.name;
+  document.getElementById('threadWithName').textContent = conversation.name;
+  const familyCount = conversation.participants.filter((participant) => participant.role === 'parent').length;
+  document.getElementById('threadSubtitle').textContent = `${familyCount} ${familyCount === 1 ? 'family' : 'families'} · ${conversation.students.length} assigned ${conversation.students.length === 1 ? 'student' : 'students'}`;
+  const memberNames = conversation.participants.map((participant) => escapeTeacherHtml(participant.name));
+  const members = document.getElementById('groupMembersSummary');
+  members.textContent = `Members: ${memberNames.join(', ')}`;
+  members.hidden = false;
+  document.getElementById('chatInput').disabled = false;
+  document.getElementById('sendChatBtn').disabled = false;
+  renderMessages(messages, true);
+}
+
+function renderMessageContacts(contacts) {
+  const results = document.getElementById('messageSearchResults');
+  results.hidden = false;
+  results.innerHTML = contacts.length ? contacts.map((contact, index) => {
+    const description = contact.role === 'teacher'
+      ? `Teacher${contact.assignedClass ? ` · ${contact.assignedClass}` : ''}`
+      : `Parent of ${contact.students.map((student) => student.name).join(', ')}`;
+    return `
+      <button class="messenger-contact-result" type="button" data-contact-index="${index}">
+        <span class="messenger-avatar"><i class="fa-solid ${contact.role === 'teacher' ? 'fa-chalkboard-user' : 'fa-user'}"></i></span>
+        <span><strong>${escapeTeacherHtml(contact.name)}</strong><small>${escapeTeacherHtml(description)}</small></span>
+      </button>
+    `;
+  }).join('') : '<div class="messenger-search-empty">No assigned parents or approved teachers found.</div>';
+
+  results.querySelectorAll('[data-contact-index]').forEach((button) => button.addEventListener('click', async () => {
+    const contact = contacts[Number(button.dataset.contactIndex)];
+    results.hidden = true;
+    document.getElementById('messageContactSearch').value = '';
     try {
-      await openThread(row.dataset.open, row.dataset.name);
+      await openDirectThread(contact.id, contact.name, contact.role);
     } catch (err) {
-      showMsg(document.getElementById('messageFormMessage'), err.message);
+      showMessageFeedback(document.getElementById('messageFormMessage'), err.message);
     }
   }));
 }
 
-async function openThread(userId, name) {
-  const parentStudents = myStudents.filter((student) => student.status === 'active'
-    && relatedUserId(student.parent) === String(userId));
-  activeThreadUserId = userId;
-  document.getElementById('threadWithName').textContent = name;
-  const studentSelect = document.getElementById('messageStudentSelect');
-  const previousStudentId = studentSelect.value;
-  studentSelect.innerHTML = parentStudents.map((student) => (
-    `<option value="${escapeTeacherHtml(student._id)}">${escapeTeacherHtml(student.name)}${student.className ? ` — ${escapeTeacherHtml(student.className)}` : ''}</option>`
-  )).join('');
-  if (parentStudents.some((student) => student._id === previousStudentId)) {
-    studentSelect.value = previousStudentId;
+document.getElementById('messageContactSearch').addEventListener('input', (event) => {
+  clearTimeout(messageSearchTimer);
+  const query = event.target.value.trim();
+  const results = document.getElementById('messageSearchResults');
+  const currentRequest = ++messageSearchRequest;
+  if (!query) {
+    results.hidden = true;
+    results.innerHTML = '';
+    return;
   }
-  studentSelect.disabled = !parentStudents.length;
-  document.getElementById('chatInput').disabled = !parentStudents.length;
-  document.getElementById('sendChatBtn').disabled = !parentStudents.length;
-  document.getElementById('messageFormMessage').textContent = '';
-  const { messages } = await api.get(`/messages/thread/${userId}`);
-  const thread = document.getElementById('chatThread');
-  thread.innerHTML = messages.map((message) => {
-    const senderId = relatedUserId(message.sender);
-    const content = escapeTeacherHtml(message.content).replace(/\r?\n/g, '<br>');
-    return `<div class="chat-bubble ${senderId === String(userId) ? 'theirs' : 'mine'}">${content}</div>`;
-  }).join('');
-  thread.scrollTop = thread.scrollHeight;
+  results.hidden = false;
+  results.innerHTML = '<div class="messenger-search-empty">Searching contacts…</div>';
+  messageSearchTimer = setTimeout(async () => {
+    try {
+      const response = await api.get(`/messages/contacts?q=${encodeURIComponent(query)}`);
+      if (currentRequest === messageSearchRequest) renderMessageContacts(response.contacts);
+    } catch (err) {
+      if (currentRequest === messageSearchRequest) {
+        results.innerHTML = `<div class="messenger-search-empty">${escapeTeacherHtml(err.message)}</div>`;
+      }
+    }
+  }, 220);
+});
+
+function renderGroupStudents() {
+  const students = myStudents.filter((student) => student.status === 'active'
+    && student.parent
+    && (!student.parent.status || student.parent.status === 'approved'));
+  const list = document.getElementById('teacherGroupStudentList');
+  list.innerHTML = students.length ? students.map((student) => `
+    <label class="messenger-student-option">
+      <input type="checkbox" name="groupStudent" value="${escapeTeacherHtml(student._id)}" />
+      <span><strong>${escapeTeacherHtml(student.name)}</strong><small>${escapeTeacherHtml(student.className || 'Class not set')} · ${escapeTeacherHtml(student.parent.name || 'Parent')}</small></span>
+    </label>
+  `).join('') : '<div class="messenger-list-empty">No assigned students with an approved parent account are available for a family group.</div>';
 }
+
+document.getElementById('teacherNewGroupBtn').addEventListener('click', async () => {
+  let loadError = null;
+  if (!myStudents.length) {
+    try {
+      await loadMyStudents();
+    } catch (err) {
+      loadError = err;
+    }
+  }
+  renderGroupStudents();
+  document.getElementById('teacherGroupForm').reset();
+  showMessageFeedback(document.getElementById('teacherGroupMessage'), '');
+  document.getElementById('selectAllGroupStudents').textContent = 'Select all';
+  document.querySelectorAll('#inboxList .messenger-conversation').forEach((row) => row.classList.remove('active'));
+  showMessengerView('compose');
+  if (loadError)   showMessageFeedback(document.getElementById('teacherGroupMessage'), loadError.message);
+});
+
+document.getElementById('selectAllGroupStudents').addEventListener('click', () => {
+  const checkboxes = Array.from(document.querySelectorAll('#teacherGroupStudentList input[name="groupStudent"]'));
+  const selectAll = checkboxes.some((checkbox) => !checkbox.checked);
+  checkboxes.forEach((checkbox) => { checkbox.checked = selectAll; });
+  document.getElementById('selectAllGroupStudents').textContent = selectAll ? 'Clear selection' : 'Select all';
+});
+
+document.getElementById('teacherGroupForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const students = Array.from(document.querySelectorAll('#teacherGroupStudentList input[name="groupStudent"]:checked'))
+    .map((checkbox) => checkbox.value);
+  const message = document.getElementById('teacherGroupFirstMessage').value.trim();
+  const button = document.getElementById('createTeacherGroupBtn');
+  if (!students.length) {
+    showMessageFeedback(document.getElementById('teacherGroupMessage'), 'Select at least one assigned student.');
+    return;
+  }
+  if (!message) {
+    showMessageFeedback(document.getElementById('teacherGroupMessage'), 'Write a first message for the group.');
+    return;
+  }
+  button.disabled = true;
+  showMessageFeedback(document.getElementById('teacherGroupMessage'), '');
+  try {
+    const { conversation } = await api.post('/messages/groups', {
+      name: document.getElementById('teacherGroupName').value.trim(),
+      students,
+      content: message,
+    });
+    await openGroupThread(conversation._id);
+    await loadInbox();
+  } catch (err) {
+    showMessageFeedback(document.getElementById('teacherGroupMessage'), err.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+function resizeMessageInput(input) {
+  input.style.height = 'auto';
+  input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
+}
+
+['chatInput', 'teacherGroupFirstMessage'].forEach((id) => {
+  const input = document.getElementById(id);
+  input.addEventListener('input', () => resizeMessageInput(input));
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      input.form.requestSubmit();
+    }
+  });
+});
 
 document.getElementById('teacherMessageForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   const input = document.getElementById('chatInput');
-  const studentId = document.getElementById('messageStudentSelect').value;
-  if (!activeThreadUserId || !studentId || !input.value.trim()) return;
+  const thread = activeMessageThread;
+  const content = input.value.trim();
+  if (!thread || !content) return;
   const sendButton = document.getElementById('sendChatBtn');
   sendButton.disabled = true;
-  document.getElementById('messageFormMessage').textContent = '';
+  showMessageFeedback(document.getElementById('messageFormMessage'), '');
   try {
-    await api.post('/messages', {
-      receiver: activeThreadUserId,
-      student: studentId,
-      content: input.value.trim(),
-    });
+    if (thread.type === 'group') {
+      await api.post(`/messages/groups/${encodeURIComponent(thread.groupId)}/messages`, { content });
+    } else {
+      await api.post('/messages', { receiver: thread.userId, content });
+    }
     input.value = '';
-    await openThread(activeThreadUserId, document.getElementById('threadWithName').textContent);
+    resizeMessageInput(input);
+    if (thread.type === 'group') await openGroupThread(thread.groupId);
+    else await openDirectThread(thread.userId, thread.name, thread.role);
     await loadInbox();
   } catch (err) {
-    showMsg(document.getElementById('messageFormMessage'), err.message);
+    showMessageFeedback(document.getElementById('messageFormMessage'), err.message);
   } finally {
-    sendButton.disabled = false;
+    sendButton.disabled = input.disabled;
   }
 });
 

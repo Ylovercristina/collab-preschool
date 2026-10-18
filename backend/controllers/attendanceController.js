@@ -1,5 +1,6 @@
 const Attendance = require('../models/Attendance');
 const Student = require('../models/Student');
+const Notification = require('../models/Notification');
 const mongoose = require('mongoose');
 const logActivity = require('../utils/logActivity');
 
@@ -35,6 +36,36 @@ exports.markAttendance = async (req, res) => {
       { student: assignedStudent._id, date, status, remarks, markedBy: req.user._id },
       { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
     );
+    if (assignedStudent.parent) {
+      try {
+        if (status === 'absent') {
+          const dateLabel = date.toLocaleDateString('en-US', { timeZone: 'UTC', year: 'numeric', month: 'long', day: 'numeric' });
+          await Notification.findOneAndUpdate(
+            { parent: assignedStudent.parent, type: 'attendance', attendance: record._id },
+            {
+              $set: {
+                title: `${assignedStudent.name} was marked absent`,
+                message: `${assignedStudent.name} was marked absent on ${dateLabel}. Contact the teacher if you have questions.`,
+                student: assignedStudent._id,
+                priority: 2,
+              },
+            },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+          );
+        } else {
+          await Notification.deleteMany({
+            parent: assignedStudent.parent,
+            type: 'attendance',
+            attendance: record._id,
+          });
+        }
+      } catch (notificationError) {
+        return res.status(500).json({
+          message: 'Attendance was saved, but the parent notification could not be updated.',
+          error: notificationError.message,
+        });
+      }
+    }
     await logActivity(req.user._id, 'attendance-marked', `${assignedStudent.name} -> ${status}`);
     res.status(201).json({ attendance: record });
   } catch (err) {
@@ -87,4 +118,32 @@ exports.getClassAttendance = async (req, res) => {
       attendance: byStudent[s._id.toString()] || null,
     })),
   });
+};
+
+// GET /api/attendance/class/report?from=YYYY-MM-DD&to=YYYY-MM-DD
+exports.getClassAttendanceReport = async (req, res) => {
+  const { from, to } = req.query;
+  const isDate = (value) => typeof value === 'string'
+    && /^\d{4}-\d{2}-\d{2}$/.test(value)
+    && !Number.isNaN(new Date(`${value}T00:00:00.000Z`).getTime())
+    && new Date(`${value}T00:00:00.000Z`).toISOString().slice(0, 10) === value;
+  if (!isDate(from) || !isDate(to) || from > to) {
+    return res.status(400).json({ message: 'Choose a valid date range.' });
+  }
+
+  const students = await Student.find({ teacher: req.user._id, status: 'active' })
+    .select('_id name className');
+  const startDate = new Date(`${from}T00:00:00.000Z`);
+  const endDate = new Date(`${to}T00:00:00.000Z`);
+  endDate.setUTCDate(endDate.getUTCDate() + 1);
+  const attendance = students.length
+    ? await Attendance.find({
+      student: { $in: students.map((student) => student._id) },
+      date: { $gte: startDate, $lt: endDate },
+    })
+      .populate('student', 'name className')
+      .sort({ date: -1, student: 1 })
+    : [];
+
+  res.json({ attendance });
 };

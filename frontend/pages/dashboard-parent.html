@@ -74,7 +74,7 @@
     <section class="panel" id="panel-notifications">
       <div style="margin-bottom:20px;">
         <h1 style="margin:0;">Notifications</h1>
-        <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">School events, emergency updates, and account activity.</p>
+        <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Attendance updates, school events, emergency alerts, and account activity.</p>
       </div>
       <div id="parentNotificationsList"></div>
     </section>
@@ -129,18 +129,28 @@
     <section class="panel" id="panel-messages">
       <div style="margin-bottom:20px;">
         <h1 style="margin:0;">Teacher Communication</h1>
-        <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Direct messages with your child's assigned educator.</p>
+        <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Direct messages with your child's educator and shared family group chats.</p>
       </div>
-      <div class="card" style="max-width:760px;">
-        <div style="display:flex; align-items:center; gap:8px; margin-bottom:14px;">
-          <i class="fa-solid fa-chalkboard-user" style="color:var(--primary);"></i>
-          <h3 id="threadWithName" style="margin:0;">Teacher</h3>
-        </div>
-        <div class="chat-thread" id="chatThread"></div>
-        <div id="parentMessageFormMessage" class="form-msg" aria-live="polite"></div>
-        <div class="chat-input-row">
-          <input id="chatInput" placeholder="Type a message to the teacher…" />
-          <button class="btn btn-primary btn-sm" id="sendChatBtn"><i class="fa-solid fa-paper-plane"></i> Send</button>
+      <div class="parent-messages-layout">
+        <aside class="card parent-group-inbox">
+          <h3>Conversations</h3>
+          <button class="messenger-conversation active" id="parentTeacherChatBtn" type="button">
+            <span class="messenger-avatar"><i class="fa-solid fa-chalkboard-user"></i></span>
+            <span class="messenger-conversation-copy"><strong>Assigned teacher</strong><span>Direct conversation</span></span>
+          </button>
+          <div id="parentGroupInbox" aria-live="polite"></div>
+        </aside>
+        <div class="card parent-message-thread">
+          <div class="parent-thread-heading">
+            <i class="fa-solid fa-chalkboard-user" style="color:var(--primary);"></i>
+            <h3 id="threadWithName" style="margin:0;">Teacher</h3>
+          </div>
+          <div class="chat-thread" id="chatThread"></div>
+          <div id="parentMessageFormMessage" class="messenger-status" role="status" aria-live="polite" hidden></div>
+          <div class="chat-input-row">
+            <input id="chatInput" maxlength="2000" placeholder="Type a message…" />
+            <button class="btn btn-primary btn-sm" id="sendChatBtn" aria-label="Send message"><i class="fa-solid fa-paper-plane"></i></button>
+          </div>
         </div>
       </div>
     </section>
