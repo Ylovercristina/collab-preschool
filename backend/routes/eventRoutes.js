@@ -7,6 +7,7 @@ router.get('/', ctrl.listEvents);
 router.post('/', allowRoles('admin', 'teacher'), ctrl.createEvent);
 router.get('/:id/email-summary', allowRoles('admin', 'teacher'), ctrl.emailSummary);
 router.patch('/:id/review', allowRoles('admin'), ctrl.reviewEvent);
+router.put('/:id/approve', allowRoles('admin'), ctrl.approveEvent);
 router.patch('/:id', allowRoles('admin', 'teacher'), ctrl.updateEvent);
 router.delete('/:id', allowRoles('admin', 'teacher'), ctrl.deleteEvent);
 
