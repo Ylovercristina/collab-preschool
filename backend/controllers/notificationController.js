@@ -1,7 +1,7 @@
 const Notification = require('../models/Notification');
 const mongoose = require('mongoose');
 
-// GET /api/notifications (parent's own notifications)
+// GET /api/notifications (current user's notifications)
 exports.listMyNotifications = async (req, res) => {
   const notifications = await Notification.find({ parent: req.user._id })
     .populate('event')

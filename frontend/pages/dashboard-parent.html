@@ -28,12 +28,12 @@
     <button class="nav-item active" data-panel="overview"><i class="fa-solid fa-gauge-high"></i> Overview</button>
     <button class="nav-item" data-panel="notifications"><i class="fa-solid fa-bell"></i> Notifications <span id="notificationUnreadBadge" class="badge pending" hidden>0</span></button>
     <button class="nav-item" data-panel="enrollment"><i class="fa-solid fa-file-signature"></i> Enrollment</button>
-    <button class="nav-item" data-panel="progress"><i class="fa-solid fa-chart-line"></i> Academic progress</button>
+    <button class="nav-item" data-panel="progress"><i class="fa-solid fa-chart-line"></i> Academic Progress</button>
     <button class="nav-item" data-panel="attendance"><i class="fa-solid fa-clipboard-user"></i> Attendance</button>
     <button class="nav-item" data-panel="fees"><i class="fa-solid fa-credit-card"></i> Fees</button>
     <button class="nav-item" data-panel="messages"><i class="fa-solid fa-comments"></i> Messages</button>
-    <button class="nav-item" data-panel="events"><i class="fa-solid fa-calendar-days"></i> School calendar</button>
-    <button class="nav-item" data-panel="pickup"><i class="fa-solid fa-shield-halved"></i> Authorized pickup</button>
+    <button class="nav-item" data-panel="events"><i class="fa-solid fa-calendar-days"></i> School Calendar</button>
+    <button class="nav-item" data-panel="pickup"><i class="fa-solid fa-shield-halved"></i> Authorized Pickup</button>
     <div class="sidebar-actions">
       <button class="nav-item logout" id="logoutBtn"><i class="fa-solid fa-right-from-bracket"></i> Log out</button>
       <button class="nav-item settings-button" type="button" data-panel="settings" aria-label="Settings" title="Settings"><i class="fa-solid fa-gear"></i></button>
@@ -110,14 +110,16 @@
       </div>
     </section>
 
-    <section class="panel" id="panel-fees">
-      <div style="margin-bottom:20px;">
+    <section class="panel fee-panel" id="panel-fees">
+      <div class="fee-page-heading">
         <h1 style="margin:0;">Tuition &amp; Fees Statement</h1>
-        <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Billing overview, payment history, and due dates.</p>
-        <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Payments are accepted in cash at the school office only.</p>
+        <div>
+          <p class="fee-page-subtitle">View balances, payment history, and due dates.</p>
+          <p class="fee-payment-note"><i class="fa-solid fa-circle-info" aria-hidden="true"></i> Payments are accepted in cash at the school office.</p>
+        </div>
       </div>
-      <div class="table-responsive">
-        <table>
+      <div class="table-responsive fee-table-wrap">
+        <table class="fee-table fee-table-parent">
           <thead><tr><th>Description</th><th>Total Amount</th><th>Total Paid</th><th>Remaining Balance</th><th>Due Date</th><th>Status</th></tr></thead>
           <tbody id="feesTbody"></tbody>
         </table>

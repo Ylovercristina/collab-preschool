@@ -41,14 +41,6 @@
 
       <form id="signupForm">
         <div class="auth-field">
-          <label class="auth-label" for="role">I AM A</label>
-          <select id="role">
-            <option value="parent">Parent / Guardian</option>
-            <option value="admin">School Admin</option>
-          </select>
-        </div>
-
-        <div class="auth-field">
           <label class="auth-label" for="name">FULL NAME</label>
           <input type="text" id="name" placeholder="Jane Doe" required />
         </div>
@@ -113,7 +105,7 @@ document.getElementById('signupForm').addEventListener('submit', async (e) => {
   msg.className = 'form-msg';
 
   const payload = {
-    role: document.getElementById('role').value,
+    role: 'parent',
     name: document.getElementById('name').value.trim(),
     email: document.getElementById('email').value.trim(),
     phone: document.getElementById('phone').value.trim(),

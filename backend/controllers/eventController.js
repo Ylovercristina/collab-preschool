@@ -19,7 +19,7 @@ function validateEvent(body) {
   const time = String(body.time || '').trim();
   const venue = String(body.venue || '').trim();
   const targetType = body.targetType === 'classes' ? 'classes' : 'all';
-  const audience = body.audience || 'parents';
+  const audience = body.audience || 'all';
   const targetClasses = Array.isArray(body.targetClasses)
     ? [...new Set(body.targetClasses.map((item) => String(item).trim()).filter(Boolean))]
     : [];
@@ -32,7 +32,7 @@ function validateEvent(body) {
   }
   if (dateValue < new Date().toISOString().slice(0, 10)) return { error: 'Event date cannot be in the past.' };
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return { error: 'Enter a valid event time.' };
-  if (targetType === 'classes' && !targetClasses.length) return { error: 'Select at least one class or choose all parents.' };
+  if (targetType === 'classes' && !targetClasses.length) return { error: 'Select at least one class or choose all recipients.' };
   if (!['all', 'parents', 'teachers'].includes(audience)) return { error: 'Select a valid event audience.' };
   if (!['draft', 'pending', 'published'].includes(body.publicationStatus || 'published')) {
     return { error: 'Publication status must be draft, pending, or published.' };
@@ -52,38 +52,71 @@ function validateEvent(body) {
   };
 }
 
-async function getEventParents(event) {
-  if (event.audience === 'teachers') return [];
-  if (event.targetType !== 'classes' || !event.targetClasses.length) {
-    return User.find({ role: 'parent' }).select('name email role status emailVerified emailVerifiedBy');
+async function getEventRecipients(event) {
+  const recipients = [];
+  const targetClasses = event.targetType === 'classes' ? event.targetClasses : [];
+  const hasClassTarget = targetClasses.length > 0;
+
+  if (event.audience !== 'teachers') {
+    const parentIds = hasClassTarget
+      ? await Student.distinct('parent', {
+        parent: { $ne: null },
+        className: { $in: targetClasses },
+        status: 'active',
+      })
+      : null;
+    const parents = await User.find({
+      role: 'parent',
+      status: 'approved',
+      ...(parentIds ? { _id: { $in: parentIds } } : {}),
+    }).select('name email role status emailVerified emailVerifiedBy');
+    recipients.push(...parents);
   }
-  const parentIds = await Student.distinct('parent', {
-    parent: { $ne: null },
-    className: { $in: event.targetClasses },
-  });
-  return User.find({ _id: { $in: parentIds }, role: 'parent' })
-    .select('name email role status emailVerified emailVerifiedBy');
+
+  if (event.audience !== 'parents') {
+    let teacherIds;
+    if (hasClassTarget) {
+      const assignedTeacherIds = await Student.distinct('teacher', {
+        teacher: { $ne: null },
+        className: { $in: targetClasses },
+        status: 'active',
+      });
+      const classTeachers = await User.distinct('_id', {
+        role: 'teacher',
+        assignedClass: { $in: targetClasses },
+      });
+      teacherIds = [...new Set([...assignedTeacherIds, ...classTeachers].map(String))];
+    }
+    const teachers = await User.find({
+      role: 'teacher',
+      status: 'approved',
+      ...(teacherIds ? { _id: { $in: teacherIds } } : {}),
+    }).select('name email role status emailVerified emailVerifiedBy');
+    recipients.push(...teachers);
+  }
+
+  return [...new Map(recipients.map((recipient) => [String(recipient._id), recipient])).values()];
 }
 
 function eventEmail(event) {
   const date = new Date(event.date).toLocaleDateString();
-  const url = `${process.env.CLIENT_ORIGIN || 'http://127.0.0.1:5500'}/frontend/pages/dashboard-parent.html`;
-  const details = `${event.title}\n${event.description}\nDate: ${date}\nTime: ${event.time}\nVenue: ${event.venue}\nParent dashboard: ${url}`;
+  const url = `${process.env.CLIENT_ORIGIN || 'http://127.0.0.1:5500'}/frontend/pages/login.html`;
+  const details = `${event.title}\n${event.description}\nDate: ${date}\nTime: ${event.time}\nVenue: ${event.venue}\nSign in to view your dashboard: ${url}`;
   return {
     subject: `School event: ${event.title}`,
     text: details,
-    html: `<div style="font-family:Arial,sans-serif;line-height:1.6;color:#25332d"><h2>${escapeHtml(event.title)}</h2><p>${escapeHtml(event.description).replace(/\r?\n/g, '<br>')}</p><p><strong>Date:</strong> ${escapeHtml(date)}<br><strong>Time:</strong> ${escapeHtml(event.time)}<br><strong>Venue:</strong> ${escapeHtml(event.venue)}</p><p><a href="${escapeHtml(url)}">Open the Parent dashboard</a></p></div>`,
+    html: `<div style="font-family:Arial,sans-serif;line-height:1.6;color:#25332d"><h2>${escapeHtml(event.title)}</h2><p>${escapeHtml(event.description).replace(/\r?\n/g, '<br>')}</p><p><strong>Date:</strong> ${escapeHtml(date)}<br><strong>Time:</strong> ${escapeHtml(event.time)}<br><strong>Venue:</strong> ${escapeHtml(event.venue)}</p><p><a href="${escapeHtml(url)}">Sign in to view your dashboard</a></p></div>`,
   };
 }
 
 async function publishEvent(event) {
-  const parents = await getEventParents(event);
+  const recipients = await getEventRecipients(event);
   const message = `${event.description} Date: ${new Date(event.date).toLocaleDateString()}, ${event.time}, ${event.venue}.`;
-  if (parents.length) {
-    await Notification.bulkWrite(parents.map((parent) => ({
+  if (recipients.length) {
+    await Notification.bulkWrite(recipients.map((recipient) => ({
       updateOne: {
-        filter: { parent: parent._id, event: event._id, type: 'event' },
-        update: { $setOnInsert: { parent: parent._id, event: event._id, type: 'event', priority: 1, title: event.title, message } },
+        filter: { parent: recipient._id, event: event._id, type: 'event' },
+        update: { $setOnInsert: { parent: recipient._id, event: event._id, type: 'event', priority: 1, title: event.title, message } },
         upsert: true,
       },
     })));
@@ -99,7 +132,7 @@ async function publishEvent(event) {
   if (parents.length && !alreadyNotified) {
     queueEmailDelivery({ ...eventEmail(event), parents, type: 'event', eventId: event._id });
   }
-  return parents.length;
+  return recipients.length;
 }
 
 async function getEmailSummary(event) {
@@ -131,9 +164,25 @@ exports.listEvents = async (req, res) => {
       { $or: [{ targetType: 'all' }, { targetType: { $exists: false } }, { targetClasses: { $in: classNames } }] },
     ];
   } else if (req.user.role === 'teacher') {
-    filter.$or = [
-      { audience: { $in: ['all', 'teachers'] } },
-      { createdBy: req.user._id },
+    const teacherClasses = await Student.distinct('className', {
+      teacher: req.user._id,
+      status: 'active',
+    });
+    if (req.user.assignedClass) teacherClasses.push(req.user.assignedClass);
+    filter.$and = [
+      {
+        $or: [
+          { audience: { $in: ['all', 'teachers'] } },
+          { createdBy: req.user._id },
+        ],
+      },
+      {
+        $or: [
+          { targetType: { $ne: 'classes' } },
+          { targetClasses: { $in: [...new Set(teacherClasses)] } },
+          { createdBy: req.user._id },
+        ],
+      },
     ];
   }
   const events = await Event.find(filter).populate('createdBy', 'name role').sort({ date: 1 });

@@ -1,9 +1,12 @@
 const Fee = require('../models/Fee');
+const EmailLog = require('../models/EmailLog');
 const Payment = require('../models/Payment');
 const Student = require('../models/Student');
 const Notification = require('../models/Notification');
 const ReceiptCounter = require('../models/ReceiptCounter');
+const { queueEmailDelivery } = require('../services/emailDelivery');
 const logActivity = require('../utils/logActivity');
+const mongoose = require('mongoose');
 
 function formatMoney(value) {
   return `₱${Number(value).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -12,6 +15,34 @@ function formatMoney(value) {
 function paymentStatus(totalPaid, totalFee) {
   if (totalPaid <= 0) return 'unpaid';
   return totalPaid >= totalFee ? 'paid' : 'partial';
+}
+
+function escapeHtml(value = '') {
+  return String(value).replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[character]);
+}
+
+function feeReminderContent(fee, student, parent, totalPaid) {
+  const remaining = Math.max(0, Number((fee.amount - totalPaid).toFixed(2)));
+  const dueDate = new Date(fee.dueDate).toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' });
+  const title = 'Unpaid balance reminder';
+  const message = `The remaining balance for ${student.name}'s ${fee.description} is ${formatMoney(remaining)}. Total fee: ${formatMoney(fee.amount)}. Total paid: ${formatMoney(totalPaid)}. Due date: ${dueDate}. Please contact the school if you have already paid.`;
+  const dashboardUrl = `${process.env.CLIENT_ORIGIN || 'http://127.0.0.1:5500'}/frontend/pages/dashboard-parent.html`;
+  const text = [
+    `Dear ${parent.name || 'Parent/Guardian'},`,
+    '',
+    `This is a reminder that ${student.name} has an outstanding balance for ${fee.description}.`,
+    `Total fee: ${formatMoney(fee.amount)}`,
+    `Total paid: ${formatMoney(totalPaid)}`,
+    `Remaining balance: ${formatMoney(remaining)}`,
+    `Due date: ${dueDate}`,
+    '',
+    'Please contact the school if you have already paid or have questions.',
+    `Parent dashboard: ${dashboardUrl}`,
+  ].join('\n');
+  const html = `<div style="font-family:Arial,sans-serif;line-height:1.6;color:#25332d"><h2>Unpaid balance reminder</h2><p>Dear ${escapeHtml(parent.name || 'Parent/Guardian')},</p><p>This is a reminder that <strong>${escapeHtml(student.name)}</strong> has an outstanding balance for <strong>${escapeHtml(fee.description)}</strong>.</p><p><strong>Total fee:</strong> ${escapeHtml(formatMoney(fee.amount))}<br><strong>Total paid:</strong> ${escapeHtml(formatMoney(totalPaid))}<br><strong>Remaining balance:</strong> ${escapeHtml(formatMoney(remaining))}<br><strong>Due date:</strong> ${escapeHtml(dueDate)}</p><p>Please contact the school if you have already paid or have questions.</p><p><a href="${escapeHtml(dashboardUrl)}">Open the Parent dashboard</a></p></div>`;
+  return { remaining, title, message, dueDate, text, html };
 }
 
 async function nextReceiptNumber(datePaid) {
@@ -179,6 +210,177 @@ exports.listTeacherFees = async (req, res) => {
     .sort({ dueDate: 1 });
   const feeSummaries = await includePaymentHistory(fees);
   res.json({ fees: feeSummaries.map(({ payments, ...fee }) => fee) });
+};
+
+// POST /api/fees/reminders/all
+exports.remindAllParents = async (req, res) => {
+  try {
+    const studentFilter = req.user.role === 'teacher' ? { teacher: req.user._id } : {};
+    const students = await Student.find(studentFilter)
+      .select('name className parent teacher')
+      .populate('parent', 'name email role status');
+    if (!students.length) {
+      return res.json({ unpaidFeeCount: 0, remindedCount: 0, skippedCount: 0 });
+    }
+
+    const studentById = new Map(students.map((student) => [String(student._id), student]));
+    const fees = await Fee.find({ student: { $in: students.map((student) => student._id) } }).sort({ dueDate: 1 });
+    if (!fees.length) {
+      return res.json({ unpaidFeeCount: 0, remindedCount: 0, skippedCount: 0 });
+    }
+    const payments = await Payment.find({
+      fee: { $in: fees.map((fee) => fee._id) },
+      receiptState: { $ne: 'voided' },
+    }).select('fee amountPaid');
+    const paidByFee = new Map();
+    payments.forEach((payment) => {
+      const feeId = String(payment.fee);
+      paidByFee.set(feeId, Number(((paidByFee.get(feeId) || 0) + Number(payment.amountPaid || 0)).toFixed(2)));
+    });
+
+    const reminders = [];
+    let unpaidFeeCount = 0;
+    let skippedCount = 0;
+    for (const fee of fees) {
+      const student = studentById.get(String(fee.student));
+      if (!student) continue;
+      const totalPaid = paidByFee.get(String(fee._id)) || 0;
+      const remaining = Math.max(0, Number((fee.amount - totalPaid).toFixed(2)));
+      if (remaining <= 0) continue;
+      unpaidFeeCount += 1;
+      const parent = student.parent;
+      if (!parent || parent.role !== 'parent' || parent.status !== 'approved' || !parent.email) {
+        skippedCount += 1;
+        continue;
+      }
+      reminders.push({ fee, student, parent, totalPaid });
+    }
+
+    if (reminders.length) {
+      const createdNotifications = await Notification.insertMany(reminders.map(({ fee, student, parent, totalPaid }) => {
+        const content = feeReminderContent(fee, student, parent, totalPaid);
+        return {
+          parent: parent._id,
+          type: 'fee',
+          priority: 1,
+          student: student._id,
+          fee: fee._id,
+          title: content.title,
+          message: content.message,
+        };
+      }));
+      reminders.forEach(({ fee, student, parent, totalPaid }, index) => {
+        const content = feeReminderContent(fee, student, parent, totalPaid);
+        queueEmailDelivery({
+          parents: [parent],
+          type: 'fee',
+          feeId: fee._id,
+          notificationId: createdNotifications[index]._id,
+          subject: `Balance reminder for ${student.name}`,
+          text: content.text,
+          html: content.html,
+        });
+      });
+      await logActivity(req.user._id, 'fee-reminders-sent', `${createdNotifications.length} unpaid fee reminders sent`);
+    }
+
+    res.status(202).json({
+      unpaidFeeCount,
+      remindedCount: reminders.length,
+      skippedCount,
+      message: reminders.length
+        ? `Created reminders for ${reminders.length} unpaid fee${reminders.length === 1 ? '' : 's'}. Email delivery is processing.`
+        : 'No unpaid fees with an active parent email were found.',
+    });
+  } catch (err) {
+    console.error('[fees] Could not send all balance reminders:', err.message);
+    res.status(500).json({ message: 'Could not send all balance reminders.' });
+  }
+};
+
+// POST /api/fees/:id/reminders
+exports.remindParent = async (req, res) => {
+  try {
+    if (!mongoose.isObjectIdOrHexString(req.params.id)) {
+      return res.status(404).json({ message: 'Fee record not found.' });
+    }
+    const fee = await Fee.findById(req.params.id);
+    if (!fee) return res.status(404).json({ message: 'Fee record not found.' });
+
+    const student = await Student.findById(fee.student).populate('parent', 'name email role status');
+    if (!student) return res.status(404).json({ message: 'Student record not found.' });
+    if (req.user.role === 'teacher' && String(student.teacher) !== String(req.user._id)) {
+      return res.status(403).json({ message: 'You can only remind parents of students assigned to your class.' });
+    }
+    if (!student.parent || student.parent.role !== 'parent' || student.parent.status !== 'approved') {
+      return res.status(409).json({ message: 'This student does not have an active parent account to notify.' });
+    }
+
+    const payments = await Payment.find({ fee: fee._id, receiptState: { $ne: 'voided' } }).select('amountPaid');
+    const totalPaid = Number(payments.reduce((sum, payment) => sum + Number(payment.amountPaid || 0), 0).toFixed(2));
+    const remaining = Math.max(0, Number((fee.amount - totalPaid).toFixed(2)));
+    if (remaining <= 0) return res.status(409).json({ message: 'This fee is already fully paid.' });
+
+    const content = feeReminderContent(fee, student, student.parent, totalPaid);
+    const notification = await Notification.create({
+      parent: student.parent._id,
+      type: 'fee',
+      priority: 1,
+      student: student._id,
+      fee: fee._id,
+      title: content.title,
+      message: content.message,
+    });
+
+    queueEmailDelivery({
+      parents: [student.parent],
+      type: 'fee',
+      feeId: fee._id,
+      notificationId: notification._id,
+      subject: `Balance reminder for ${student.name}`,
+      text: content.text,
+      html: content.html,
+    });
+    await logActivity(req.user._id, 'fee-reminder-sent', `${student.name}: ${formatMoney(remaining)} remaining on fee ${fee._id}`);
+    res.status(202).json({
+      notification,
+      emailSummary: { sent: 0, skipped: 0, failed: 0, expected: 1, complete: false },
+    });
+  } catch (err) {
+    console.error('[fees] Could not send balance reminder:', err.message);
+    res.status(500).json({ message: 'Could not send balance reminder.' });
+  }
+};
+
+// GET /api/fees/:id/reminders/:notificationId/email-summary
+exports.reminderEmailSummary = async (req, res) => {
+  if (!mongoose.isObjectIdOrHexString(req.params.id) || !mongoose.isObjectIdOrHexString(req.params.notificationId)) {
+    return res.status(404).json({ message: 'Fee reminder not found.' });
+  }
+  const fee = await Fee.findById(req.params.id);
+  if (!fee) return res.status(404).json({ message: 'Fee record not found.' });
+  const student = await Student.findById(fee.student).select('teacher parent');
+  if (!student) return res.status(404).json({ message: 'Student record not found.' });
+  if (req.user.role === 'teacher' && String(student.teacher) !== String(req.user._id)) {
+    return res.status(403).json({ message: 'You cannot view this delivery summary.' });
+  }
+  if (!student.parent) return res.status(404).json({ message: 'Fee reminder not found.' });
+  const notification = await Notification.findOne({
+    _id: req.params.notificationId,
+    fee: fee._id,
+    parent: student.parent,
+    type: 'fee',
+  });
+  if (!notification) return res.status(404).json({ message: 'Fee reminder not found.' });
+  const logs = await EmailLog.find({ notification: notification._id }).select('status');
+  const emailSummary = {
+    sent: logs.filter((log) => log.status === 'sent').length,
+    skipped: logs.filter((log) => log.status === 'skipped').length,
+    failed: logs.filter((log) => log.status === 'failed').length,
+    expected: 1,
+  };
+  emailSummary.complete = logs.length >= emailSummary.expected;
+  res.json({ emailSummary });
 };
 
 // POST /api/fees/:id/payments   (admin logs a payment against a fee)

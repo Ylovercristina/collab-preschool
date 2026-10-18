@@ -1,10 +1,13 @@
 // ---------- Play-is-School -- Teacher Dashboard Controller ----------
 const user = requireRole('teacher');
 let myStudents = [];
+let cachedTeacherFees = [];
 let activeThreadUserId = null;
 let teacherCalendar = null;
 let teacherAudiencePicker = null;
 let teacherAlertView = 'active';
+let knownTeacherNotificationIds = new Set();
+let teacherNotificationsInitialized = false;
 
 function escapeTeacherHtml(value = '') {
   return String(value).replace(/[&<>"']/g, (character) => ({
@@ -48,6 +51,7 @@ function onPanelShown(panel) {
   if (panel === 'progress') return loadProgressPanel();
   if (panel === 'messages') return loadInbox();
   if (panel === 'events') return loadEvents();
+  if (panel === 'notifications') return loadTeacherNotifications();
   if (panel === 'pickup') return loadPickupPanel();
   if (panel === 'alerts') return loadAlerts();
 }
@@ -60,7 +64,7 @@ async function loadMyStudents() {
 
 // ---------- Overview ----------
 async function loadOverview() {
-  await loadMyStudents();
+  await Promise.all([loadMyStudents(), loadTeacherNotifications({ silent: true })]);
   document.getElementById('statRow').innerHTML = `
     <div class="stat-card">
       <div class="stat-icon"><i class="fa-solid fa-user-graduate"></i></div>
@@ -89,6 +93,68 @@ async function loadOverview() {
     </div>
   ` : '<div class="empty-state"><i class="fa-solid fa-clipboard-question"></i><p>No students assigned to your class roster yet.</p></div>';
 }
+
+async function loadTeacherNotifications({ silent = false } = {}) {
+  const container = document.getElementById('teacherNotificationsList');
+  try {
+    const { notifications = [], unreadCount = 0 } = await api.get('/notifications');
+    const badge = document.getElementById('teacherNotificationUnreadBadge');
+    if (badge) {
+      badge.hidden = unreadCount === 0;
+      badge.textContent = unreadCount;
+      badge.setAttribute('aria-label', `${unreadCount} unread notifications`);
+    }
+    if (teacherNotificationsInitialized && !silent) {
+      notifications
+        .filter((notification) => !knownTeacherNotificationIds.has(notification._id))
+        .forEach((notification) => showToast(`New school notification: ${notification.title}`, 'info'));
+    }
+    knownTeacherNotificationIds = new Set(notifications.map((notification) => notification._id));
+    teacherNotificationsInitialized = true;
+    if (!container) return;
+    container.innerHTML = notifications.length ? `
+      <div class="teacher-notification-list">
+        ${notifications.map((notification) => `
+          <article class="teacher-notification ${notification.readAt ? '' : 'unread'}">
+            <div class="teacher-notification-icon"><i class="fa-solid fa-${notification.type === 'event' ? 'calendar-days' : 'bell'}" aria-hidden="true"></i></div>
+            <div class="teacher-notification-content">
+              <div class="teacher-notification-heading">
+                <strong>${escapeTeacherHtml(notification.title)}</strong>
+                <time datetime="${escapeTeacherHtml(notification.createdAt || '')}">${escapeTeacherHtml(fmtDate(notification.createdAt))}</time>
+              </div>
+              <p>${escapeTeacherHtml(notification.message)}</p>
+            </div>
+            ${notification.readAt
+              ? '<span class="badge approved">Read</span>'
+              : `<button type="button" class="btn btn-ghost btn-sm" data-mark-teacher-notification="${escapeTeacherHtml(notification._id)}">Mark read</button>`}
+          </article>
+        `).join('')}
+      </div>
+    ` : '<div class="empty-state"><i class="fa-solid fa-bell"></i><p>No notifications yet.</p></div>';
+
+    container.querySelectorAll('[data-mark-teacher-notification]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        try {
+          await api.patch(`/notifications/${button.dataset.markTeacherNotification}/read`, {});
+          await loadTeacherNotifications({ silent: true });
+        } catch (error) {
+          showToast(error.message || 'Could not mark notification as read.', 'error');
+          button.disabled = false;
+        }
+      });
+    });
+  } catch (error) {
+    if (container) {
+      container.innerHTML = `<div class="notification-empty">${escapeTeacherHtml(error.message || 'Notifications could not be loaded.')}</div>`;
+    }
+    if (!silent) showToast(error.message || 'Notifications could not be loaded.', 'error');
+  }
+}
+
+document.getElementById('refreshTeacherNotifications')?.addEventListener('click', () => {
+  loadTeacherNotifications();
+});
 
 // ---------- Students Panel (Edit Student Information & Pickup) ----------
 async function loadStudentsPanel() {
@@ -146,31 +212,81 @@ async function loadStudentsPanel() {
 
 async function loadFeeStatuses() {
   const { fees } = await api.get('/fees/teacher');
+  cachedTeacherFees = fees || [];
   const tbody = document.getElementById('teacherFeesTbody');
-  if (!fees.length) {
-    tbody.innerHTML = '<tr><td colspan="8"><div class="empty-state"><i class="fa-solid fa-credit-card"></i><p>No fee records for your assigned students.</p></div></td></tr>';
+  if (!cachedTeacherFees.length) {
+    tbody.innerHTML = '<tr><td colspan="9"><div class="empty-state"><i class="fa-solid fa-credit-card"></i><p>No fee records for your assigned students.</p></div></td></tr>';
     return;
   }
 
-  tbody.innerHTML = fees.map((fee) => {
+  tbody.innerHTML = cachedTeacherFees.map((fee) => {
     const totalPaid = Number(Number(fee.amountPaid || 0).toFixed(2));
     const remaining = Math.max(0, Number((Number(fee.amount) - totalPaid).toFixed(2)));
     const status = totalPaid <= 0 ? 'unpaid' : (remaining === 0 ? 'paid' : 'partial');
     const statusLabel = { unpaid: 'Unpaid', partial: 'Partial Payment', paid: 'Paid' }[status];
     return `
       <tr>
-        <td><strong>${fee.student ? fee.student.name : '—'}</strong></td>
-        <td>${fee.student ? fee.student.className || '—' : '—'}</td>
-        <td>${fee.description}</td>
-        <td>${fmtMoney(fee.amount)}</td>
-        <td>${fmtMoney(totalPaid)}</td>
-        <td>${fmtMoney(remaining)}</td>
-        <td>${fmtDate(fee.dueDate)}</td>
-        <td><span class="badge ${status}">${statusLabel}</span></td>
+        <td data-label="Student"><strong class="fee-primary-value">${escapeTeacherHtml(fee.student ? fee.student.name : '—')}</strong></td>
+        <td data-label="Class">${escapeTeacherHtml(fee.student ? fee.student.className || '—' : '—')}</td>
+        <td data-label="Fee">${escapeTeacherHtml(fee.description)}</td>
+        <td data-label="Total" class="fee-numeric"><strong class="fee-primary-value">${fmtMoney(fee.amount)}</strong></td>
+        <td data-label="Paid" class="fee-numeric">${fmtMoney(totalPaid)}</td>
+        <td data-label="Remaining" class="fee-numeric"><span class="fee-balance">${fmtMoney(remaining)}</span></td>
+        <td data-label="Due Date">${fmtDate(fee.dueDate)}</td>
+        <td data-label="Status"><span class="badge ${status}">${statusLabel}</span></td>
+        <td data-label="Actions"><div class="fee-row-actions">${status !== 'paid' ? `<button type="button" class="btn btn-secondary btn-sm" title="Remind parent" aria-label="Remind parent about ${escapeTeacherHtml(fee.student ? fee.student.name : 'student')}" data-fee-reminder="${escapeTeacherHtml(fee._id)}"><i class="fa-solid fa-envelope" aria-hidden="true"></i></button>` : '<span class="badge paid"><i class="fa-solid fa-check"></i> Settled</span>'}</div></td>
       </tr>
     `;
   }).join('');
+
+  tbody.querySelectorAll('[data-fee-reminder]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      try {
+        const feeId = button.dataset.feeReminder;
+        const { notification, emailSummary } = await api.post(`/fees/${feeId}/reminders`, {});
+        const summaryTarget = document.createElement('span');
+        const summary = await pollEmailSummary(
+          `/fees/${feeId}/reminders/${notification._id}/email-summary`,
+          emailSummary,
+          summaryTarget
+        );
+        const emailStatus = summary.complete
+          ? `Email: ${formatEmailSummary(summary)}.`
+          : 'Email delivery is still processing; check the parent email address if it does not arrive.';
+        showToast(`In-app reminder sent. ${emailStatus}`, summary.failed || summary.skipped ? 'error' : (summary.complete ? 'success' : 'info'));
+      } catch (error) {
+        showToast(error.message || 'Could not send the balance reminder.', 'error');
+      } finally {
+        button.disabled = false;
+      }
+    });
+  });
 }
+
+document.getElementById('remindAllFeesBtn').addEventListener('click', async (event) => {
+  const button = event.currentTarget;
+  const unpaidFeeCount = cachedTeacherFees.filter((fee) => {
+    return Number(fee.amount) - Number(fee.amountPaid || 0) > 0;
+  }).length;
+  if (!unpaidFeeCount) {
+    showToast('There are no unpaid fees to remind.', 'info');
+    return;
+  }
+  if (!window.confirm(`Send reminders for all ${unpaidFeeCount} unpaid fees for your assigned students? Each reminder creates an in-app notification and sends an email to the parent.`)) return;
+
+  button.disabled = true;
+  try {
+    const result = await api.post('/fees/reminders/all', {});
+    const skipped = result.skippedCount ? ` ${result.skippedCount} fee reminder(s) skipped because no active parent email was available.` : '';
+    showToast(`${result.message}${skipped}`, result.skippedCount ? 'info' : 'success');
+    await loadFeeStatuses();
+  } catch (error) {
+    showToast(error.message || 'Could not send all balance reminders.', 'error');
+  } finally {
+    button.disabled = false;
+  }
+});
 
 // ---------- Attendance ----------
 const attDateInput = document.getElementById('attDate');
@@ -482,8 +598,8 @@ document.getElementById('addEventBtn').addEventListener('click', async () => {
         summaryTarget.textContent = event.publicationStatus === 'draft'
           ? 'Draft saved.'
           : (event.publicationStatus === 'pending'
-            ? 'Submitted for admin approval. Parents will be notified after approval.'
-            : (event.emailRecipientCount === 0 ? 'Event saved, but no parent recipients were found.' : formatEmailSummary(emailSummary)));
+            ? 'Submitted for admin approval. Selected recipients will be notified after approval.'
+            : (event.emailRecipientCount === 0 ? 'Event saved, but no eligible recipients were found.' : formatEmailSummary(emailSummary)));
         if (event.publicationStatus === 'published' && !emailSummary.complete && event.emailRecipientCount) {
           await pollEmailSummary(`/events/${event._id}/email-summary`, emailSummary, summaryTarget);
         }

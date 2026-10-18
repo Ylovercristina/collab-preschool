@@ -351,12 +351,12 @@ async function renderFees() {
     const statusLabel = { unpaid: 'Unpaid', partial: 'Partial Payment', paid: 'Paid' }[status];
     return `
       <tr>
-        <td><strong>${f.description}</strong>${renderPaymentHistory(f.payments, f._id, f.amount)}</td>
-        <td><strong>${fmtMoney(f.amount)}</strong></td>
-        <td>${fmtMoney(totalPaid)}</td>
-        <td>${fmtMoney(remainingBalance)}</td>
-        <td>${fmtDate(f.dueDate)}</td>
-        <td><span class="badge ${status}">${statusLabel}</span></td>
+        <td data-label="Description"><strong class="fee-primary-value">${escapeParentMessage(f.description)}</strong>${renderPaymentHistory(f.payments, f._id, f.amount)}</td>
+        <td data-label="Total Amount" class="fee-numeric"><strong class="fee-primary-value">${fmtMoney(f.amount)}</strong></td>
+        <td data-label="Total Paid" class="fee-numeric">${fmtMoney(totalPaid)}</td>
+        <td data-label="Remaining Balance" class="fee-numeric"><span class="fee-balance">${fmtMoney(remainingBalance)}</span></td>
+        <td data-label="Due Date">${fmtDate(f.dueDate)}</td>
+        <td data-label="Status"><span class="badge ${status}">${statusLabel}</span></td>
       </tr>
     `;
   }).join('') : `<tr><td colspan="6"><div class="empty-state"><i class="fa-solid fa-credit-card"></i><p>No fee statements for this child.</p></div></td></tr>`;
