@@ -3,6 +3,7 @@ const user = requireRole('parent');
 let myChildren = [];
 let activeChildId = null;
 let activeTeacherId = null;
+let activeParentGroupId = null;
 let parentCalendar = null;
 let notificationFilter = 'all';
 let notificationSearchQuery = '';
@@ -19,7 +20,7 @@ function onPanelShown(panel) {
   if (panel === 'fees') {
     return Promise.all([renderFees(), loadPaymentNotifications()]);
   }
-  if (panel === 'messages') return openTeacherThread();
+  if (panel === 'messages') return loadParentMessages();
   if (panel === 'events') return loadEvents();
   if (panel === 'pickup') return renderPickup();
 }
@@ -139,6 +140,14 @@ function relativeNotificationTime(date) {
   return `${days} day${days === 1 ? '' : 's'} ago`;
 }
 
+function notificationTypeLabel(type) {
+  return { attendance: 'Attendance', emergency: 'Emergency', event: 'Event', fee: 'Fee' }[type] || 'Update';
+}
+
+function notificationTypeIcon(type) {
+  return { attendance: 'fa-user-clock', emergency: 'fa-triangle-exclamation', event: 'fa-calendar-days', fee: 'fa-receipt' }[type] || 'fa-bell';
+}
+
 async function loadPaymentNotifications({ silent = false } = {}) {
   const fullContainer = document.getElementById('parentNotificationsList');
   if (fullContainer && !notificationsInitialized) fullContainer.innerHTML = '<div class="notification-loading"><i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i> Loading notifications</div>';
@@ -157,7 +166,7 @@ async function loadPaymentNotifications({ silent = false } = {}) {
   });
   const nextIds = new Set(notifications.map((item) => item._id));
   if (notificationsInitialized && !silent) {
-    notifications.filter((item) => !knownNotificationIds.has(item._id)).forEach((item) => showToast(`New ${item.type === 'emergency' ? 'emergency' : 'school'} notification: ${item.title}`, item.type === 'emergency' ? 'error' : 'info'));
+    notifications.filter((item) => !knownNotificationIds.has(item._id)).forEach((item) => showToast(`New ${notificationTypeLabel(item.type).toLowerCase()} notification: ${item.title}`, item.type === 'emergency' ? 'error' : 'info'));
   }
   knownNotificationIds = nextIds;
   notificationsInitialized = true;
@@ -172,6 +181,7 @@ async function loadPaymentNotifications({ silent = false } = {}) {
     const filtered = compact ? notifications.filter((notification) => !notification.readAt).slice(0, 3) : notifications.filter((notification) => (
       notificationFilter === 'all'
       || (notificationFilter === 'events' && notification.type === 'event')
+      || (notificationFilter === 'attendance' && notification.type === 'attendance')
       || (notificationFilter === 'emergencies' && notification.type === 'emergency')
       || (notificationFilter === 'unread' && !notification.readAt)
     )).filter((notification) => !notificationSearchQuery
@@ -180,7 +190,7 @@ async function loadPaymentNotifications({ silent = false } = {}) {
       if (compact) {
         container.innerHTML = '<div class="notification-empty">No new notifications.</div>';
       } else {
-        container.innerHTML = `<div class="record-category-tabs" role="tablist" aria-label="Notification type">${[['all', 'All'], ['events', 'Events'], ['emergencies', 'Emergencies'], ['unread', 'Unread']].map(([value, label]) => `<button type="button" class="record-category-tab ${notificationFilter === value ? 'active' : ''}" data-notification-filter="${value}" role="tab" aria-selected="${notificationFilter === value}">${label}</button>`).join('')}</div><div class="records-filterbar"><input id="notificationSearchInput" data-notification-search type="search" value="${escapeParentMessage(notificationSearchQuery)}" placeholder="Search title or message..." aria-label="Search notifications" /><button type="button" class="btn btn-secondary btn-sm" data-mark-all-read ${unreadCount ? '' : 'disabled'}><i class="fa-solid fa-check-double" aria-hidden="true"></i> Mark all as read</button><span class="records-result-count">0 notifications</span></div><div class="notification-empty">${notifications.length ? 'No notifications match these filters.' : 'No notifications yet.'}</div>`;
+        container.innerHTML = `<div class="record-category-tabs" role="tablist" aria-label="Notification type">${[['all', 'All'], ['attendance', 'Attendance'], ['events', 'Events'], ['emergencies', 'Emergencies'], ['unread', 'Unread']].map(([value, label]) => `<button type="button" class="record-category-tab ${notificationFilter === value ? 'active' : ''}" data-notification-filter="${value}" role="tab" aria-selected="${notificationFilter === value}">${label}</button>`).join('')}</div><div class="records-filterbar"><input id="notificationSearchInput" data-notification-search type="search" value="${escapeParentMessage(notificationSearchQuery)}" placeholder="Search title or message..." aria-label="Search notifications" /><button type="button" class="btn btn-secondary btn-sm" data-mark-all-read ${unreadCount ? '' : 'disabled'}><i class="fa-solid fa-check-double" aria-hidden="true"></i> Mark all as read</button><span class="records-result-count">0 notifications</span></div><div class="notification-empty">${notifications.length ? 'No notifications match these filters.' : 'No notifications yet.'}</div>`;
         bindFullNotificationControls(container, notifications, renderList);
       }
       return;
@@ -188,7 +198,7 @@ async function loadPaymentNotifications({ silent = false } = {}) {
     if (!compact) {
       container.innerHTML = `
         <div class="record-category-tabs" role="tablist" aria-label="Notification type">
-          ${[['all', 'All'], ['events', 'Events'], ['emergencies', 'Emergencies'], ['unread', 'Unread']].map(([value, label]) => `<button type="button" class="record-category-tab ${notificationFilter === value ? 'active' : ''}" data-notification-filter="${value}" role="tab" aria-selected="${notificationFilter === value}">${label}</button>`).join('')}
+          ${[['all', 'All'], ['attendance', 'Attendance'], ['events', 'Events'], ['emergencies', 'Emergencies'], ['unread', 'Unread']].map(([value, label]) => `<button type="button" class="record-category-tab ${notificationFilter === value ? 'active' : ''}" data-notification-filter="${value}" role="tab" aria-selected="${notificationFilter === value}">${label}</button>`).join('')}
         </div>
         <div class="records-filterbar">
           <input id="notificationSearchInput" data-notification-search type="search" value="${escapeParentMessage(notificationSearchQuery)}" placeholder="Search title or message..." aria-label="Search notifications" />
@@ -200,9 +210,9 @@ async function loadPaymentNotifications({ silent = false } = {}) {
             <thead><tr><th>Type</th><th>Notification</th><th>Received</th><th>Status</th><th>Action</th></tr></thead>
             <tbody>${filtered.map((notification) => {
               const emergency = notification.type === 'emergency';
-              const icon = emergency ? 'fa-triangle-exclamation' : (notification.type === 'event' ? 'fa-calendar-days' : 'fa-receipt');
+              const icon = notificationTypeIcon(notification.type);
               return `<tr class="${emergency ? 'notification-emergency-row' : ''} ${notification.readAt ? '' : 'notification-unread-row'}">
-                <td><span class="badge ${emergency ? 'archived' : 'approved'}"><i class="fa-solid ${icon}" aria-hidden="true"></i> ${emergency ? 'Emergency' : (notification.type === 'event' ? 'Event' : 'Fee')}</span></td>
+                <td><span class="badge ${emergency ? 'archived' : 'approved'}"><i class="fa-solid ${icon}" aria-hidden="true"></i> ${notificationTypeLabel(notification.type)}</span></td>
                 <td><strong>${escapeParentMessage(notification.title)}</strong><div class="notification-preview">${escapeParentMessage(notification.message)}</div></td>
                 <td><time datetime="${escapeParentMessage(notification.createdAt)}">${relativeNotificationTime(notification.createdAt)}</time></td>
                 <td><span class="badge ${notification.readAt ? 'approved' : 'pending'}">${notification.readAt ? 'Read' : 'Unread'}</span></td>
@@ -220,14 +230,14 @@ async function loadPaymentNotifications({ silent = false } = {}) {
         ${compact ? `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;"><i class="fa-solid fa-bell" style="color:var(--primary);"></i><h3 style="margin:0;">Recent unread notifications</h3>${unreadCount ? `<span class="badge pending">${unreadCount} unread</span>` : ''}<button type="button" class="btn btn-ghost btn-sm" data-open-notifications-panel>All</button></div>` : `
           <div class="parent-notification-toolbar">
             <div class="notification-filters" role="group" aria-label="Filter notifications">
-              ${[['all', 'All'], ['events', 'Events'], ['emergencies', 'Emergencies'], ['unread', 'Unread']].map(([value, label]) => `<button type="button" class="btn btn-ghost btn-sm notification-filter" data-notification-filter="${value}" aria-pressed="${notificationFilter === value}">${label}</button>`).join('')}
+              ${[['all', 'All'], ['attendance', 'Attendance'], ['events', 'Events'], ['emergencies', 'Emergencies'], ['unread', 'Unread']].map(([value, label]) => `<button type="button" class="btn btn-ghost btn-sm notification-filter" data-notification-filter="${value}" aria-pressed="${notificationFilter === value}">${label}</button>`).join('')}
             </div>
             <button type="button" class="btn btn-secondary btn-sm" data-mark-all-read ${unreadCount ? '' : 'disabled'}><i class="fa-solid fa-check-double" aria-hidden="true"></i> Mark all as read</button>
           </div>
         `}
         ${filtered.map((notification) => {
           const emergency = notification.type === 'emergency';
-          const icon = emergency ? 'fa-triangle-exclamation' : (notification.type === 'event' ? 'fa-calendar-days' : 'fa-receipt');
+          const icon = notificationTypeIcon(notification.type);
           return `<article class="notification-row ${!notification.readAt ? 'unread' : ''} ${emergency ? 'notification-type-emergency' : ''}">
             <span class="notification-type-icon"><i class="fa-solid ${icon}" aria-hidden="true"></i></span>
             <div><div class="notification-title">${escapeParentMessage(notification.title)}</div><p style="margin:2px 0 4px;font-size:13px;">${escapeParentMessage(notification.message)}</p><time datetime="${escapeParentMessage(notification.createdAt)}" style="font-size:12px;color:var(--ink-muted);">${relativeNotificationTime(notification.createdAt)}</time></div>
@@ -372,7 +382,52 @@ function escapeParentMessage(value = '') {
   })[character]);
 }
 
+function showParentMessageFeedback(text) {
+  const message = document.getElementById('parentMessageFormMessage');
+  message.textContent = text;
+  message.hidden = !text;
+}
+
+async function loadParentMessages() {
+  const groupInbox = document.getElementById('parentGroupInbox');
+  const teacherChatButton = document.getElementById('parentTeacherChatBtn');
+  let groups = [];
+  try {
+    const { threads } = await api.get('/messages/inbox');
+    groups = threads.filter((thread) => thread.type === 'group');
+    groupInbox.innerHTML = groups.length ? groups.map((group) => `
+      <button class="messenger-conversation${group.id === activeParentGroupId ? ' active' : ''}" type="button" data-parent-group="${escapeParentMessage(group.id)}">
+        <span class="messenger-avatar"><i class="fa-solid fa-users"></i></span>
+        <span class="messenger-conversation-copy">
+          <strong>${escapeParentMessage(group.name)}</strong>
+          <span>${escapeParentMessage(group.lastMessage ? group.lastMessage.content : 'Family group')}</span>
+        </span>
+        ${group.unread ? `<span class="messenger-unread" aria-label="${group.unread} unread messages">${group.unread}</span>` : ''}
+      </button>
+    `).join('') : '<div class="messenger-list-empty">No family group chats yet.</div>';
+    groupInbox.querySelectorAll('[data-parent-group]').forEach((button) => button.addEventListener('click', async () => {
+      try {
+        activeParentGroupId = button.dataset.parentGroup;
+        await loadParentMessages();
+      } catch (err) {
+        showParentMessageFeedback(err.message);
+      }
+    }));
+    teacherChatButton.classList.toggle('active', !activeParentGroupId);
+  } catch (err) {
+    groupInbox.innerHTML = `<div class="messenger-list-empty">${escapeParentMessage(err.message || 'Could not load family groups.')}</div>`;
+  }
+
+  if (activeParentGroupId && groups.some((group) => group.id === activeParentGroupId)) {
+    return openParentGroup(activeParentGroupId);
+  }
+  return openTeacherThread();
+}
+
 async function openTeacherThread() {
+  activeParentGroupId = null;
+  document.getElementById('parentTeacherChatBtn').classList.add('active');
+  document.querySelectorAll('#parentGroupInbox .messenger-conversation').forEach((button) => button.classList.remove('active'));
   if (!activeTeacherId) {
     document.getElementById('chatThread').innerHTML = '<div class="empty-state"><p>No teacher is assigned to your child yet.</p></div>';
     document.getElementById('chatInput').disabled = true;
@@ -381,7 +436,7 @@ async function openTeacherThread() {
   }
   document.getElementById('chatInput').disabled = false;
   document.getElementById('sendChatBtn').disabled = false;
-  document.getElementById('parentMessageFormMessage').textContent = '';
+  showParentMessageFeedback('');
   const child = myChildren.find((c) => c._id === activeChildId);
   document.getElementById('threadWithName').textContent = child && child.teacher ? child.teacher.name : 'Teacher';
   const { messages } = await api.get(`/messages/thread/${activeTeacherId}`);
@@ -394,20 +449,74 @@ async function openTeacherThread() {
   thread.scrollTop = thread.scrollHeight;
 }
 
-document.getElementById('sendChatBtn').addEventListener('click', async () => {
-  const input = document.getElementById('chatInput');
-  if (!activeTeacherId || !input.value.trim()) return;
-  const button = document.getElementById('sendChatBtn');
-  button.disabled = true;
-  document.getElementById('parentMessageFormMessage').textContent = '';
+document.getElementById('parentTeacherChatBtn').addEventListener('click', async () => {
   try {
-    await api.post('/messages', { receiver: activeTeacherId, student: activeChildId, content: input.value.trim() });
-    input.value = '';
     await openTeacherThread();
   } catch (err) {
-    showMsg(document.getElementById('parentMessageFormMessage'), err.message);
+    showParentMessageFeedback(err.message);
+  }
+});
+
+async function openParentGroup(groupId) {
+  activeParentGroupId = String(groupId);
+  document.getElementById('parentTeacherChatBtn').classList.remove('active');
+  document.querySelectorAll('#parentGroupInbox .messenger-conversation').forEach((button) => {
+    button.classList.toggle('active', button.dataset.parentGroup === activeParentGroupId);
+  });
+  showParentMessageFeedback('');
+  const { conversation, messages } = await api.get(`/messages/groups/${encodeURIComponent(groupId)}`);
+  document.getElementById('threadWithName').textContent = conversation.name;
+  document.getElementById('chatInput').disabled = false;
+  document.getElementById('sendChatBtn').disabled = false;
+  document.getElementById('chatThread').innerHTML = messages.map((message) => {
+    const senderId = String(message.sender._id || message.sender);
+    const currentUserId = String(user._id || user.id);
+    const sender = message.sender && typeof message.sender === 'object' ? message.sender : {};
+    const senderName = sender.name || 'User';
+    const content = escapeParentMessage(message.content).replace(/\r?\n/g, '<br>');
+    const initials = senderName.trim().split(/\s+/).slice(0, 2).map((part) => part.charAt(0)).join('').toUpperCase() || '?';
+    const avatar = sender.avatar ? `data-avatar="${escapeParentMessage(sender.avatar)}"` : '';
+    return `
+      <div class="chat-message-row ${senderId === currentUserId ? 'mine' : 'theirs'}">
+        <span class="chat-author-avatar" ${avatar} aria-label="${escapeParentMessage(senderName)}">
+          <img alt="" hidden />
+          <span>${escapeParentMessage(initials)}</span>
+        </span>
+        <div class="chat-bubble ${senderId === currentUserId ? 'mine' : 'theirs'}">
+          <span class="chat-message-sender">${escapeParentMessage(senderName)}</span>${content}
+        </div>
+      </div>
+    `;
+  }).join('') || '<div class="messenger-thread-empty">Say hello to start the conversation.</div>';
+  const thread = document.getElementById('chatThread');
+  thread.querySelectorAll('.chat-author-avatar[data-avatar]').forEach((avatar) => {
+    const image = avatar.querySelector('img');
+    image.onerror = () => { image.hidden = true; };
+    image.onload = () => { image.hidden = false; avatar.querySelector('span').hidden = true; };
+    image.src = profileImageUrl(avatar.dataset.avatar);
+  });
+  thread.scrollTop = thread.scrollHeight;
+}
+
+document.getElementById('sendChatBtn').addEventListener('click', async () => {
+  const input = document.getElementById('chatInput');
+  if ((!activeTeacherId && !activeParentGroupId) || !input.value.trim()) return;
+  const button = document.getElementById('sendChatBtn');
+  button.disabled = true;
+  showParentMessageFeedback('');
+  try {
+    if (activeParentGroupId) {
+      await api.post(`/messages/groups/${encodeURIComponent(activeParentGroupId)}/messages`, { content: input.value.trim() });
+    } else {
+      await api.post('/messages', { receiver: activeTeacherId, student: activeChildId, content: input.value.trim() });
+    }
+    input.value = '';
+    if (activeParentGroupId) await loadParentMessages();
+    else await openTeacherThread();
+  } catch (err) {
+    showParentMessageFeedback(err.message);
   } finally {
-    button.disabled = !activeTeacherId || !activeChildId;
+    button.disabled = activeParentGroupId ? false : (!activeTeacherId || !activeChildId);
   }
 });
 

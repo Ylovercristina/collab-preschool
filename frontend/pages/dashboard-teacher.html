@@ -102,20 +102,102 @@
     </section>
 
     <section class="panel" id="panel-attendance">
-      <div class="toolbar">
+      <div class="attendance-page-heading">
         <div>
-          <h1 style="margin:0;">Class Attendance</h1>
-          <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Mark and record daily student attendance statuses.</p>
+          <h1>Class Attendance</h1>
+          <p>Take attendance, review yesterday’s absences, and download student reports.</p>
         </div>
-        <input type="date" id="attDate" style="padding:8px 12px; border-radius:6px; border:1px solid #CBD5E1;" />
       </div>
       <div id="attendanceMessage" class="form-msg" aria-live="polite"></div>
-      <div class="table-responsive">
-        <table>
-          <thead><tr><th>Student</th><th>Class</th><th>Attendance Status</th><th>Remarks</th><th>Record</th></tr></thead>
-          <tbody id="attTbody"></tbody>
-        </table>
-      </div>
+      <section class="attendance-yesterday-card" id="yesterdayAbsenceCard" aria-live="polite" hidden>
+        <div class="attendance-yesterday-icon"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i></div>
+        <div class="attendance-yesterday-content">
+          <h2>Absent yesterday <span id="yesterdayAbsenceCount" class="attendance-alert-count">0</span></h2>
+          <p>These absences are highlighted in red. Parents are notified when an absence is recorded.</p>
+          <div id="yesterdayAbsenceList" class="attendance-yesterday-list"></div>
+        </div>
+      </section>
+      <section class="card attendance-daily-card">
+        <div class="attendance-toolbar">
+          <div>
+            <h2>Daily attendance</h2>
+            <p>Choose a date, update each status, then save the row.</p>
+          </div>
+          <div class="attendance-toolbar-actions">
+            <div class="attendance-date-control">
+              <label for="attDate">Attendance date</label>
+              <input type="date" id="attDate" />
+            </div>
+            <button class="btn btn-secondary" id="openAttendanceReport" type="button">
+              <i class="fa-solid fa-file-excel" aria-hidden="true"></i> Generate report
+            </button>
+          </div>
+        </div>
+        <template id="attendanceReportModalTemplate">
+          <div class="attendance-report-modal">
+            <div class="attendance-report-heading">
+              <div>
+                <h3>Attendance report</h3>
+                <p>Choose a student and generate a report for a month or a full year.</p>
+              </div>
+            </div>
+            <form id="attendanceReportForm" class="attendance-report-filters">
+              <div class="field">
+                <label for="attendanceReportStudent">Students</label>
+                <select id="attendanceReportStudent" required></select>
+              </div>
+              <div class="field">
+                <label for="attendanceReportPeriod">Report period</label>
+                <select id="attendanceReportPeriod">
+                  <option value="month">Month</option>
+                  <option value="year">Year</option>
+                </select>
+              </div>
+              <div class="field" id="attendanceReportMonthField">
+                <label for="attendanceReportMonth">Month</label>
+                <select id="attendanceReportMonth">
+                  <option value="1">January</option>
+                  <option value="2">February</option>
+                  <option value="3">March</option>
+                  <option value="4">April</option>
+                  <option value="5">May</option>
+                  <option value="6">June</option>
+                  <option value="7">July</option>
+                  <option value="8">August</option>
+                  <option value="9">September</option>
+                  <option value="10">October</option>
+                  <option value="11">November</option>
+                  <option value="12">December</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="attendanceReportYear">Year</label>
+                <input id="attendanceReportYear" type="number" min="1900" max="9999" required />
+              </div>
+              <button class="btn btn-primary" type="submit"><i class="fa-solid fa-magnifying-glass-chart" aria-hidden="true"></i> View report</button>
+            </form>
+            <div id="attendanceReportResults" class="attendance-report-results" hidden>
+              <div class="attendance-report-result-heading">
+                <div id="attendanceReportSummary" class="attendance-report-summary" aria-live="polite"></div>
+                <button class="btn btn-secondary" id="downloadAttendanceReport" type="button" disabled><i class="fa-solid fa-download" aria-hidden="true"></i> Download CSV</button>
+              </div>
+              <div class="table-responsive attendance-table-wrap">
+                <table class="attendance-table attendance-report-table">
+                  <thead><tr><th>Date</th><th>Student</th><th>Class</th><th>Status</th><th>Remarks</th></tr></thead>
+                  <tbody id="attendanceReportTbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </template>
+        <div id="attendanceDailySummary" class="attendance-summary" aria-live="polite"></div>
+        <div class="table-responsive attendance-table-wrap">
+          <table class="attendance-table">
+            <thead><tr><th>Student</th><th>Class</th><th>Status</th><th>Remarks</th><th>Record</th></tr></thead>
+            <tbody id="attTbody"></tbody>
+          </table>
+        </div>
+      </section>
     </section>
 
     <section class="panel" id="panel-progress">
@@ -153,30 +235,74 @@
     </section>
 
     <section class="panel" id="panel-messages">
-      <div style="margin-bottom:20px;">
-        <h1 style="margin:0;">Parent Communications</h1>
-        <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Direct message threads with parents and guardians.</p>
+      <div class="messenger-heading">
+        <div>
+          <h1>Messages</h1>
+          <p>Chat with families of your assigned students and your teaching team.</p>
+        </div>
       </div>
-      <div class="grid-2">
-        <div class="card">
-          <h3 style="margin-bottom:14px;"><i class="fa-solid fa-inbox" style="color:var(--primary); margin-right:6px;"></i>Conversations</h3>
-          <div id="inboxList"></div>
-        </div>
-        <div class="card">
-          <h3 id="threadWithName" style="margin-bottom:14px;">Select a parent</h3>
-          <div class="chat-thread" id="chatThread"></div>
-          <form id="teacherMessageForm">
-            <div class="field" style="margin-top:12px;">
-              <label for="messageStudentSelect">About student</label>
-              <select id="messageStudentSelect" required disabled></select>
+      <div class="teacher-messenger">
+        <aside class="messenger-sidebar" aria-label="Messages and contacts">
+          <div class="messenger-sidebar-heading">
+            <h2>Chats</h2>
+            <button class="btn btn-primary btn-sm" id="teacherNewGroupBtn" type="button"><i class="fa-solid fa-users"></i> New family group</button>
+          </div>
+          <label class="messenger-search">
+            <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+            <input id="messageContactSearch" type="search" autocomplete="off" placeholder="Search parents or teachers" aria-label="Search parents or teachers" />
+          </label>
+          <div id="messageSearchResults" class="messenger-search-results" hidden></div>
+          <div class="messenger-section-label">Recent conversations</div>
+          <div id="inboxList" class="messenger-conversations" aria-live="polite"></div>
+        </aside>
+        <section class="messenger-main" aria-label="Conversation">
+          <div id="chatEmptyState" class="messenger-empty">
+            <div class="messenger-empty-icon"><i class="fa-regular fa-comments"></i></div>
+            <h2>Your messages</h2>
+            <p>Choose a conversation, search for a contact, or start a family group.</p>
+          </div>
+          <div id="teacherGroupComposer" class="messenger-group-composer" hidden>
+            <div class="messenger-conversation-heading">
+              <span class="messenger-avatar"><i class="fa-solid fa-users"></i></span>
+              <div><h2>New family group</h2><p>Only families connected to students assigned to you can be added.</p></div>
             </div>
-            <div id="messageFormMessage" class="form-msg" aria-live="polite"></div>
-            <div class="chat-input-row">
-              <input id="chatInput" maxlength="2000" placeholder="Share an announcement, update, or concern…" required disabled />
-              <button class="btn btn-primary btn-sm" id="sendChatBtn" type="submit" disabled><i class="fa-solid fa-paper-plane"></i> Send</button>
+            <form id="teacherGroupForm">
+              <div class="field">
+                <label for="teacherGroupName">Group name <span class="field-hint">(optional)</span></label>
+                <input id="teacherGroupName" maxlength="80" placeholder="For example, Sunflower Class Families" />
+              </div>
+              <div class="messenger-group-student-heading">
+                <div><strong>Choose students</strong><span> Their approved parents will join the group.</span></div>
+                <button class="btn btn-ghost btn-sm" id="selectAllGroupStudents" type="button">Select all</button>
+              </div>
+              <div id="teacherGroupStudentList" class="messenger-student-list"></div>
+              <label class="messenger-compose-label" for="teacherGroupFirstMessage">Message</label>
+              <div class="chat-input-row">
+                <textarea id="teacherGroupFirstMessage" rows="1" maxlength="2000" placeholder="Write your first message…" required></textarea>
+                <button class="btn btn-primary messenger-send-button" id="createTeacherGroupBtn" type="submit" aria-label="Create group and send message"><i class="fa-solid fa-paper-plane"></i></button>
+              </div>
+              <div id="teacherGroupMessage" class="messenger-status" role="status" aria-live="polite" hidden></div>
+            </form>
+          </div>
+          <div id="chatConversationView" class="messenger-conversation-view" hidden>
+            <div class="messenger-conversation-heading">
+              <span class="messenger-avatar" id="threadAvatar"><i class="fa-solid fa-user"></i></span>
+              <div class="messenger-thread-heading-copy">
+                <h2 id="threadWithName">Select a conversation</h2>
+                <p id="threadSubtitle"></p>
+              </div>
             </div>
-          </form>
-        </div>
+            <div id="groupMembersSummary" class="messenger-group-members" hidden></div>
+            <div class="chat-thread" id="chatThread" role="log" aria-live="polite" aria-relevant="additions"></div>
+            <div id="messageFormMessage" class="messenger-status" role="status" aria-live="polite" hidden></div>
+            <form id="teacherMessageForm">
+              <div class="chat-input-row">
+                <textarea id="chatInput" rows="1" maxlength="2000" placeholder="Write a message…" required disabled></textarea>
+                <button class="btn btn-primary messenger-send-button" id="sendChatBtn" type="submit" aria-label="Send message" disabled><i class="fa-solid fa-paper-plane"></i></button>
+              </div>
+            </form>
+          </div>
+        </section>
       </div>
     </section>
 
