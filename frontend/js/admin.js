@@ -1427,13 +1427,9 @@ document.getElementById('adminAlertForm').addEventListener('submit', (event) => 
   targets.forEach((student) => {
     if (student.parent) parents.set(String(student.parent._id || student.parent), student.parent);
   });
-  const emailEligible = [...parents.values()].filter((parent) =>
-  parent &&
-  typeof parent === 'object' &&
-  parent.status === 'approved' &&
-  parent.email
-).length;
-    const contactSummary = Array.from(parents.values()).map((parent) => `<li>${escapeDashboardHtml(parent.name || 'Parent')} · ${escapeDashboardHtml(parent.email || 'No email')} · ${parent.emailVerified && parent.emailVerifiedBy ? 'Verified' : 'Not verified'}</li>`).join('');
+  const emailEligible = [...parents.values()].filter((parent) => parent && typeof parent === 'object'
+    && parent.status === 'approved' && parent.email && parent.emailVerified && parent.emailVerifiedBy).length;
+  const contactSummary = Array.from(parents.values()).map((parent) => `<li>${escapeDashboardHtml(parent.name || 'Parent')} · ${escapeDashboardHtml(parent.email || 'No email')} · ${parent.emailVerified && parent.emailVerifiedBy ? 'Verified' : 'Not verified'}</li>`).join('');
   Modal.open(`<h3>Review Emergency Alert</h3><p class="alert-banner"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i><span>This will immediately notify parents by email.</span></p><p><strong>${escapeDashboardHtml(values.title)}</strong> · ${escapeDashboardHtml(values.severity)}</p><p>${escapeDashboardHtml(values.description)}</p><p><strong>Recipients:</strong> ${parents.size} linked parents; ${emailEligible} eligible email addresses</p><ul class="event-summary-list">${contactSummary || '<li>No linked parent accounts found.</li>'}</ul><div id="adminAlertConfirmError" class="form-msg" role="alert"></div><div class="event-form-actions"><button type="button" class="btn btn-ghost" id="cancelAdminAlertSend">Cancel</button><button type="button" class="btn btn-danger" id="confirmAdminAlertSend">Send Alert</button></div>`);
   document.getElementById('cancelAdminAlertSend').addEventListener('click', () => Modal.close());
   document.getElementById('confirmAdminAlertSend').addEventListener('click', async (confirmEvent) => {
