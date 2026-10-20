@@ -268,8 +268,8 @@
             </div>
             <form id="teacherGroupForm">
               <div class="field">
-                <label for="teacherGroupName">Group name <span class="field-hint">(optional)</span></label>
-                <input id="teacherGroupName" maxlength="80" placeholder="For example, Sunflower Class Families" />
+                <label for="teacherGroupName">What would you like to name this group?</label>
+                <input id="teacherGroupName" maxlength="80" placeholder="For example, Sunflower Class Families" required />
               </div>
               <div class="messenger-group-student-heading">
                 <div><strong>Choose students</strong><span> Their approved parents will join the group.</span></div>
@@ -291,6 +291,9 @@
                 <h2 id="threadWithName">Select a conversation</h2>
                 <p id="threadSubtitle"></p>
               </div>
+              <button class="btn btn-ghost btn-sm messenger-rename-group" id="renameTeacherGroupBtn" type="button" aria-label="Change group name" title="Change group name" hidden>
+                <i class="fa-solid fa-pen" aria-hidden="true"></i> Rename
+              </button>
             </div>
             <div id="groupMembersSummary" class="messenger-group-members" hidden></div>
             <div class="chat-thread" id="chatThread" role="log" aria-live="polite" aria-relevant="additions"></div>

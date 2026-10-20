@@ -180,7 +180,7 @@ async function loadStudentsPanel() {
       <tr>
         <td><strong>${escapeTeacherHtml(s.name)}</strong></td>
         <td><span class="badge" style="background:#F1F5F9; color:var(--ink);">${escapeTeacherHtml(s.className || 'Unassigned')}</span></td>
-        <td>${s.parent ? escapeTeacherHtml(s.parent.name) : '<em>Unassigned</em>'}</td>
+        <td>${escapeTeacherHtml(s.guardianName || s.parent?.name || 'Unassigned')}</td>
         <td>${bdate}</td>
         <td><span class="badge ${escapeTeacherHtml(s.status)}">${escapeTeacherHtml(s.status)}</span></td>
         <td>
@@ -745,15 +745,14 @@ function setActiveInboxThread(type, threadId) {
   });
 }
 
-function renderMessages(messages, groupMessage) {
+function renderMessages(messages) {
   const thread = document.getElementById('chatThread');
   const currentUserId = relatedUserId(user);
   thread.innerHTML = messages.map((message) => {
     const senderId = relatedUserId(message.sender);
     const sender = message.sender && typeof message.sender === 'object' ? message.sender : {};
-    const senderName = sender.name || 'User';
+    const senderName = sender.name || (senderId === currentUserId ? user.name : '') || 'User';
     const content = escapeTeacherHtml(message.content).replace(/\r?\n/g, '<br>');
-    if (!groupMessage) return `<div class="chat-bubble ${senderId === currentUserId ? 'mine' : 'theirs'}">${content}</div>`;
     const initials = senderName.trim().split(/\s+/).slice(0, 2).map((part) => part.charAt(0)).join('').toUpperCase() || '?';
     const avatar = sender.avatar ? `data-avatar="${escapeTeacherHtml(sender.avatar)}"` : '';
     return `
@@ -788,6 +787,7 @@ async function openDirectThread(userId, name, role) {
   document.getElementById('threadWithName').textContent = name;
   document.getElementById('threadSubtitle').textContent = role === 'teacher' ? 'Teacher · Direct message' : 'Parent or guardian';
   document.getElementById('threadAvatar').innerHTML = `<i class="fa-solid ${role === 'teacher' ? 'fa-chalkboard-user' : 'fa-user'}"></i>`;
+  document.getElementById('renameTeacherGroupBtn').hidden = true;
   document.getElementById('groupMembersSummary').hidden = true;
   const input = document.getElementById('chatInput');
   const sendButton = document.getElementById('sendChatBtn');
@@ -795,7 +795,7 @@ async function openDirectThread(userId, name, role) {
   sendButton.disabled = input.disabled;
   showMessageFeedback(document.getElementById('messageFormMessage'), '');
   const { messages } = await api.get(`/messages/thread/${encodeURIComponent(userId)}`);
-  renderMessages(messages, false);
+  renderMessages(messages);
 }
 
 async function openGroupThread(groupId) {
@@ -809,13 +809,14 @@ async function openGroupThread(groupId) {
   document.getElementById('threadWithName').textContent = conversation.name;
   const familyCount = conversation.participants.filter((participant) => participant.role === 'parent').length;
   document.getElementById('threadSubtitle').textContent = `${familyCount} ${familyCount === 1 ? 'family' : 'families'} · ${conversation.students.length} assigned ${conversation.students.length === 1 ? 'student' : 'students'}`;
+  document.getElementById('renameTeacherGroupBtn').hidden = false;
   const memberNames = conversation.participants.map((participant) => escapeTeacherHtml(participant.name));
   const members = document.getElementById('groupMembersSummary');
   members.textContent = `Members: ${memberNames.join(', ')}`;
   members.hidden = false;
   document.getElementById('chatInput').disabled = false;
   document.getElementById('sendChatBtn').disabled = false;
-  renderMessages(messages, true);
+  renderMessages(messages);
 }
 
 function renderMessageContacts(contacts) {
@@ -900,6 +901,54 @@ document.getElementById('teacherNewGroupBtn').addEventListener('click', async ()
   if (loadError)   showMessageFeedback(document.getElementById('teacherGroupMessage'), loadError.message);
 });
 
+document.getElementById('renameTeacherGroupBtn').addEventListener('click', () => {
+  if (!activeMessageThread || activeMessageThread.type !== 'group') return;
+  const groupId = activeMessageThread.groupId;
+  const currentName = activeMessageThread.name || '';
+  Modal.open(`
+    <h3>Change group name</h3>
+    <form id="renameTeacherGroupForm">
+      <div class="field">
+        <label for="renameTeacherGroupName">Group name</label>
+        <input id="renameTeacherGroupName" maxlength="80" value="${escapeTeacherHtml(currentName)}" required />
+      </div>
+      <div id="renameTeacherGroupError" class="form-msg" role="alert"></div>
+      <div class="event-form-actions">
+        <button type="button" class="btn btn-ghost" id="cancelTeacherGroupRename">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save name</button>
+      </div>
+    </form>
+  `);
+  Modal.body.querySelector('#cancelTeacherGroupRename').addEventListener('click', () => Modal.close());
+  Modal.body.querySelector('#renameTeacherGroupForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const name = Modal.body.querySelector('#renameTeacherGroupName').value.trim();
+    const error = Modal.body.querySelector('#renameTeacherGroupError');
+    const saveButton = event.currentTarget.querySelector('[type="submit"]');
+    if (!name) {
+      showMsg(error, 'Enter a name for this group.');
+      return;
+    }
+    saveButton.disabled = true;
+    try {
+      await api.patch(`/messages/groups/${encodeURIComponent(groupId)}`, { name });
+    } catch (err) {
+      showMsg(error, err.message);
+      saveButton.disabled = false;
+      return;
+    }
+    Modal.close();
+    try {
+      await openGroupThread(groupId);
+      await loadInbox();
+    } catch (err) {
+      showMessageFeedback(document.getElementById('messageFormMessage'), err.message);
+    } finally {
+      saveButton.disabled = false;
+    }
+  });
+});
+
 document.getElementById('selectAllGroupStudents').addEventListener('click', () => {
   const checkboxes = Array.from(document.querySelectorAll('#teacherGroupStudentList input[name="groupStudent"]'));
   const selectAll = checkboxes.some((checkbox) => !checkbox.checked);
@@ -912,7 +961,13 @@ document.getElementById('teacherGroupForm').addEventListener('submit', async (ev
   const students = Array.from(document.querySelectorAll('#teacherGroupStudentList input[name="groupStudent"]:checked'))
     .map((checkbox) => checkbox.value);
   const message = document.getElementById('teacherGroupFirstMessage').value.trim();
+  const name = document.getElementById('teacherGroupName').value.trim();
   const button = document.getElementById('createTeacherGroupBtn');
+  if (!name) {
+    showMessageFeedback(document.getElementById('teacherGroupMessage'), 'Enter a name for this group.');
+    document.getElementById('teacherGroupName').focus();
+    return;
+  }
   if (!students.length) {
     showMessageFeedback(document.getElementById('teacherGroupMessage'), 'Select at least one assigned student.');
     return;
@@ -925,7 +980,7 @@ document.getElementById('teacherGroupForm').addEventListener('submit', async (ev
   showMessageFeedback(document.getElementById('teacherGroupMessage'), '');
   try {
     const { conversation } = await api.post('/messages/groups', {
-      name: document.getElementById('teacherGroupName').value.trim(),
+      name,
       students,
       content: message,
     });

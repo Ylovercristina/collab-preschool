@@ -1,5 +1,6 @@
 const Student = require('../models/Student');
 const logActivity = require('../utils/logActivity');
+const mongoose = require('mongoose');
 
 // Helper: build a scope filter based on who's asking
 function scopeFilter(user) {
@@ -47,6 +48,9 @@ exports.createStudent = async (req, res) => {
 // PATCH /api/students/:id
 exports.updateStudent = async (req, res) => {
   try {
+    if (!mongoose.isObjectIdOrHexString(req.params.id)) {
+      return res.status(404).json({ message: 'Student not found.' });
+    }
     const allowed = req.user.role === 'teacher'
       ? ['name', 'birthdate', 'className', 'enrollmentDate', 'guardianName', 'guardianPhone', 'notes']
       : ['name', 'birthdate', 'className', 'enrollmentDate', 'guardianName', 'guardianPhone', 'parent', 'teacher', 'notes', 'status'];
@@ -55,13 +59,18 @@ exports.updateStudent = async (req, res) => {
     }
     const update = {};
     allowed.forEach((k) => { if (req.body[k] !== undefined) update[k] = req.body[k]; });
+    if (!Object.keys(update).length) {
+      return res.status(400).json({ message: 'Provide at least one student field to update.' });
+    }
 
     const filter = { _id: req.params.id };
     if (req.user.role === 'teacher') filter.teacher = req.user._id;
-    const student = await Student.findOneAndUpdate(filter, update, { new: true, runValidators: true })
-      .populate('parent', 'name email phone status emailVerified emailVerifiedBy')
-      .populate('teacher', 'name email');
+    const student = await Student.findOne(filter);
     if (!student) return res.status(404).json({ message: 'Student not found.' });
+    student.set(update);
+    await student.save();
+    await student.populate('parent', 'name email phone status emailVerified emailVerifiedBy');
+    await student.populate('teacher', 'name email');
     await logActivity(req.user._id, 'student-updated', student.name);
     res.json({ student });
   } catch (err) {
