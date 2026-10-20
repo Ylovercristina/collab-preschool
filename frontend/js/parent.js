@@ -388,6 +388,84 @@ function showParentMessageFeedback(text) {
   message.hidden = !text;
 }
 
+function renderParentChatMessages(messages) {
+  const thread = document.getElementById('chatThread');
+  const currentUserId = String(user._id || user.id);
+  thread.innerHTML = messages.map((message) => {
+    const sender = message.sender && typeof message.sender === 'object' ? message.sender : {};
+    const senderId = String(sender._id || message.sender);
+    const senderName = sender.name || (senderId === currentUserId ? user.name : '') || 'User';
+    const content = escapeParentMessage(message.content).replace(/\r?\n/g, '<br>');
+    const initials = senderName.trim().split(/\s+/).slice(0, 2).map((part) => part.charAt(0)).join('').toUpperCase() || '?';
+    const avatar = sender.avatar ? `data-avatar="${escapeParentMessage(sender.avatar)}"` : '';
+    return `
+      <div class="chat-message-row ${senderId === currentUserId ? 'mine' : 'theirs'}">
+        <span class="chat-author-avatar" ${avatar} aria-label="${escapeParentMessage(senderName)}">
+          <img alt="" hidden />
+          <span>${escapeParentMessage(initials)}</span>
+        </span>
+        <div class="chat-bubble ${senderId === currentUserId ? 'mine' : 'theirs'}">
+          <span class="chat-message-sender">${escapeParentMessage(senderName)}</span>${content}
+        </div>
+      </div>
+    `;
+  }).join('') || '<div class="messenger-thread-empty">Say hello to start the conversation.</div>';
+  thread.querySelectorAll('.chat-author-avatar[data-avatar]').forEach((avatar) => {
+    const image = avatar.querySelector('img');
+    image.onerror = () => { image.hidden = true; };
+    image.onload = () => { image.hidden = false; avatar.querySelector('span').hidden = true; };
+    image.src = profileImageUrl(avatar.dataset.avatar);
+  });
+  thread.scrollTop = thread.scrollHeight;
+}
+
+document.getElementById('renameParentGroupBtn').addEventListener('click', () => {
+  if (!activeParentGroupId) return;
+  const groupId = activeParentGroupId;
+  const currentName = document.getElementById('threadWithName').textContent;
+  Modal.open(`
+    <h3>Change group name</h3>
+    <form id="renameParentGroupForm">
+      <div class="field">
+        <label for="renameParentGroupName">Group name</label>
+        <input id="renameParentGroupName" maxlength="80" value="${escapeParentMessage(currentName)}" required />
+      </div>
+      <div id="renameParentGroupError" class="form-msg" role="alert"></div>
+      <div class="event-form-actions">
+        <button type="button" class="btn btn-ghost" id="cancelParentGroupRename">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save name</button>
+      </div>
+    </form>
+  `);
+  Modal.body.querySelector('#cancelParentGroupRename').addEventListener('click', () => Modal.close());
+  Modal.body.querySelector('#renameParentGroupForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const name = Modal.body.querySelector('#renameParentGroupName').value.trim();
+    const error = Modal.body.querySelector('#renameParentGroupError');
+    const saveButton = event.currentTarget.querySelector('[type="submit"]');
+    if (!name) {
+      showMsg(error, 'Enter a name for this group.');
+      return;
+    }
+    saveButton.disabled = true;
+    try {
+      await api.patch(`/messages/groups/${encodeURIComponent(groupId)}`, { name });
+    } catch (err) {
+      showMsg(error, err.message);
+      saveButton.disabled = false;
+      return;
+    }
+    Modal.close();
+    try {
+      await loadParentMessages();
+    } catch (err) {
+      showParentMessageFeedback(err.message);
+    } finally {
+      saveButton.disabled = false;
+    }
+  });
+});
+
 async function loadParentMessages() {
   const groupInbox = document.getElementById('parentGroupInbox');
   const teacherChatButton = document.getElementById('parentTeacherChatBtn');
@@ -439,14 +517,11 @@ async function openTeacherThread() {
   showParentMessageFeedback('');
   const child = myChildren.find((c) => c._id === activeChildId);
   document.getElementById('threadWithName').textContent = child && child.teacher ? child.teacher.name : 'Teacher';
+  document.getElementById('threadSubtitle').textContent = 'Direct conversation';
+  document.getElementById('renameParentGroupBtn').hidden = true;
+  document.getElementById('parentGroupMembersSummary').hidden = true;
   const { messages } = await api.get(`/messages/thread/${activeTeacherId}`);
-  const thread = document.getElementById('chatThread');
-  thread.innerHTML = messages.map((m) => {
-    const senderId = String(m.sender._id || m.sender);
-    const content = escapeParentMessage(m.content).replace(/\r?\n/g, '<br>');
-    return `<div class="chat-bubble ${senderId === String(activeTeacherId) ? 'theirs' : 'mine'}">${content}</div>`;
-  }).join('');
-  thread.scrollTop = thread.scrollHeight;
+  renderParentChatMessages(messages);
 }
 
 document.getElementById('parentTeacherChatBtn').addEventListener('click', async () => {
@@ -466,36 +541,15 @@ async function openParentGroup(groupId) {
   showParentMessageFeedback('');
   const { conversation, messages } = await api.get(`/messages/groups/${encodeURIComponent(groupId)}`);
   document.getElementById('threadWithName').textContent = conversation.name;
+  document.getElementById('renameParentGroupBtn').hidden = false;
+  const familyCount = conversation.participants.filter((participant) => participant.role === 'parent').length;
+  document.getElementById('threadSubtitle').textContent = `${familyCount} ${familyCount === 1 ? 'family' : 'families'} · ${conversation.students.length} assigned ${conversation.students.length === 1 ? 'student' : 'students'}`;
+  const memberSummary = document.getElementById('parentGroupMembersSummary');
+  memberSummary.textContent = `Members: ${conversation.participants.map((participant) => participant.name).join(', ')}`;
+  memberSummary.hidden = false;
   document.getElementById('chatInput').disabled = false;
   document.getElementById('sendChatBtn').disabled = false;
-  document.getElementById('chatThread').innerHTML = messages.map((message) => {
-    const senderId = String(message.sender._id || message.sender);
-    const currentUserId = String(user._id || user.id);
-    const sender = message.sender && typeof message.sender === 'object' ? message.sender : {};
-    const senderName = sender.name || 'User';
-    const content = escapeParentMessage(message.content).replace(/\r?\n/g, '<br>');
-    const initials = senderName.trim().split(/\s+/).slice(0, 2).map((part) => part.charAt(0)).join('').toUpperCase() || '?';
-    const avatar = sender.avatar ? `data-avatar="${escapeParentMessage(sender.avatar)}"` : '';
-    return `
-      <div class="chat-message-row ${senderId === currentUserId ? 'mine' : 'theirs'}">
-        <span class="chat-author-avatar" ${avatar} aria-label="${escapeParentMessage(senderName)}">
-          <img alt="" hidden />
-          <span>${escapeParentMessage(initials)}</span>
-        </span>
-        <div class="chat-bubble ${senderId === currentUserId ? 'mine' : 'theirs'}">
-          <span class="chat-message-sender">${escapeParentMessage(senderName)}</span>${content}
-        </div>
-      </div>
-    `;
-  }).join('') || '<div class="messenger-thread-empty">Say hello to start the conversation.</div>';
-  const thread = document.getElementById('chatThread');
-  thread.querySelectorAll('.chat-author-avatar[data-avatar]').forEach((avatar) => {
-    const image = avatar.querySelector('img');
-    image.onerror = () => { image.hidden = true; };
-    image.onload = () => { image.hidden = false; avatar.querySelector('span').hidden = true; };
-    image.src = profileImageUrl(avatar.dataset.avatar);
-  });
-  thread.scrollTop = thread.scrollHeight;
+  renderParentChatMessages(messages);
 }
 
 document.getElementById('sendChatBtn').addEventListener('click', async () => {

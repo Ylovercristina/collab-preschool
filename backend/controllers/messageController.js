@@ -154,7 +154,7 @@ exports.getThread = async (req, res) => {
       { sender: req.params.userId, receiver: req.user._id },
     ],
     conversation: { $exists: false },
-  }).populate('sender', 'name role').populate('student', 'name').sort({ createdAt: 1 });
+  }).populate('sender', 'name role avatar').populate('student', 'name').sort({ createdAt: 1 });
 
   await Message.updateMany(
     { sender: req.params.userId, receiver: req.user._id, read: false, conversation: { $exists: false } },
@@ -294,19 +294,14 @@ exports.createGroup = async (req, res) => {
     return res.status(400).json({ message: 'No approved parent accounts are linked to the selected students.' });
   }
 
-  const submittedName = typeof req.body.name === 'string' ? req.body.name.trim() : '';
-  if (submittedName.length > 80) {
-    return res.status(400).json({ message: 'Group names must be 80 characters or fewer.' });
+  const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
+  if (!name || name.length > 80) {
+    return res.status(400).json({ message: 'Enter a group name between 1 and 80 characters.' });
   }
-  const classNames = [...new Set(students.map((student) => student.className).filter(Boolean))];
-  const defaultName = students.length === 1
-    ? `${students[0].name}'s family`
-    : (classNames.length === 1 ? `${classNames[0]} families` : 'Family group');
-  const name = submittedName || defaultName;
 
   try {
     const conversation = await Conversation.create({
-      name: name.slice(0, 80),
+      name,
       participants: [req.user._id, ...parentIds],
       students: students.map((student) => student._id),
       createdBy: req.user._id,
@@ -327,6 +322,29 @@ exports.createGroup = async (req, res) => {
   } catch (err) {
     res.status(500).json({ message: 'Could not create the family group.', error: err.message });
   }
+};
+
+// PATCH /api/messages/groups/:groupId
+exports.renameGroup = async (req, res) => {
+  if (!['teacher', 'parent'].includes(req.user.role) || req.user.status !== 'approved') {
+    return res.status(403).json({ message: 'Only approved teachers and parents can rename family groups.' });
+  }
+  if (!mongoose.isObjectIdOrHexString(req.params.groupId)) {
+    return res.status(404).json({ message: 'Conversation not found.' });
+  }
+  const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
+  if (!name || name.length > 80) {
+    return res.status(400).json({ message: 'Enter a group name between 1 and 80 characters.' });
+  }
+
+  const conversation = await Conversation.findOneAndUpdate(
+    { _id: req.params.groupId, participants: req.user._id },
+    { $set: { name, updatedAt: new Date() } },
+    { new: true, runValidators: true }
+  );
+  if (!conversation) return res.status(404).json({ message: 'Conversation not found.' });
+
+  res.json({ conversation });
 };
 
 // GET /api/messages/groups/:groupId

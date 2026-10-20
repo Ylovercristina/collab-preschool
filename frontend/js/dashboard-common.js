@@ -1268,6 +1268,8 @@ async function showStudentDetailsModal(studentId, { canEdit = true, onStudentUpd
 
     const renderModalContent = (s, pickupList) => {
       const birthdateStr = s.birthdate ? new Date(s.birthdate).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : 'Not specified';
+      const guardianDisplayName = s.guardianName || s.parent?.name || 'None linked';
+      const guardianContact = s.parent?.email || s.parent?.phone;
 
       return `
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; border-bottom:1px solid #E2E8F0; padding-bottom:12px;">
@@ -1301,7 +1303,7 @@ async function showStudentDetailsModal(studentId, { canEdit = true, onStudentUpd
           </div>
           <div style="background:#F8FAFC; padding:12px 14px; border-radius:8px; border:1px solid #E2E8F0;">
             <div class="event-detail-label">Parent / Guardian</div>
-            <div style="font-weight:600; font-size:14.5px;">${s.parent ? `${escapeStudentModalValue(s.parent.name)} (${escapeStudentModalValue(s.parent.email || s.parent.phone || '')})` : escapeStudentModalValue(s.guardianName || 'None linked')}</div>
+            <div style="font-weight:600; font-size:14.5px;">${escapeStudentModalValue(guardianDisplayName)}${guardianContact ? ` (${escapeStudentModalValue(guardianContact)})` : ''}</div>
           </div>
           <div style="background:#F8FAFC; padding:12px 14px; border-radius:8px; border:1px solid #E2E8F0;">
             <div class="event-detail-label">Assigned Teacher</div>
@@ -1377,8 +1379,8 @@ async function showStudentDetailsModal(studentId, { canEdit = true, onStudentUpd
     if (canEdit) {
       document.getElementById('modalEditStudentBtn')?.addEventListener('click', () => {
         openEditStudentModal(student, async (updatedStudent) => {
-          if (onStudentUpdated) onStudentUpdated(updatedStudent);
-          showStudentDetailsModal(studentId, { canEdit, onStudentUpdated, teacherMode });
+          if (onStudentUpdated) await onStudentUpdated(updatedStudent);
+          await showStudentDetailsModal(studentId, { canEdit, onStudentUpdated, teacherMode });
         }, { teacherMode });
       });
 
@@ -1475,7 +1477,7 @@ async function openEditStudentModal(student, onSaved, { teacherMode = false } = 
           <select id="esParent">
             <option value="">— Unassigned —</option>
             ${parents.map((p) => `
-              <option value="${escapeStudentModalValue(p.id)}" ${student.parent && (student.parent._id === p.id || student.parent === p.id) ? 'selected' : ''}>
+              <option value="${escapeStudentModalValue(p.id)}" ${student.parent && String(student.parent._id || student.parent) === String(p.id) ? 'selected' : ''}>
                 ${escapeStudentModalValue(p.name)} (${escapeStudentModalValue(p.email)})
               </option>
             `).join('')}
@@ -1486,7 +1488,7 @@ async function openEditStudentModal(student, onSaved, { teacherMode = false } = 
           <select id="esTeacher">
             <option value="">— Unassigned —</option>
             ${teachers.map((t) => `
-              <option value="${escapeStudentModalValue(t.id)}" ${student.teacher && (student.teacher._id === t.id || student.teacher === t.id) ? 'selected' : ''}>
+              <option value="${escapeStudentModalValue(t.id)}" ${student.teacher && String(student.teacher._id || student.teacher) === String(t.id) ? 'selected' : ''}>
                 ${escapeStudentModalValue(t.name)}
               </option>
             `).join('')}
@@ -1522,7 +1524,10 @@ async function openEditStudentModal(student, onSaved, { teacherMode = false } = 
   document.getElementById('editStudentForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const msg = document.getElementById('modalEditMsg');
+    const saveButton = e.currentTarget.querySelector('button[type="submit"]');
     msg.className = 'form-msg';
+    saveButton.disabled = true;
+    saveButton.textContent = 'Saving...';
 
     const payload = {
       name: document.getElementById('esName').value.trim(),
@@ -1540,12 +1545,24 @@ async function openEditStudentModal(student, onSaved, { teacherMode = false } = 
       payload.status = document.getElementById('esStatus').value;
     }
 
+    let updatedStudent;
     try {
-      const res = await api.patch(`/students/${student._id}`, payload);
-      Modal.close();
-      if (onSaved) onSaved(res.student);
+      ({ student: updatedStudent } = await api.patch(`/students/${student._id}`, payload));
     } catch (err) {
       showMsg(msg, err.message);
+      saveButton.disabled = false;
+      saveButton.textContent = 'Save Changes';
+      return;
+    }
+
+    try {
+      saveButton.textContent = 'Updating dashboard...';
+      if (onSaved) await onSaved(updatedStudent);
+      Modal.close();
+    } catch (err) {
+      showMsg(msg, `Student saved, but the dashboard could not refresh: ${err.message}`);
+      saveButton.disabled = false;
+      saveButton.textContent = 'Save Changes';
     }
   });
 }

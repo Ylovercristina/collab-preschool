@@ -142,9 +142,16 @@
         </aside>
         <div class="card parent-message-thread">
           <div class="parent-thread-heading">
-            <i class="fa-solid fa-chalkboard-user" style="color:var(--primary);"></i>
-            <h3 id="threadWithName" style="margin:0;">Teacher</h3>
+            <span class="messenger-avatar"><i class="fa-solid fa-chalkboard-user"></i></span>
+            <div class="messenger-thread-heading-copy">
+              <h3 id="threadWithName" style="margin:0;">Teacher</h3>
+              <p id="threadSubtitle">Direct conversation</p>
+            </div>
+            <button class="btn btn-ghost btn-sm messenger-rename-group" id="renameParentGroupBtn" type="button" aria-label="Change group name" title="Change group name" hidden>
+              <i class="fa-solid fa-pen" aria-hidden="true"></i> Rename
+            </button>
           </div>
+          <div id="parentGroupMembersSummary" class="messenger-group-members" hidden></div>
           <div class="chat-thread" id="chatThread"></div>
           <div id="parentMessageFormMessage" class="messenger-status" role="status" aria-live="polite" hidden></div>
           <div class="chat-input-row">
