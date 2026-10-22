@@ -1,6 +1,53 @@
 // ---------- Play-is-School -- Admin Dashboard Controller ----------
 const user = requireRole('admin');
 let adminCalendar = null;
+let authSecuritySettingsBound = false;
+
+async function loadAuthSecuritySettings() {
+  const googleToggle = document.getElementById('googleAuthEnabled');
+  const captchaToggle = document.getElementById('captchaEnabled');
+  const saveButton = document.getElementById('saveAuthSecuritySettings');
+  const message = document.getElementById('authSecurityMessage');
+  if (!googleToggle || !captchaToggle || !saveButton || !message) return;
+
+  try {
+    const response = await api.get('/auth/settings');
+    const settings = response.settings || {};
+    googleToggle.checked = settings.googleAuthEnabled === true;
+    captchaToggle.checked = settings.captchaEnabled === true;
+    message.textContent = settings.captchaEnabled && !settings.captchaConfigured
+      ? 'CAPTCHA is enabled, but its backend keys are not configured.'
+      : '';
+    message.className = settings.captchaEnabled && !settings.captchaConfigured ? 'form-msg error' : 'form-msg';
+  } catch (err) {
+    showMsg(message, err.message);
+    saveButton.disabled = true;
+    return;
+  }
+
+  if (authSecuritySettingsBound) return;
+  authSecuritySettingsBound = true;
+  saveButton.addEventListener('click', async () => {
+    if (!window.confirm('Save these Google authentication and CAPTCHA settings?')) return;
+    setButtonLoading(saveButton, true, 'Saving');
+    message.textContent = '';
+    message.className = 'form-msg';
+    try {
+      const response = await api.patch('/auth/settings', {
+        googleAuthEnabled: googleToggle.checked,
+        captchaEnabled: captchaToggle.checked,
+      });
+      googleToggle.checked = response.settings.googleAuthEnabled === true;
+      captchaToggle.checked = response.settings.captchaEnabled === true;
+      showMsg(message, 'Authentication security settings saved.', 'success');
+      showToast('Authentication security settings saved.');
+    } catch (err) {
+      showMsg(message, err.message);
+    } finally {
+      setButtonLoading(saveButton, false);
+    }
+  });
+}
 
 function onPanelShown(panel) {
   if (panel === 'overview') return loadOverview();
@@ -13,6 +60,7 @@ function onPanelShown(panel) {
   if (panel === 'events') return loadEvents();
   if (panel === 'alerts') return loadAdminAlerts();
   if (panel === 'logs') return loadLogs();
+  if (panel === 'settings') return loadAuthSecuritySettings();
 }
 
 function initOverviewNavigation() {
@@ -1353,23 +1401,36 @@ document.getElementById('addEventBtn').addEventListener('click', async () => {
   try {
     const { students } = await api.get('/students');
     const classes = [...new Set(students.map((student) => student.className).filter(Boolean))].sort();
-      openEventComposer({
+    openEventComposer({
       classes,
-  onSave: (event) => api.post('/events', event),
-
-  onComplete: async ({ event, emailSummary }) => {
-    await loadEvents();
-
-    const output = document.getElementById('adminEventSummary');
-
-    output.textContent = '';
-    output.className = 'form-msg';
-  },
-
-      });
-    } catch (err) {
-      showToast(err.message, 'error');
-    }
+      onSave: (event) => api.post('/events', event),
+      onComplete: async ({ event, emailSummary }) => {
+        await loadEvents();
+        const output = document.getElementById('adminEventSummary');
+        if (event.publicationStatus === 'published') {
+          const recipientCount = event.emailRecipientCount || 0;
+          if (recipientCount === 0) {
+            showToast('Event published, but no eligible recipients were found.', 'info');
+            output.className = 'form-msg';
+            output.textContent = 'Event published. No eligible recipients found to notify.';
+          } else {
+            showToast(`Event published! Notifying ${recipientCount} recipient${recipientCount === 1 ? '' : 's'} by email.`, 'success');
+            output.className = 'form-msg success';
+            output.textContent = formatEmailSummary(emailSummary);
+            if (!emailSummary.complete && recipientCount) {
+              await pollEmailSummary(`/events/${event._id}/email-summary`, emailSummary, output);
+            }
+          }
+        } else {
+          showToast('Event saved as draft.', 'info');
+          output.className = 'form-msg';
+          output.textContent = '';
+        }
+      },
+    });
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
 });
 
 let adminStudentCache = [];

@@ -37,6 +37,7 @@ async function apiRequest(path, { method = 'GET', body, auth = true } = {}) {
     res = await fetch(`${API_BASE}${path}`, {
       method,
       headers,
+      credentials: 'include',
       body: body ? (isFormData ? body : JSON.stringify(body)) : undefined,
     });
   } catch (err) {

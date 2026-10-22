@@ -7,6 +7,15 @@
   <title>Log in — Play-is-School</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
   <link rel="stylesheet" href="../css/style.css" />
+  <script src="https://www.google.com/recaptcha/api.js?render=explicit" async defer></script>
+  <script>
+    // Keep OAuth cookies on the same host as the configured callback URL.
+    if (window.location.hostname === '127.0.0.1') {
+      const localhostUrl = new URL(window.location.href);
+      localhostUrl.hostname = 'localhost';
+      window.location.replace(localhostUrl.toString());
+    }
+  </script>
 </head>
 
 <body>
@@ -70,7 +79,12 @@
 
         <div class="auth-divider">or</div>
 
-        <a id="googleLoginLink" href="#" class="btn btn-block btn-google">
+        <div class="captcha-wrap">
+          <div id="recaptchaWidget"></div>
+          <div id="captchaStatus" class="captcha-status" role="status"></div>
+        </div>
+
+        <a id="googleLoginLink" href="#" class="btn btn-block btn-google" aria-disabled="true">
           <i class="fa-brands fa-google" aria-hidden="true"></i> Continue with Google
         </a>
 
@@ -78,6 +92,30 @@
           New parent to the school? <a href="signup.html">Create Account</a>
         </div>
       </div>
+    </div>
+  </div>
+
+  <div id="googlePasswordModal" class="modal-backdrop" role="dialog" aria-modal="true"
+    aria-labelledby="googlePasswordTitle" hidden>
+    <div class="modal google-password-modal">
+      <h3 id="googlePasswordTitle">Enter your Play-is-School password</h3>
+      <p class="sub-text">Your Google account was verified. Enter your Play-is-School password before continuing to the dashboard.</p>
+      <div id="googlePasswordMessage" class="form-msg" role="alert"></div>
+      <form id="googlePasswordForm">
+        <div class="auth-field">
+          <label class="auth-label" for="googlePasswordInput">PASSWORD</label>
+          <div class="input-with-icon">
+            <input type="password" id="googlePasswordInput" required autocomplete="current-password" />
+            <button type="button" class="toggle-password-btn" id="googlePasswordToggle"
+              aria-label="Toggle password visibility">
+              <i class="fa-regular fa-eye" id="googlePasswordEye"></i>
+            </button>
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary btn-block" id="googlePasswordSubmit">
+          Continue to Dashboard &nbsp;&rarr;
+        </button>
+      </form>
     </div>
   </div>
 
@@ -96,7 +134,163 @@
 
     // Login form handler
     const googleLoginLink = document.getElementById('googleLoginLink');
-    googleLoginLink.href = `${API_BASE}/auth/google?mode=login`;
+    const captchaStatus = document.getElementById('captchaStatus');
+    let captchaToken = '';
+    let captchaWidgetId = null;
+    let captchaReady = false;
+    let captchaRenderStarted = false;
+    let captchaEnabled = true;
+    let googleAuthEnabled = false;
+    let pendingGoogleCode = '';
+    let pendingGoogleNotice = '';
+
+    const googlePasswordModal = document.getElementById('googlePasswordModal');
+    const googlePasswordForm = document.getElementById('googlePasswordForm');
+    const googlePasswordInput = document.getElementById('googlePasswordInput');
+    const googlePasswordMessage = document.getElementById('googlePasswordMessage');
+    const googlePasswordSubmit = document.getElementById('googlePasswordSubmit');
+    const googlePasswordToggle = document.getElementById('googlePasswordToggle');
+
+    function showGooglePasswordMessage(text, type = 'error') {
+      googlePasswordMessage.textContent = text;
+      googlePasswordMessage.className = text ? `form-msg ${type}` : 'form-msg';
+    }
+
+    function openGooglePasswordModal(code, notice) {
+      pendingGoogleCode = code;
+      pendingGoogleNotice = notice || '';
+      googlePasswordModal.hidden = false;
+      googlePasswordModal.classList.add('open');
+      showGooglePasswordMessage('');
+      googlePasswordInput.value = '';
+      googlePasswordInput.focus();
+    }
+
+    function closeGooglePasswordModal() {
+      googlePasswordModal.classList.remove('open');
+      googlePasswordModal.hidden = true;
+      pendingGoogleCode = '';
+      pendingGoogleNotice = '';
+    }
+
+    function setCaptchaMessage(text, type = 'error') {
+      captchaStatus.textContent = text;
+      captchaStatus.className = text ? `captcha-status ${type}` : 'captcha-status';
+    }
+
+    function resetCaptcha(message) {
+      captchaToken = '';
+      captchaReady = false;
+      googleLoginLink.classList.remove('is-enabled', 'is-loading');
+      googleLoginLink.setAttribute('aria-disabled', 'true');
+      if (captchaWidgetId !== null && window.grecaptcha) window.grecaptcha.reset(captchaWidgetId);
+      setCaptchaMessage(message || '');
+    }
+
+    function setGoogleButtonEnabled(enabled) {
+      googleLoginLink.classList.toggle('is-enabled', enabled);
+      googleLoginLink.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+    }
+
+    async function loadCaptcha() {
+      try {
+        const config = await api.get('/auth/recaptcha-config');
+        const render = () => {
+          if (!window.grecaptcha || captchaWidgetId !== null || captchaRenderStarted) return;
+          if (typeof window.grecaptcha.render !== 'function') {
+            window.setTimeout(render, 100);
+            return;
+          }
+          captchaRenderStarted = true;
+          captchaWidgetId = window.grecaptcha.render('recaptchaWidget', {
+            sitekey: config.siteKey,
+            callback: (token) => {
+              captchaToken = token;
+              captchaReady = true;
+              googleLoginLink.classList.add('is-enabled');
+              googleLoginLink.setAttribute('aria-disabled', 'false');
+              setCaptchaMessage('CAPTCHA verified.', 'success');
+            },
+            'expired-callback': () => resetCaptcha('CAPTCHA expired. Please verify again.'),
+            'error-callback': () => {
+              captchaToken = '';
+              captchaReady = false;
+              googleLoginLink.classList.remove('is-enabled', 'is-loading');
+              googleLoginLink.setAttribute('aria-disabled', 'true');
+              setCaptchaMessage('CAPTCHA could not load. Please refresh and try again.');
+            },
+          });
+        };
+        if (window.grecaptcha && typeof window.grecaptcha.ready === 'function') {
+          window.grecaptcha.ready(render);
+        } else if (window.grecaptcha) render();
+        else window.__renderRecaptcha = render;
+      } catch (err) {
+        setCaptchaMessage(err.message || 'CAPTCHA is unavailable. Please contact the school admin.');
+      }
+    }
+
+    async function loadAuthSettings() {
+      const captchaWrap = document.querySelector('.captcha-wrap');
+      try {
+        const response = await api.get('/auth/settings');
+        const settings = response.settings || {};
+        googleAuthEnabled = settings.googleAuthEnabled === true;
+        captchaEnabled = settings.captchaEnabled === true;
+
+        if (!googleAuthEnabled) {
+          googleLoginLink.style.display = 'none';
+          captchaWrap.hidden = true;
+          setCaptchaMessage('Google sign-in is currently disabled by the school administrator.');
+          return;
+        }
+
+        googleLoginLink.style.display = '';
+        captchaWrap.hidden = !captchaEnabled;
+        if (captchaEnabled) {
+          if (settings.captchaConfigured !== true) {
+            setCaptchaMessage('CAPTCHA is enabled but not configured. Please contact the school admin.');
+            return;
+          }
+          loadCaptcha();
+        } else {
+          captchaReady = true;
+          setGoogleButtonEnabled(true);
+        }
+      } catch (err) {
+        googleLoginLink.style.display = 'none';
+        captchaWrap.hidden = true;
+        setCaptchaMessage('Google sign-in is temporarily unavailable. Please try again later.');
+      }
+    }
+
+    const previousCaptchaOnload = window.onload;
+    window.onload = () => {
+      if (previousCaptchaOnload) previousCaptchaOnload();
+      if (window.__renderRecaptcha) window.__renderRecaptcha();
+    };
+    loadAuthSettings();
+
+    googleLoginLink.addEventListener('click', async (event) => {
+      event.preventDefault();
+      if (!googleAuthEnabled) {
+        setCaptchaMessage('Google sign-in is currently disabled by the school administrator.');
+        return;
+      }
+      if (captchaEnabled && (!captchaReady || !captchaToken)) {
+        setCaptchaMessage('Please complete the CAPTCHA verification first.');
+        return;
+      }
+      googleLoginLink.classList.add('is-loading');
+      googleLoginLink.setAttribute('aria-disabled', 'true');
+      setCaptchaMessage('Starting Google sign-in...', 'success');
+      try {
+        const data = await api.post('/auth/google/start', { mode: 'login', token: captchaToken }, { auth: false });
+        window.location.assign(data.authorizationUrl);
+      } catch (err) {
+        resetCaptcha(err.message || 'CAPTCHA verification failed or expired. Please try again.');
+      }
+    });
 
     if (new URLSearchParams(window.location.search).get('passwordReset') === 'success') {
       showMsg(document.getElementById('msg'), 'Your password has been reset. Please sign in.', 'success');
@@ -114,6 +308,8 @@
       configuration: 'Google sign-in is not configured. Please contact the school admin.',
       'invalid-state': 'Google sign-in could not be verified. Please try again.',
       'invalid-mode': 'Google sign-in could not be started. Please try again.',
+      'captcha-required': 'Please complete the CAPTCHA verification first.',
+      'google-disabled': 'Google sign-in is currently disabled by the school administrator.',
       failed: 'Google sign-in could not be completed. Please try again.',
     };
     const googleError = loginParams.get('googleError');
@@ -125,18 +321,48 @@
     const googleCode = loginParams.get('googleCode');
     if (googleCode) {
       window.history.replaceState({}, document.title, window.location.pathname);
-      showMsg(loginMsg, 'Completing Google sign-in...', 'success');
-      api.post('/auth/google/exchange', { code: googleCode }, { auth: false }).then((data) => {
-        Auth.setSession(data.token, data.user);
+      openGooglePasswordModal(googleCode, googleNotice);
+    }
+
+    googlePasswordToggle.addEventListener('click', () => {
+      const isPassword = googlePasswordInput.type === 'password';
+      googlePasswordInput.type = isPassword ? 'text' : 'password';
+      document.getElementById('googlePasswordEye').className = isPassword
+        ? 'fa-regular fa-eye-slash'
+        : 'fa-regular fa-eye';
+    });
+
+    googlePasswordForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!pendingGoogleCode) return;
+      googlePasswordSubmit.disabled = true;
+      googlePasswordSubmit.textContent = 'Verifying Password...';
+      showGooglePasswordMessage('');
+      try {
+        const data = await api.post(
+          '/auth/google/exchange',
+          { code: pendingGoogleCode, password: googlePasswordInput.value },
+          { auth: false }
+        );
         const dashboard = `dashboard-${data.user.role}.html`;
-        if (googleNotice === 'account-exists') {
-          showMsg(loginMsg, 'Account already exists, logged you in.', 'success');
+        const accountExistsNotice = pendingGoogleNotice === 'account-exists';
+        Auth.setSession(data.token, data.user);
+        closeGooglePasswordModal();
+        if (accountExistsNotice) {
+          showMsg(loginMsg, 'Password verified. Account logged in successfully.', 'success');
           setTimeout(() => window.location.replace(dashboard), 900);
           return;
         }
         window.location.replace(dashboard);
-      }).catch((err) => showMsg(loginMsg, err.message));
-    }
+      } catch (err) {
+        googlePasswordInput.value = '';
+        googlePasswordInput.focus();
+        showGooglePasswordMessage(err.message || 'Incorrect Play-is-School password.');
+      } finally {
+        googlePasswordSubmit.disabled = false;
+        googlePasswordSubmit.textContent = 'Continue to Dashboard →';
+      }
+    });
 
     document.getElementById('loginForm').addEventListener('submit', async (e) => {
       e.preventDefault();

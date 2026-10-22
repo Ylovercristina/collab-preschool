@@ -419,6 +419,26 @@
           <div class="profile-form-footer"><button class="btn btn-primary" type="submit"><i class="fa-solid fa-floppy-disk"></i> Save Changes</button></div>
         </form>
       </div>
+      <div class="card auth-security-settings-card">
+        <div class="profile-section-heading">
+          <span>SECURITY</span>
+          <h2>Authentication &amp; Security Settings</h2>
+          <p>Control Google authentication and CAPTCHA independently for Google sign-in.</p>
+        </div>
+        <div id="authSecurityMessage" class="form-msg" aria-live="polite"></div>
+        <div class="auth-security-options">
+          <label class="auth-security-option" for="googleAuthEnabled">
+            <span><strong>Google Sign-In</strong><small>Allow users to authenticate with their Google accounts.</small></span>
+            <span class="settings-switch"><input id="googleAuthEnabled" type="checkbox" /><span aria-hidden="true"></span></span>
+          </label>
+          <label class="auth-security-option" for="captchaEnabled">
+            <span><strong>CAPTCHA Verification</strong><small>Require a completed CAPTCHA before Google sign-in.</small></span>
+            <span class="settings-switch"><input id="captchaEnabled" type="checkbox" /><span aria-hidden="true"></span></span>
+          </label>
+        </div>
+        <p class="auth-security-notice"><i class="fa-solid fa-shield-halved"></i> These settings affect Google authentication only. Password login is unchanged.</p>
+        <div class="profile-form-footer"><button class="btn btn-primary" type="button" id="saveAuthSecuritySettings"><i class="fa-solid fa-floppy-disk"></i> Save security settings</button></div>
+      </div>
     </section>
 
   </main>

@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { OAuth2Client } = require('google-auth-library');
 const User = require('../models/User');
+const AuthSettings = require('../models/AuthSettings');
 const logActivity = require('../utils/logActivity');
 const { sendEmail, verifyEmailTransport, emailTransportError } = require('../services/emailService');
 
@@ -14,8 +15,11 @@ const RESET_GENERIC_MESSAGE = 'If this email is registered, we will send a reset
 const INVALID_RESET_OTP_MESSAGE = 'OTP is incorrect, expired, or no longer valid. Please request a new OTP.';
 const RESET_FIELDS = '+passwordResetOtpHash +passwordResetOtpExpires +passwordResetOtpAttempts +passwordResetOtpSentAt +resetPasswordToken +resetPasswordExpires';
 const GOOGLE_STATE_COOKIE = 'play_google_oauth_state';
+const GOOGLE_CAPTCHA_COOKIE = 'play_google_captcha';
 const GOOGLE_STATE_TTL_MS = 10 * 60 * 1000;
 const GOOGLE_HANDOFF_TTL_MS = 2 * 60 * 1000;
+const GOOGLE_CAPTCHA_TTL_MS = 10 * 60 * 1000;
+const DEFAULT_AUTH_SETTINGS = { googleAuthEnabled: true, captchaEnabled: true };
 function logResetDebug(...args) {
   if (process.env.NODE_ENV !== 'production') console.log(...args);
 }
@@ -135,6 +139,83 @@ function createGoogleOAuthClient() {
   return new OAuth2Client(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_CALLBACK_URL);
 }
 
+function recaptchaSiteKey() {
+  return String(process.env.RECAPTCHA_SITE_KEY || '').trim();
+}
+
+function recaptchaSecretKey() {
+  return String(process.env.RECAPTCHA_SECRET_KEY || '').trim();
+}
+
+async function loadAuthSettings() {
+  return AuthSettings.findOneAndUpdate(
+    { key: 'global' },
+    { $setOnInsert: { key: 'global', ...DEFAULT_AUTH_SETTINGS } },
+    { new: true, upsert: true, setDefaultsOnInsert: true }
+  );
+}
+
+function authSettingsPayload(settings) {
+  return {
+    googleAuthEnabled: settings.googleAuthEnabled === true,
+    captchaEnabled: settings.captchaEnabled === true,
+    captchaConfigured: Boolean(recaptchaSiteKey() && recaptchaSecretKey()),
+  };
+}
+
+function createCaptchaGate() {
+  const payload = `${Date.now()}.${crypto.randomBytes(24).toString('hex')}`;
+  return `${payload}.${googleStateMac(payload)}`;
+}
+
+function validateCaptchaGate(value) {
+  if (typeof value !== 'string') return false;
+  const parts = value.split('.');
+  if (parts.length !== 3) return false;
+  const [timestampValue, nonce, signature] = parts;
+  const timestamp = Number(timestampValue);
+  if (!Number.isFinite(timestamp) || !/^[a-f0-9]{48}$/.test(nonce)) return false;
+  if (Date.now() - timestamp < 0 || Date.now() - timestamp > GOOGLE_CAPTCHA_TTL_MS) return false;
+  const expectedSignature = Buffer.from(googleStateMac(`${timestampValue}.${nonce}`), 'hex');
+  const providedSignature = Buffer.from(signature, 'hex');
+  return expectedSignature.length === providedSignature.length
+    && crypto.timingSafeEqual(expectedSignature, providedSignature);
+}
+
+function setCaptchaGateCookie(res, value, clear = false) {
+  const cookieParts = [
+    `${GOOGLE_CAPTCHA_COOKIE}=${clear ? '' : encodeURIComponent(value)}`,
+    'Path=/api/auth/google',
+    'HttpOnly',
+    'SameSite=Lax',
+    `Max-Age=${clear ? 0 : GOOGLE_CAPTCHA_TTL_MS / 1000}`,
+  ];
+  if (process.env.NODE_ENV === 'production') cookieParts.push('Secure');
+  res.append('Set-Cookie', cookieParts.join('; '));
+}
+
+async function verifyRecaptchaToken(token, remoteIp) {
+  const secret = recaptchaSecretKey();
+  if (!secret) return { ok: false, reason: 'configuration' };
+  if (typeof token !== 'string' || !token.trim()) return { ok: false, reason: 'missing' };
+
+  const params = new URLSearchParams({ secret, response: token.trim() });
+  if (remoteIp) params.set('remoteip', remoteIp);
+  try {
+    const response = await fetch('https://www.google.com/recaptcha/api/siteverify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params,
+    });
+    if (!response.ok) return { ok: false, reason: 'verification' };
+    const result = await response.json();
+    return result.success ? { ok: true } : { ok: false, reason: 'invalid' };
+  } catch (err) {
+    console.error('[CAPTCHA verification error]:', err.message);
+    return { ok: false, reason: 'verification' };
+  }
+}
+
 function googleStateMac(payload) {
   if (!process.env.JWT_SECRET) throw new Error('JWT_SECRET is required to protect Google OAuth state.');
   return crypto.createHmac('sha256', process.env.JWT_SECRET).update(payload).digest('hex');
@@ -197,11 +278,13 @@ function frontendLoginUrl(query = {}) {
 
 function redirectGoogleError(res, error) {
   setGoogleStateCookie(res, '', true);
+  setCaptchaGateCookie(res, '', true);
   return res.redirect(frontendLoginUrl({ googleError: error }).toString());
 }
 
 function redirectGoogleNotice(res, notice) {
   setGoogleStateCookie(res, '', true);
+  setCaptchaGateCookie(res, '', true);
   return res.redirect(frontendLoginUrl({ googleNotice: notice }).toString());
 }
 
@@ -216,15 +299,18 @@ async function findGoogleUser(googleId, email) {
   return { user: await User.findOne(googleEmailQuery(email)), matchedByGoogleId: false };
 }
 
-async function redirectWithGoogleHandoff(user, res, notice) {
+async function redirectWithGoogleHandoff(user, res, notice, mode, captchaVerified) {
   const code = crypto.randomBytes(32).toString('hex');
   user.googleLoginCodeHash = crypto.createHash('sha256').update(code).digest('hex');
   user.googleLoginCodeExpires = new Date(Date.now() + GOOGLE_HANDOFF_TTL_MS);
+  user.googleLoginMode = mode;
+  user.googleLoginCaptchaVerified = captchaVerified === true;
   await user.save();
 
   const url = frontendLoginUrl({ googleCode: code });
   if (notice) url.searchParams.set('googleNotice', notice);
   setGoogleStateCookie(res, '', true);
+  setCaptchaGateCookie(res, '', true);
   return res.redirect(url.toString());
 }
 
@@ -452,15 +538,60 @@ exports.resetPassword = async (req, res) => {
   }
 };
 
+// GET /api/auth/settings
+exports.getAuthSettings = async (req, res) => {
+  try {
+    const settings = await loadAuthSettings();
+    res.json({ settings: authSettingsPayload(settings) });
+  } catch (err) {
+    res.status(503).json({ message: 'Authentication settings are temporarily unavailable.' });
+  }
+};
+
+// PATCH /api/auth/settings (admin only)
+exports.updateAuthSettings = async (req, res) => {
+  const { googleAuthEnabled, captchaEnabled } = req.body || {};
+  if (typeof googleAuthEnabled !== 'boolean' || typeof captchaEnabled !== 'boolean') {
+    return res.status(400).json({ message: 'Google Authentication and CAPTCHA values must be true or false.' });
+  }
+  if (captchaEnabled && (!recaptchaSiteKey() || !recaptchaSecretKey())) {
+    return res.status(400).json({ message: 'CAPTCHA cannot be enabled until its site and secret keys are configured.' });
+  }
+
+  try {
+    const settings = await AuthSettings.findOneAndUpdate(
+      { key: 'global' },
+      { $set: { googleAuthEnabled, captchaEnabled } },
+      { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true }
+    );
+    res.json({ message: 'Authentication security settings saved.', settings: authSettingsPayload(settings) });
+  } catch (err) {
+    res.status(503).json({ message: 'Could not save authentication security settings.' });
+  }
+};
+
 // GET /api/auth/google?mode=login|signup
 exports.googleStart = async (req, res) => {
   const mode = req.query.mode;
   if (!['login', 'signup'].includes(mode)) return redirectGoogleError(res, 'invalid-mode');
 
+  let settings;
+  try {
+    settings = await loadAuthSettings();
+  } catch (err) {
+    return redirectGoogleError(res, 'configuration');
+  }
+  if (settings.googleAuthEnabled !== true) return redirectGoogleError(res, 'google-disabled');
+  if (mode === 'login' && settings.captchaEnabled === true
+    && !validateCaptchaGate(requestCookie(req, GOOGLE_CAPTCHA_COOKIE))) {
+    return redirectGoogleError(res, 'captcha-required');
+  }
+
   try {
     const state = createGoogleState(mode);
     const authorizationUrl = createGoogleOAuthClient().generateAuthUrl({
       access_type: 'online',
+      prompt: 'login',
       scope: ['profile', 'email'],
       state,
     });
@@ -469,6 +600,60 @@ exports.googleStart = async (req, res) => {
   } catch (err) {
     console.error('[Google OAuth configuration error]:', err.message);
     redirectGoogleError(res, 'configuration');
+  }
+};
+
+// GET /api/auth/recaptcha-config
+exports.recaptchaConfig = (req, res) => {
+  const siteKey = recaptchaSiteKey();
+  if (!siteKey) return res.status(503).json({ message: 'CAPTCHA is not configured.' });
+  res.json({ siteKey });
+};
+
+// POST /api/auth/google/start
+exports.googleStartWithCaptcha = async (req, res) => {
+  let settings;
+  try {
+    settings = await loadAuthSettings();
+  } catch (err) {
+    return res.status(503).json({ message: 'Authentication settings are temporarily unavailable.' });
+  }
+  if (settings.googleAuthEnabled !== true) {
+    return res.status(403).json({ message: 'Google sign-in is currently disabled by the school administrator.' });
+  }
+
+  const captchaRequired = settings.captchaEnabled === true;
+  const result = captchaRequired
+    ? await verifyRecaptchaToken(req.body && req.body.token, req.ip)
+    : { ok: true };
+  if (!result.ok) {
+    const messages = {
+      configuration: 'CAPTCHA is not configured. Please contact the school admin.',
+      missing: 'Please complete the CAPTCHA verification first.',
+      invalid: 'CAPTCHA verification failed or expired. Please try again.',
+      verification: 'CAPTCHA verification could not be completed. Please try again.',
+    };
+    return res.status(result.reason === 'configuration' ? 503 : 400)
+      .json({ message: messages[result.reason] || messages.invalid });
+  }
+  if (req.body.mode !== 'login') {
+    return res.status(400).json({ message: 'Google sign-in mode is invalid.' });
+  }
+
+  try {
+    const state = createGoogleState('login');
+    const authorizationUrl = createGoogleOAuthClient().generateAuthUrl({
+      access_type: 'online',
+      prompt: 'login',
+      scope: ['profile', 'email'],
+      state,
+    });
+    setGoogleStateCookie(res, state);
+    if (captchaRequired) setCaptchaGateCookie(res, createCaptchaGate());
+    res.json({ authorizationUrl });
+  } catch (err) {
+    console.error('[Google OAuth configuration error]:', err.message);
+    res.status(503).json({ message: 'Google sign-in is not configured. Please contact the school admin.' });
   }
 };
 
@@ -481,6 +666,17 @@ exports.googleCallback = async (req, res) => {
     return redirectGoogleError(res, 'invalid-state');
   }
   if (!mode) return redirectGoogleError(res, 'invalid-state');
+  let settings;
+  try {
+    settings = await loadAuthSettings();
+  } catch (err) {
+    return redirectGoogleError(res, 'configuration');
+  }
+  if (settings.googleAuthEnabled !== true) return redirectGoogleError(res, 'google-disabled');
+  const captchaRequired = mode === 'login' && settings.captchaEnabled === true;
+  if (captchaRequired && !validateCaptchaGate(requestCookie(req, GOOGLE_CAPTCHA_COOKIE))) {
+    return redirectGoogleError(res, 'captcha-required');
+  }
   setGoogleStateCookie(res, '', true);
 
   if (req.query.error) {
@@ -537,7 +733,13 @@ exports.googleCallback = async (req, res) => {
     if (user.status === 'archived') return redirectGoogleError(res, 'archived');
     if (user.status === 'pending') return redirectGoogleNotice(res, 'approval');
 
-    await redirectWithGoogleHandoff(user, res, mode === 'signup' ? 'account-exists' : '');
+    await redirectWithGoogleHandoff(
+      user,
+      res,
+      mode === 'signup' ? 'account-exists' : '',
+      mode,
+      captchaRequired
+    );
   } catch (err) {
     redirectGoogleError(res, 'failed');
   }
@@ -546,18 +748,46 @@ exports.googleCallback = async (req, res) => {
 // POST /api/auth/google/exchange
 exports.googleExchange = async (req, res) => {
   try {
-    const { code } = req.body;
+    const { code, password } = req.body;
     if (typeof code !== 'string' || !/^[a-f0-9]{64}$/.test(code)) {
       return res.status(400).json({ message: 'Google sign-in session is invalid or expired.' });
     }
 
+    const settings = await loadAuthSettings();
+    if (settings.googleAuthEnabled !== true) {
+      return res.status(403).json({ message: 'Google sign-in is currently disabled by the school administrator.' });
+    }
+
     const codeHash = crypto.createHash('sha256').update(code).digest('hex');
+    const pendingUser = await User.findOne(
+      { googleLoginCodeHash: codeHash, googleLoginCodeExpires: { $gt: new Date() } }
+    ).select('+password +googleLoginMode +googleLoginCaptchaVerified');
+    if (!pendingUser) return res.status(401).json({ message: 'Google sign-in session is invalid or expired.' });
+    if (settings.captchaEnabled === true && pendingUser.googleLoginMode === 'login'
+      && pendingUser.googleLoginCaptchaVerified !== true) {
+      return res.status(403).json({ message: 'CAPTCHA verification is required. Please start Google sign-in again.' });
+    }
+    if (typeof password !== 'string' || !password) {
+      return res.status(400).json({ message: 'Enter your Play-is-School password to continue.' });
+    }
+    if (!pendingUser.password || !(await pendingUser.comparePassword(password))) {
+      return res.status(401).json({ message: 'Incorrect Play-is-School password.' });
+    }
+
     const user = await User.findOneAndUpdate(
       { googleLoginCodeHash: codeHash, googleLoginCodeExpires: { $gt: new Date() } },
-      { $unset: { googleLoginCodeHash: 1, googleLoginCodeExpires: 1 } },
+      {
+        $unset: {
+          googleLoginCodeHash: 1,
+          googleLoginCodeExpires: 1,
+        },
+      },
       { new: true }
-    );
+    ).select('+googleLoginMode +googleLoginCaptchaVerified');
     if (!user) return res.status(401).json({ message: 'Google sign-in session is invalid or expired.' });
+    user.googleLoginMode = undefined;
+    user.googleLoginCaptchaVerified = undefined;
+    await user.save();
     if (user.status === 'pending') return res.status(403).json({ message: 'Your account is awaiting admin approval.' });
     if (user.status === 'archived') return res.status(403).json({ message: 'This account has been archived.' });
 
