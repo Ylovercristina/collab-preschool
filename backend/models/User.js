@@ -58,6 +58,8 @@ const userSchema = new mongoose.Schema(
     resetPasswordExpires: { type: Date, select: false },
     googleLoginCodeHash: { type: String, select: false },
     googleLoginCodeExpires: { type: Date, select: false },
+    googleLoginMode: { type: String, enum: ['login', 'signup'], select: false },
+    googleLoginCaptchaVerified: { type: Boolean, select: false, default: false },
   },
   { timestamps: true }
 );

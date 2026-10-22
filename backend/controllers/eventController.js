@@ -122,15 +122,15 @@ async function publishEvent(event) {
     })));
   }
   const alreadyNotified = event.emailRecipientCount > 0;
-  event.emailRecipientCount = parents.length;
+  event.emailRecipientCount = recipients.length;
   event.publicationStatus = 'published';
   event.approvalStatus = 'approved';
   event.approvedAt = new Date();
   if (event.reviewStatus === 'publishing') event.reviewStatus = 'approved';
   await event.save();
   // Only queue emails if they haven't been sent yet
-  if (parents.length && !alreadyNotified) {
-    queueEmailDelivery({ ...eventEmail(event), parents, type: 'event', eventId: event._id });
+  if (recipients.length && !alreadyNotified) {
+    queueEmailDelivery({ ...eventEmail(event), parents: recipients, type: 'event', eventId: event._id });
   }
   return recipients.length;
 }

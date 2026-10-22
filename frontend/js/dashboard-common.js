@@ -1,5 +1,24 @@
 // ---------- Play-is-School -- Shared Dashboard Logic & Components ----------
 
+// ---------- Email Delivery Summary Helpers ----------
+function formatEmailSummary(summary) {
+  if (!summary) return 'Email delivery status unavailable.';
+  const counts = `Sent ${summary.sent}, skipped ${summary.skipped} (${summary.unverified || 0} unverified email), failed ${summary.failed}`;
+  return summary.complete ? counts : `${counts} (delivery logging in progress)`;
+}
+
+async function pollEmailSummary(path, initial, target) {
+  let summary = initial;
+  if (target) target.textContent = formatEmailSummary(summary);
+  for (let attempt = 0; !summary.complete && attempt < 20; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const response = await api.get(path);
+    summary = response.emailSummary;
+    if (target) target.textContent = formatEmailSummary(summary);
+  }
+  return summary;
+}
+
 function initSidebarNav() {
   document.querySelectorAll('.nav-item[data-panel]').forEach((btn) => {
     btn.addEventListener('click', () => {
