@@ -28,6 +28,7 @@
     <button class="nav-item active" data-panel="overview"><i class="fa-solid fa-gauge-high"></i> Overview</button>
     <button class="nav-item" data-panel="users"><i class="fa-solid fa-users-gear"></i> Accounts</button>
     <button class="nav-item" data-panel="students"><i class="fa-solid fa-user-graduate"></i> Students</button>
+    <button class="nav-item" data-panel="classes"><i class="fa-solid fa-chalkboard-user"></i> Classes</button>
     <button class="nav-item" data-panel="enrollment"><i class="fa-solid fa-file-signature"></i> Enrollment</button>
     <button class="nav-item" data-panel="academic-progress"><i class="fa-solid fa-chart-line"></i> Academic Progress</button>
     <button class="nav-item" data-panel="records"><i class="fa-solid fa-folder-open"></i> Records Management</button>
@@ -227,6 +228,28 @@
       </div>
     </section>
 
+    <section class="panel" id="panel-classes">
+      <div class="toolbar">
+        <div>
+          <h1 style="margin:0;">Classes</h1>
+          <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Create classes, assign a teacher, and place students. Teachers can only see students in their class.</p>
+        </div>
+        <button type="button" class="btn btn-primary btn-sm" id="addClassBtn"><i class="fa-solid fa-plus"></i> New Class</button>
+      </div>
+      <div id="classesMessage" class="form-msg" aria-live="polite"></div>
+      <div id="classesNotices"></div>
+      <div class="records-filterbar">
+        <select id="classStatusFilter" aria-label="Filter classes by status"><option value="active">Active classes</option><option value="archived">Archived classes</option><option value="">All classes</option></select>
+        <span id="classResultCount" class="records-result-count"></span>
+      </div>
+      <div class="table-responsive">
+        <table>
+          <thead><tr><th>Class</th><th>Teacher</th><th>Active students</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="classesTbody"></tbody>
+        </table>
+      </div>
+    </section>
+
     <section class="panel" id="panel-academic-progress">
       <div class="toolbar">
         <div>
@@ -312,10 +335,13 @@
           <h1 style="margin:0;">School Events &amp; Calendar</h1>
           <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">View, schedule, and organize activities on the school calendar.</p>
         </div>
-        <button class="btn btn-primary btn-sm" id="addEventBtn"><i class="fa-solid fa-calendar-plus"></i> New Event</button>
+        <div class="panel-header-actions">
+          <button type="button" class="gcal-status-btn" id="googleCalendarStatusBtn" hidden aria-haspopup="dialog"></button>
+          <button class="btn btn-primary btn-sm" id="addEventBtn"><i class="fa-solid fa-calendar-plus"></i> New Event</button>
+        </div>
       </div>
       <div id="adminEventSummary" class="form-msg" aria-live="polite"></div>
-      <section class="event-review-queue" aria-labelledby="pendingEventsHeading">
+      <section class="event-review-queue" id="pendingEventsSection" aria-labelledby="pendingEventsHeading" hidden>
         <div class="toolbar"><div><h2 id="pendingEventsHeading" style="font-size:18px;margin:0;">Teacher submissions awaiting approval</h2><p style="margin:4px 0 0;font-size:13px;color:var(--ink-muted);">Parents are not notified until you approve an event.</p></div><span id="pendingEventsCount" class="badge pending">0 pending</span></div>
         <div id="pendingEventsList"></div>
       </section>
@@ -452,6 +478,7 @@
 <script src="../js/dashboard-common.js"></script>
 <script src="../js/admin.js"></script>
 <script src="../js/admin-records.js"></script>
+<script src="../js/admin-classes.js"></script>
 <script src="../js/enrollment.js"></script>
 </body>
 </html>

@@ -1,5 +1,6 @@
 const Student = require('../models/Student');
 const logActivity = require('../utils/logActivity');
+const { applyClassToStudentData } = require('../utils/classAssignment');
 const mongoose = require('mongoose');
 
 // Helper: build a scope filter based on who's asking
@@ -34,7 +35,10 @@ exports.getStudent = async (req, res) => {
 exports.createStudent = async (req, res) => {
   try {
     const { name, birthdate, className, parent, teacher, notes } = req.body;
-    const student = await Student.create({ name, birthdate, className, parent, teacher, notes });
+    const data = { name, birthdate, className, parent, teacher, notes };
+    const classError = await applyClassToStudentData(data);
+    if (classError) return res.status(400).json({ message: classError });
+    const student = await Student.create(data);
     await logActivity(req.user._id, 'student-created', name);
     const populated = await Student.findById(student._id)
       .populate('parent', 'name email phone status emailVerified emailVerifiedBy')
@@ -67,6 +71,12 @@ exports.updateStudent = async (req, res) => {
     if (req.user.role === 'teacher') filter.teacher = req.user._id;
     const student = await Student.findOne(filter);
     if (!student) return res.status(404).json({ message: 'Student not found.' });
+    const classError = await applyClassToStudentData(update, student.className);
+    if (classError) return res.status(400).json({ message: classError });
+    // Teachers may not move a student out of their own care.
+    if (req.user.role === 'teacher' && update.teacher !== undefined && String(update.teacher || '') !== String(req.user._id)) {
+      return res.status(403).json({ message: 'You can only move students into a class you teach. Ask an admin to change their class.' });
+    }
     student.set(update);
     await student.save();
     await student.populate('parent', 'name email phone status emailVerified emailVerifiedBy');

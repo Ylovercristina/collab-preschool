@@ -13,7 +13,6 @@
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
-    "express": "^4.19.2",
     "google-auth-library": "^11.1.0",
     "jsonwebtoken": "^9.0.2",
     "mongodb": "^7.6.0",
@@ -23,6 +22,7 @@
     "nodemailer": "^10.0.13"
   },
   "devDependencies": {
+    "express": "^5.3.0",
     "nodemon": "^3.1.4"
   },
   "keywords": [],

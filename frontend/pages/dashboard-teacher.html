@@ -121,9 +121,13 @@
         <div class="attendance-toolbar">
           <div>
             <h2>Daily attendance</h2>
-            <p>Choose a date, update each status, then save the row.</p>
+            <p>Mark only the students who are absent, tardy, or excused, then press Save All — everyone else is saved as Present.</p>
           </div>
           <div class="attendance-toolbar-actions">
+            <div class="attendance-date-control">
+              <label for="attClassFilter">Class</label>
+              <select id="attClassFilter"><option value="">All my classes</option></select>
+            </div>
             <div class="attendance-date-control">
               <label for="attDate">Attendance date</label>
               <input type="date" id="attDate" />
@@ -191,6 +195,10 @@
           </div>
         </template>
         <div id="attendanceDailySummary" class="attendance-summary" aria-live="polite"></div>
+        <div class="attendance-saveall-bar" role="region" aria-label="Save attendance">
+          <span id="attendanceUnsavedCount" aria-live="polite">No unsaved changes</span>
+          <button class="btn btn-primary" id="attendanceSaveAll" type="button" disabled><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i> Save All</button>
+        </div>
         <div class="table-responsive attendance-table-wrap">
           <table class="attendance-table">
             <thead><tr><th>Student</th><th>Class</th><th>Status</th><th>Remarks</th><th>Record</th></tr></thead>
@@ -202,33 +210,56 @@
 
     <section class="panel" id="panel-progress">
       <div class="toolbar">
-        <h1 style="margin:0;">Academic Progress Evaluation</h1>
-        <div style="display:flex; align-items:center; gap:8px;">
-          <label style="font-weight:600; font-size:13.5px;">Student:</label>
-          <select id="progStudentSelect" style="padding:7px 12px; border-radius:6px; border:1px solid #CBD5E1;"></select>
+        <div>
+          <h1 style="margin:0;">Academic Progress</h1>
+          <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Record activities and weekly or monthly milestones, with photos, for each student.</p>
+        </div>
+        <div class="progress-pickers">
+          <div class="field"><label for="progClassSelect">Class</label><select id="progClassSelect"></select></div>
+          <div class="field"><label for="progStudentSelect">Student</label><select id="progStudentSelect"></select></div>
         </div>
       </div>
-      <div class="card" style="margin-bottom:20px;">
-        <h3 id="progressFormTitle" style="margin-bottom:14px;"><i class="fa-solid fa-plus-circle" style="color:var(--primary); margin-right:6px;"></i>Log Milestone or Activity</h3>
-        <form id="progressForm">
-          <div class="field"><label for="pDate">Assessment date</label><input id="pDate" type="date" required /></div>
+      <div id="progressStudentHeader"></div>
+      <div class="card progress-form-card" style="margin-bottom:20px;">
+        <h3 id="progressFormTitle" style="margin-bottom:14px;"><i class="fa-solid fa-plus-circle" style="color:var(--primary); margin-right:6px;"></i>Add Progress Record</h3>
+        <form id="progressForm" novalidate>
+          <fieldset class="progress-type-picker">
+            <legend>Record type</legend>
+            <label><input type="radio" name="pEntryType" value="activity" checked /> <span>Activity</span></label>
+            <label><input type="radio" name="pEntryType" value="weekly" /> <span>Weekly milestone</span></label>
+            <label><input type="radio" name="pEntryType" value="monthly" /> <span>Monthly milestone</span></label>
+          </fieldset>
           <div class="grid-2">
-            <div class="field"><label>Milestone</label><input id="pMilestone" placeholder="e.g. Recognizes 5 alphabet letters" /></div>
-            <div class="field"><label>Activity</label><input id="pActivity" placeholder="e.g. Color sorting puzzle" /></div>
+            <div class="field" id="pDateField"><label for="pDate" id="pDateLabel">Activity date</label><input id="pDate" type="date" required /><div class="field-hint" id="pPeriodHint"></div></div>
+            <div class="field" id="pMonthField" hidden><label for="pMonth">Month</label><input id="pMonth" type="month" /></div>
+            <div class="field"><label for="pLearningArea">Category</label><input id="pLearningArea" list="progressCategoryOptions" maxlength="100" placeholder="e.g. Language development" /></div>
           </div>
+          <datalist id="progressCategoryOptions">
+            <option value="Language development"></option>
+            <option value="Counting skills"></option>
+            <option value="Social interaction"></option>
+            <option value="Motor skills"></option>
+            <option value="Creativity"></option>
+            <option value="Classroom participation"></option>
+          </datalist>
+          <div class="field"><label for="pMilestone" id="pMilestoneLabel">Title</label><input id="pMilestone" maxlength="200" placeholder="e.g. Counts objects up to 10" /></div>
+          <div class="field"><label for="pActivity">Activity / description</label><textarea id="pActivity" rows="2" maxlength="3000" placeholder="What the student did"></textarea></div>
           <div class="grid-2">
-            <div class="field"><label for="pLearningArea">Learning area</label><select id="pLearningArea" required><option value="">Select learning area</option><option>Language &amp; Literacy</option><option>Numeracy</option><option>Social &amp; Emotional Development</option><option>Physical Development</option><option>Creative Arts</option><option>Science &amp; Discovery</option><option>Other</option></select></div>
-            <div class="field"><label>Assessment result</label><input id="pAssessment" placeholder="e.g. Meeting age expectations" /></div>
+            <div class="field"><label for="pObservations">Observations</label><textarea id="pObservations" rows="2" maxlength="3000" placeholder="What you observed"></textarea></div>
+            <div class="field"><label for="pNotes">Progress notes</label><textarea id="pNotes" rows="2" maxlength="3000" placeholder="Progress since last time, next steps"></textarea></div>
           </div>
-          <div class="field"><label for="pEvaluation">Teacher evaluation</label><textarea id="pEvaluation" rows="2" placeholder="Describe the student's progress in this learning area"></textarea></div>
-          <div class="grid-2">
-            <div class="field"><label for="pStrengths">Strengths</label><textarea id="pStrengths" rows="2" placeholder="Observed strengths"></textarea></div>
-            <div class="field"><label for="pAreasForImprovement">Areas for improvement</label><textarea id="pAreasForImprovement" rows="2" placeholder="Areas where additional support may help"></textarea></div>
+          <div class="progress-more-details">
+            <button class="btn btn-ghost btn-sm" id="openAssessmentDetails" type="button" aria-haspopup="dialog" aria-controls="assessmentDetailsBackdrop"><i class="fa-solid fa-clipboard-check"></i> Assessment details (optional)</button>
+            <span id="assessmentDetailsStatus" class="progress-more-status"></span>
           </div>
-          <div class="field"><label for="pOverallDevelopment">Overall development</label><textarea id="pOverallDevelopment" rows="2" placeholder="Summary of development and progress over time"></textarea></div>
-          <div class="field"><label>Teacher Notes</label><textarea id="pNotes" rows="2" placeholder="Describe strengths or areas needing practice…"></textarea></div>
+          <div class="field">
+            <label for="pPhotos">Photos</label>
+            <input id="pPhotos" type="file" accept="image/jpeg,image/png,image/webp" multiple />
+            <div class="field-hint">JPG, PNG or WEBP, up to 5 MB each. Add up to 6 at a time, 12 per record. Only staff can see photos.</div>
+            <div id="pPhotoPreview" class="progress-photo-grid editable" aria-live="polite"></div>
+          </div>
           <div id="progressFormMessage" class="form-msg" aria-live="polite"></div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn btn-primary" id="progressSaveButton" type="submit"><i class="fa-solid fa-floppy-disk"></i> Save Entry</button><button class="btn btn-ghost" id="progressCancelEdit" type="button" hidden>Cancel edit</button></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn btn-primary" id="progressSaveButton" type="submit"><i class="fa-solid fa-floppy-disk"></i> Save Record</button><button class="btn btn-ghost" id="progressCancelEdit" type="button" hidden>Cancel edit</button></div>
         </form>
       </div>
       <div id="progressList"></div>
@@ -449,6 +480,24 @@
 </div>
 
 <div class="modal-backdrop" id="modalBackdrop"><div class="modal" id="modalBody"></div></div>
+
+<!-- Inputs belong to #progressForm via the form attribute so reset/edit keep working. -->
+<div class="modal-backdrop" id="assessmentDetailsBackdrop" role="dialog" aria-modal="true" aria-labelledby="assessmentDetailsTitle">
+  <div class="modal modal-wide">
+    <button class="modal-close" id="closeAssessmentDetails" type="button" aria-label="Close" title="Close"><i class="fa-solid fa-xmark"></i></button>
+    <h3 id="assessmentDetailsTitle">Assessment details</h3>
+    <div class="grid-2">
+      <div class="field"><label for="pAssessment">Assessment result</label><input id="pAssessment" form="progressForm" maxlength="500" placeholder="e.g. Meeting age expectations" /></div>
+      <div class="field"><label for="pEvaluation">Teacher evaluation</label><textarea id="pEvaluation" form="progressForm" rows="2" maxlength="3000"></textarea></div>
+    </div>
+    <div class="grid-2">
+      <div class="field"><label for="pStrengths">Strengths</label><textarea id="pStrengths" form="progressForm" rows="2" maxlength="2000"></textarea></div>
+      <div class="field"><label for="pAreasForImprovement">Areas for improvement</label><textarea id="pAreasForImprovement" form="progressForm" rows="2" maxlength="2000"></textarea></div>
+    </div>
+    <div class="field"><label for="pOverallDevelopment">Overall development</label><textarea id="pOverallDevelopment" form="progressForm" rows="3" maxlength="3000"></textarea></div>
+    <div style="display:flex;justify-content:flex-end;"><button class="btn btn-primary" id="doneAssessmentDetails" type="button">Done</button></div>
+  </div>
+</div>
 
 <script src="../js/api.js"></script>
 <script src="../js/dashboard-common.js"></script>

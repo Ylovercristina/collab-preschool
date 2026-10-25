@@ -82,7 +82,7 @@ function renderProgressDetails() {
     .filter((entry) => entry.student?._id === student._id)
     .sort((a, b) => new Date(b.date) - new Date(a.date));
   if (!entries.length) {
-    container.innerHTML = `<div class="record-profile-heading"><div><h2 style="margin:0;">${escapeRecordHtml(student.name)}</h2><p style="margin:4px 0 0;">${escapeRecordHtml(studentRecordId(student))} &middot; ${escapeRecordHtml(student.className || 'Unassigned')}</p></div></div>
+    container.innerHTML = `${studentProgressHeaderHtml(student, [])}
       <div class="empty-state"><i class="fa-solid fa-clipboard-question"></i><p>No academic progress records are available for this student yet.</p></div>`;
     return;
   }
@@ -93,33 +93,19 @@ function renderProgressDetails() {
   const development = uniqueLines('overallDevelopment');
   const reviewedCount = entries.filter((entry) => entry.reviewedAt).length;
   container.innerHTML = `
-    <div class="record-profile-heading">
-      <div><h2 style="margin:0;">${escapeRecordHtml(student.name)}</h2><p style="margin:4px 0 0;">Student ID ${escapeRecordHtml(studentRecordId(student))} &middot; ${escapeRecordHtml(student.className || 'Unassigned')}</p></div>
-      <span class="badge ${reviewedCount === entries.length ? 'approved' : 'pending'}">${reviewedCount} of ${entries.length} reviewed</span>
-    </div>
+    ${studentProgressHeaderHtml(student, entries, `<span class="badge ${reviewedCount === entries.length ? 'approved' : 'pending'}">${reviewedCount} of ${entries.length} reviewed</span>`)}
     <div class="progress-summary-grid">
       <div class="progress-summary-item"><span class="record-info-label">Strengths</span>${strengths.length ? strengths.map(escapeRecordHtml).join('<br>') : 'Not recorded yet'}</div>
       <div class="progress-summary-item"><span class="record-info-label">Areas for improvement</span>${improvements.length ? improvements.map(escapeRecordHtml).join('<br>') : 'No areas noted'}</div>
       <div class="progress-summary-item"><span class="record-info-label">Overall development</span>${development.length ? development.map(escapeRecordHtml).join('<br>') : 'Not recorded yet'}</div>
     </div>
     <h3 style="margin:16px 0 4px;">Progress over time</h3>
-    <div class="progress-entry-list">${entries.map((entry) => `
-      <article class="progress-entry">
-        <div class="progress-entry-heading">
-          <div><strong>${escapeRecordHtml(entry.learningArea || 'Learning area not specified')}</strong><div style="font-size:12px;color:var(--ink-muted);">${recordDate(entry.date)} &middot; Teacher: ${escapeRecordHtml(entry.teacher?.name || '—')}</div></div>
-          ${entry.reviewedAt
-            ? `<span class="badge approved"><i class="fa-solid fa-check"></i> Reviewed ${recordDate(entry.reviewedAt)}</span>`
-            : `<button type="button" class="btn btn-secondary btn-sm" data-review-progress="${escapeRecordHtml(entry._id)}"><i class="fa-solid fa-check"></i> Mark reviewed</button>`}
-        </div>
-        ${entry.milestone ? `<p><strong>Milestone:</strong> ${escapeRecordHtml(entry.milestone)}</p>` : ''}
-        ${entry.activity ? `<p><strong>Activity:</strong> ${escapeRecordHtml(entry.activity)}</p>` : ''}
-        ${entry.assessment ? `<p><strong>Assessment result:</strong> ${escapeRecordHtml(entry.assessment)}</p>` : ''}
-        ${entry.evaluation ? `<p><strong>Teacher evaluation:</strong> ${escapeRecordHtml(entry.evaluation)}</p>` : ''}
-        ${entry.strengths ? `<p><strong>Strengths:</strong> ${escapeRecordHtml(entry.strengths)}</p>` : ''}
-        ${entry.areasForImprovement ? `<p><strong>Needs support:</strong> ${escapeRecordHtml(entry.areasForImprovement)}</p>` : ''}
-        ${entry.overallDevelopment ? `<p><strong>Overall development:</strong> ${escapeRecordHtml(entry.overallDevelopment)}</p>` : ''}
-        ${entry.notes ? `<p><strong>Teacher notes:</strong> ${escapeRecordHtml(entry.notes)}</p>` : ''}
-      </article>`).join('')}</div>`;
+    <div class="progress-entry-list">${entries.map((entry) => progressEntryCardHtml(entry, {
+      actionsHtml: entry.reviewedAt
+        ? `<span class="badge approved"><i class="fa-solid fa-check"></i> Reviewed ${recordDate(entry.reviewedAt)}</span>`
+        : `<button type="button" class="btn btn-secondary btn-sm" data-review-progress="${escapeRecordHtml(entry._id)}"><i class="fa-solid fa-check"></i> Mark reviewed</button>`,
+    })).join('')}</div>`;
+  hydrateProtectedImages(container);
 
   container.querySelectorAll('[data-review-progress]').forEach((button) => {
     button.addEventListener('click', async () => {
@@ -437,7 +423,7 @@ async function openManagedRecordForm(record = null) {
         <div class="field"><label for="managedName">Full name</label><input id="managedName" maxlength="120" value="${escapeRecordHtml(record?.name || '')}" required /></div>
         ${isTeacher
           ? `<div class="field"><label for="managedPhone">Contact number</label><input id="managedPhone" type="tel" value="${escapeRecordHtml(record?.phone || '')}" required /></div>`
-          : `<div class="field"><label for="managedClass">Class / section</label><input id="managedClass" maxlength="80" value="${escapeRecordHtml(record?.className || '')}" required /></div>`}
+          : `<div class="field"><label for="managedClass">Class / section</label><input id="managedClass" list="managedClassOptions" maxlength="80" value="${escapeRecordHtml(record?.className || '')}" required /></div>`}
       </div>
       ${isTeacher ? `
         ${!isEditing ? '<div class="field"><label for="managedEmail">Email address (teacher sign-in)</label><input id="managedEmail" type="email" required /></div><div class="field"><label for="managedPassword">Temporary password</label><input id="managedPassword" type="password" minlength="6" required /></div>' : ''}

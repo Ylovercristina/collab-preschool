@@ -300,7 +300,13 @@ const attDateInput = document.getElementById('attDate');
 attDateInput.value = localDateValue();
 let generatedAttendanceReport = null;
 let attendanceReportStudentName = '';
-attDateInput.addEventListener('change', () => loadAttendance());
+attDateInput.addEventListener('change', () => {
+  if (attendanceLoadedDate && attDateInput.value !== attendanceLoadedDate && !confirmDiscardAttendance('Change the date')) {
+    attDateInput.value = attendanceLoadedDate;
+    return;
+  }
+  loadAttendance();
+});
 document.getElementById('openAttendanceReport').addEventListener('click', openAttendanceReport);
 
 function openAttendanceReport() {
@@ -366,11 +372,183 @@ async function loadYesterdayAbsences() {
   `).join('');
 }
 
-async function loadAttendance() {
+// Unsaved attendance edits for the loaded date, keyed by student ID. Kept across class filter
+// changes and re-renders; cleared only after saving or when the teacher agrees to discard them.
+let attendanceRoster = [];
+let attendanceLoadedDate = '';
+let attendanceRowErrors = new Map();
+const attendanceEdits = new Map();
+const ATTENDANCE_OPTIONS = [['present', 'Present'], ['absent', 'Absent'], ['tardy', 'Tardy'], ['excused', 'Excused']];
+
+function savedAttendanceValue(row) {
+  const status = row.attendance ? (row.attendance.status === 'late' ? 'tardy' : row.attendance.status) : '';
+  return { status, remarks: row.attendance ? (row.attendance.remarks || '') : '' };
+}
+
+function currentAttendanceValue(row) {
+  return attendanceEdits.get(String(row.student.id)) || savedAttendanceValue(row);
+}
+
+function recordAttendanceEdit(row, value) {
+  const id = String(row.student.id);
+  const saved = savedAttendanceValue(row);
+  if (value.status === saved.status && value.remarks.trim() === saved.remarks.trim()) attendanceEdits.delete(id);
+  else attendanceEdits.set(id, value);
+  attendanceRowErrors.delete(id);
+  updateAttendanceSaveBar();
+}
+
+// Visible students with no saved record and no edit; Save All marks them present.
+function unmarkedAttendanceRows() {
+  return filteredAttendanceRoster().filter((row) => !row.attendance && !attendanceEdits.has(String(row.student.id)));
+}
+
+function updateAttendanceSaveBar() {
+  const count = attendanceEdits.size;
+  const unmarked = unmarkedAttendanceRows().length;
+  const visibleIds = new Set(filteredAttendanceRoster().map((row) => String(row.student.id)));
+  const hidden = [...attendanceEdits.keys()].filter((id) => !visibleIds.has(id)).length;
+  const label = document.getElementById('attendanceUnsavedCount');
+  const parts = [];
+  if (count) parts.push(`${count} unsaved change${count === 1 ? '' : 's'}${hidden ? ` (${hidden} in other classes)` : ''}`);
+  if (unmarked) parts.push(`${unmarked} unmarked student${unmarked === 1 ? '' : 's'} will be saved as Present`);
+  label.textContent = parts.length ? parts.join(' · ') : 'No unsaved changes';
+  label.classList.toggle('has-changes', parts.length > 0);
+  const button = document.getElementById('attendanceSaveAll');
+  if (button.getAttribute('aria-busy') !== 'true') button.disabled = !(count || unmarked);
+}
+
+function filteredAttendanceRoster() {
+  const className = document.getElementById('attClassFilter').value;
+  return attendanceRoster.filter((row) => !className || (row.student.className || 'Unassigned') === className);
+}
+
+function confirmDiscardAttendance(action) {
+  if (!attendanceEdits.size) return true;
+  if (!confirm(`You have ${attendanceEdits.size} unsaved attendance change${attendanceEdits.size === 1 ? '' : 's'} for ${attendanceLoadedDate}. ${action} and discard them?`)) return false;
+  attendanceEdits.clear();
+  attendanceRowErrors.clear();
+  updateAttendanceSaveBar();
+  return true;
+}
+
+function renderAttendanceRows() {
+  const tbody = document.getElementById('attTbody');
+  const rows = filteredAttendanceRoster();
+  if (!attendanceRoster.length) {
+    tbody.innerHTML = '<tr><td colspan="5"><div class="empty-state"><i class="fa-solid fa-clipboard-user"></i><p>No students assigned to you.</p></div></td></tr>';
+    updateAttendanceSaveBar();
+    return;
+  }
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="5"><div class="empty-state"><p>No students in this class.</p></div></td></tr>';
+    updateAttendanceSaveBar();
+    return;
+  }
+  tbody.innerHTML = rows.map((r) => {
+    const id = String(r.student.id);
+    const value = currentAttendanceValue(r);
+    const dirty = attendanceEdits.has(id);
+    const error = attendanceRowErrors.get(id);
+    const stateText = error ? `Not saved: ${error}` : dirty ? 'Unsaved changes' : (r.attendance ? 'Saved' : 'Not recorded');
+    return `
+      <tr class="${value.status === 'absent' ? 'attendance-absent-row' : ''} ${dirty ? 'attendance-dirty-row' : ''} ${error ? 'attendance-error-row' : ''}" data-student="${escapeTeacherHtml(id)}">
+        <td><strong>${escapeTeacherHtml(r.student.name)}</strong></td>
+        <td>${r.student.className ? `<span class="attendance-class-name">${escapeTeacherHtml(r.student.className)}</span>` : '—'}</td>
+        <td>
+          <select class="statusSelect attendance-status-select" aria-label="Attendance status for ${escapeTeacherHtml(r.student.name)}" data-status="${escapeTeacherHtml(value.status)}">
+            ${value.status ? '' : '<option value="" selected>Select status</option>'}
+            ${ATTENDANCE_OPTIONS.map(([option, label]) => `<option value="${option}" ${value.status === option ? 'selected' : ''}>${label}</option>`).join('')}
+          </select>
+        </td>
+        <td><input class="remarksInput attendance-remarks-input" maxlength="500" value="${escapeTeacherHtml(value.remarks)}" aria-label="Attendance remarks for ${escapeTeacherHtml(r.student.name)}" placeholder="Optional remarks" /></td>
+        <td><div class="attendance-record-actions"><button type="button" class="btn btn-secondary btn-sm" data-save-attendance ${dirty && value.status ? '' : 'disabled'}>Save</button><span data-attendance-state aria-live="polite">${escapeTeacherHtml(stateText)}</span></div></td>
+      </tr>`;
+  }).join('');
+
+  tbody.querySelectorAll('tr[data-student]').forEach((rowElement) => {
+    const row = attendanceRoster.find((item) => String(item.student.id) === rowElement.dataset.student);
+    const statusSelect = rowElement.querySelector('.statusSelect');
+    const remarksInput = rowElement.querySelector('.remarksInput');
+    const saveButton = rowElement.querySelector('[data-save-attendance]');
+    const state = rowElement.querySelector('[data-attendance-state]');
+    const onEdit = () => {
+      recordAttendanceEdit(row, { status: statusSelect.value, remarks: remarksInput.value });
+      const dirty = attendanceEdits.has(String(row.student.id));
+      rowElement.classList.toggle('attendance-absent-row', statusSelect.value === 'absent');
+      rowElement.classList.toggle('attendance-dirty-row', dirty);
+      rowElement.classList.remove('attendance-error-row');
+      statusSelect.dataset.status = statusSelect.value;
+      saveButton.disabled = !(dirty && statusSelect.value);
+      state.textContent = dirty ? 'Unsaved changes' : (row.attendance ? 'Saved' : 'Not recorded');
+    };
+    statusSelect.addEventListener('change', onEdit);
+    remarksInput.addEventListener('input', onEdit);
+    saveButton.addEventListener('click', async () => {
+      saveButton.disabled = true;
+      state.textContent = 'Saving…';
+      document.getElementById('attendanceMessage').textContent = '';
+      try {
+        await api.post('/attendance', {
+          student: row.student.id,
+          date: attendanceLoadedDate,
+          status: statusSelect.value,
+          remarks: remarksInput.value.trim(),
+        });
+        attendanceEdits.delete(String(row.student.id));
+        await loadAttendance();
+      } catch (err) {
+        state.textContent = 'Not saved';
+        saveButton.disabled = false;
+        showMsg(document.getElementById('attendanceMessage'), err.message);
+      }
+    });
+  });
+  updateAttendanceSaveBar();
+}
+
+async function saveAllAttendance() {
+  const message = document.getElementById('attendanceMessage');
+  message.textContent = '';
+  // Anyone left without a status defaults to present, so a full-attendance day is one click.
+  const records = [
+    ...[...attendanceEdits.entries()].map(([student, value]) => ({ student, status: value.status || 'present', remarks: value.remarks.trim() })),
+    ...unmarkedAttendanceRows().map((row) => ({ student: String(row.student.id), status: 'present', remarks: '' })),
+  ];
+  if (!records.length) return;
+  const button = document.getElementById('attendanceSaveAll');
+  setButtonLoading(button, true, `Saving ${records.length}`);
+  try {
+    const { saved, failed, warnings } = await api.post('/attendance/bulk', { date: attendanceLoadedDate, records });
+    saved.forEach(({ student }) => attendanceEdits.delete(String(student)));
+    attendanceRowErrors = new Map(failed.map((item) => [String(item.student), item.message]));
+    setButtonLoading(button, false);
+    await loadAttendance({ keepMessage: true });
+    if (failed.length) {
+      const names = failed.map((item) => item.name || attendanceRoster.find((row) => String(row.student.id) === String(item.student))?.student.name || 'A student');
+      showMsg(message, `Saved ${saved.length} of ${records.length}. These still need attention: ${names.join(', ')}. Their changes are kept so you can try again.`);
+    } else {
+      showToast(`Attendance saved for ${saved.length} student${saved.length === 1 ? '' : 's'}.`);
+      message.className = 'form-msg success';
+      message.textContent = `Attendance for ${attendanceLoadedDate} saved.`;
+    }
+    if (warnings.length) showToast(`${warnings.length} parent notification${warnings.length === 1 ? '' : 's'} could not be updated.`, 'error');
+  } catch (err) {
+    setButtonLoading(button, false);
+    updateAttendanceSaveBar();
+    showMsg(message, `Nothing was saved: ${err.message} Your changes are still on screen.`);
+  }
+}
+
+async function loadAttendance({ keepMessage = false } = {}) {
   const date = attDateInput.value || localDateValue();
   const tbody = document.getElementById('attTbody');
   const message = document.getElementById('attendanceMessage');
-  message.textContent = '';
+  if (!keepMessage) message.textContent = '';
+  if (date !== attendanceLoadedDate) {
+    attendanceEdits.clear();
+    attendanceRowErrors.clear();
+  }
   try {
     await loadMyStudents();
     const [dailyResult, yesterdayResult] = await Promise.allSettled([
@@ -378,67 +556,41 @@ async function loadAttendance() {
       loadYesterdayAbsences(),
     ]);
     if (dailyResult.status === 'rejected') throw dailyResult.reason;
-    const { roster } = dailyResult.value;
+    attendanceRoster = dailyResult.value.roster;
+    attendanceLoadedDate = date;
     if (yesterdayResult.status === 'rejected') {
       showMsg(message, `Attendance loaded, but yesterday’s absences could not be checked: ${yesterdayResult.reason.message}`);
     }
-    renderAttendanceSummary(roster);
-    if (!roster.length) {
-      tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state"><i class="fa-solid fa-clipboard-user"></i><p>No students assigned to you.</p></div></td></tr>`;
-      return;
-    }
-
-    tbody.innerHTML = roster.map((r) => `
-      <tr class="${r.attendance && r.attendance.status === 'absent' ? 'attendance-absent-row' : ''}" data-student="${escapeTeacherHtml(r.student.id)}">
-        <td><strong>${escapeTeacherHtml(r.student.name)}</strong></td>
-        <td>${escapeTeacherHtml(r.student.className || '—')}</td>
-        <td>
-          <select class="statusSelect attendance-status-select" aria-label="Attendance status for ${escapeTeacherHtml(r.student.name)}" data-status="${r.attendance ? escapeTeacherHtml(r.attendance.status) : ''}">
-            ${[['present', 'Present'], ['absent', 'Absent'], ['tardy', 'Tardy'], ['excused', 'Excused']].map(([value, label]) => `<option value="${value}" ${r.attendance && (r.attendance.status === value || (value === 'tardy' && r.attendance.status === 'late')) ? 'selected' : ''}>${label}</option>`).join('')}
-          </select>
-        </td>
-        <td><input class="remarksInput attendance-remarks-input" maxlength="500" value="${escapeTeacherHtml(r.attendance ? (r.attendance.remarks || '') : '')}" aria-label="Attendance remarks for ${escapeTeacherHtml(r.student.name)}" placeholder="Optional remarks" /></td>
-        <td><div class="attendance-record-actions"><button type="button" class="btn btn-secondary btn-sm" data-save-attendance>Save</button><span data-attendance-state aria-live="polite">${r.attendance ? 'Saved' : 'Not recorded'}</span></div></td>
-      </tr>
-    `).join('');
-
-    tbody.querySelectorAll('tr').forEach((row) => {
-      const saveButton = row.querySelector('[data-save-attendance]');
-      const state = row.querySelector('[data-attendance-state]');
-      const markUnsaved = () => { state.textContent = 'Unsaved changes'; };
-      const statusSelect = row.querySelector('.statusSelect');
-      statusSelect.addEventListener('change', () => {
-        row.classList.toggle('attendance-absent-row', statusSelect.value === 'absent');
-        statusSelect.dataset.status = statusSelect.value;
-        markUnsaved();
-      });
-      row.querySelector('.remarksInput').addEventListener('input', markUnsaved);
-      saveButton.addEventListener('click', async () => {
-        saveButton.disabled = true;
-        state.textContent = 'Saving…';
-        document.getElementById('attendanceMessage').textContent = '';
-        try {
-          await api.post('/attendance', {
-            student: row.dataset.student,
-            date,
-            status: row.querySelector('.statusSelect').value,
-            remarks: row.querySelector('.remarksInput').value.trim(),
-          });
-          state.textContent = 'Saved';
-          await loadAttendance();
-        } catch (err) {
-          state.textContent = 'Not saved';
-          showMsg(document.getElementById('attendanceMessage'), err.message);
-        } finally {
-          saveButton.disabled = false;
-        }
-      });
-    });
+    const classFilter = document.getElementById('attClassFilter');
+    const selectedClass = classFilter.value;
+    const classes = [...new Set(attendanceRoster.map((row) => row.student.className || 'Unassigned'))].sort();
+    classFilter.innerHTML = `<option value="">All my classes</option>${classes.map((name) => `<option value="${escapeTeacherHtml(name)}">${escapeTeacherHtml(name)}</option>`).join('')}`;
+    classFilter.value = classes.includes(selectedClass) ? selectedClass : '';
+    renderAttendanceSummary(attendanceRoster);
+    renderAttendanceRows();
   } catch (err) {
     tbody.innerHTML = '<tr><td colspan="5"><div class="empty-state"><p>Attendance roster could not be loaded.</p></div></td></tr>';
     showMsg(message, err.message);
   }
 }
+
+document.getElementById('attClassFilter').addEventListener('change', renderAttendanceRows);
+document.getElementById('attendanceSaveAll').addEventListener('click', saveAllAttendance);
+// Do not silently drop unsaved attendance when leaving the page or the Attendance panel.
+window.addEventListener('beforeunload', (event) => {
+  if (!attendanceEdits.size) return;
+  event.preventDefault();
+  event.returnValue = '';
+});
+document.addEventListener('click', (event) => {
+  const navButton = event.target.closest('.nav-item[data-panel]');
+  if (!navButton || navButton.dataset.panel === 'attendance' || !attendanceEdits.size) return;
+  if (!document.getElementById('panel-attendance')?.classList.contains('active')) return;
+  if (!confirmDiscardAttendance('Leave Attendance')) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+}, true);
 
 function csvField(value) {
   let text = String(value == null ? '' : value);
@@ -578,109 +730,313 @@ function populateAttendanceReportStudents(select) {
 }
 
 // ---------- Academic Progress ----------
-let editingProgressId = '';
+const PROGRESS_PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+const PROGRESS_PHOTO_MAX_BYTES = 5 * 1024 * 1024;
+const PROGRESS_PHOTOS_PER_UPLOAD = 6;
+const PROGRESS_PHOTOS_PER_ENTRY = 12;
+let editingProgressEntry = null;
+let progressEntriesForStudent = [];
+let pendingProgressPhotos = [];
+let removedProgressPhotoIds = new Set();
 
-function escapeProgressText(value = '') {
-  return String(value).replace(/[&<>"']/g, (character) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  })[character]);
+function progressEntryType() {
+  return document.querySelector('input[name="pEntryType"]:checked')?.value || 'activity';
 }
 
+function setProgressEntryType(type) {
+  const radio = document.querySelector(`input[name="pEntryType"][value="${type}"]`);
+  if (radio) radio.checked = true;
+  updateProgressTypeFields();
+}
+
+// Shows the right date control and label for activity / weekly / monthly records.
+function updateProgressTypeFields() {
+  const type = progressEntryType();
+  document.getElementById('pDateField').hidden = type === 'monthly';
+  document.getElementById('pMonthField').hidden = type !== 'monthly';
+  document.getElementById('pDateLabel').textContent = type === 'weekly' ? 'Any day in the week' : 'Activity date';
+  document.getElementById('pMilestoneLabel').textContent = type === 'activity' ? 'Title' : 'Milestone title (required)';
+  const hint = document.getElementById('pPeriodHint');
+  const dateValue = document.getElementById('pDate').value;
+  if (type === 'weekly' && dateValue) {
+    const day = new Date(`${dateValue}T00:00:00Z`);
+    const start = new Date(day);
+    start.setUTCDate(start.getUTCDate() - ((start.getUTCDay() + 6) % 7));
+    const end = new Date(start);
+    end.setUTCDate(end.getUTCDate() + 6);
+    hint.textContent = `Covers ${utcDateLabel(start, { weekday: 'short', month: 'short', day: 'numeric' })} – ${utcDateLabel(end, { weekday: 'short', month: 'short', day: 'numeric' })}`;
+  } else {
+    hint.textContent = '';
+  }
+}
+
+function revokePendingPhotoPreviews() {
+  pendingProgressPhotos.forEach((item) => URL.revokeObjectURL(item.url));
+}
+
+function renderProgressPhotoPreview() {
+  const preview = document.getElementById('pPhotoPreview');
+  const existing = editingProgressEntry ? (editingProgressEntry.attachments || []) : [];
+  preview.innerHTML = [
+    ...existing.map((attachment) => {
+      const removed = removedProgressPhotoIds.has(attachment._id);
+      return `<div class="progress-photo ${removed ? 'removed' : ''}">
+        <img data-protected-src="/progress/${escapeTeacherHtml(editingProgressEntry._id)}/attachments/${escapeTeacherHtml(attachment._id)}" alt="${escapeTeacherHtml(attachment.originalName)}" />
+        <button type="button" class="progress-photo-remove" data-toggle-existing="${escapeTeacherHtml(attachment._id)}" aria-label="${removed ? 'Keep' : 'Remove'} ${escapeTeacherHtml(attachment.originalName)}">${removed ? '<i class="fa-solid fa-rotate-left"></i>' : '<i class="fa-solid fa-xmark"></i>'}</button>
+        ${removed ? '<span class="progress-photo-flag">Will be removed</span>' : '<span class="progress-photo-flag saved">Saved</span>'}
+      </div>`;
+    }),
+    ...pendingProgressPhotos.map((item, index) => `<div class="progress-photo">
+        <img src="${item.url}" alt="${escapeTeacherHtml(item.file.name)}" />
+        <button type="button" class="progress-photo-remove" data-remove-pending="${index}" aria-label="Remove ${escapeTeacherHtml(item.file.name)}"><i class="fa-solid fa-xmark"></i></button>
+        <span class="progress-photo-flag new">New</span>
+      </div>`),
+  ].join('');
+  hydrateProtectedImages(preview);
+  preview.querySelectorAll('[data-toggle-existing]').forEach((button) => button.addEventListener('click', () => {
+    const id = button.dataset.toggleExisting;
+    if (removedProgressPhotoIds.has(id)) removedProgressPhotoIds.delete(id);
+    else removedProgressPhotoIds.add(id);
+    renderProgressPhotoPreview();
+  }));
+  preview.querySelectorAll('[data-remove-pending]').forEach((button) => button.addEventListener('click', () => {
+    const [removed] = pendingProgressPhotos.splice(Number(button.dataset.removePending), 1);
+    if (removed) URL.revokeObjectURL(removed.url);
+    renderProgressPhotoPreview();
+  }));
+  preview.querySelectorAll('.progress-photo img').forEach((image) => image.addEventListener('click', () => {
+    if (image.src) openImageLightbox(image.src, image.alt);
+  }));
+}
+
+document.getElementById('pPhotos').addEventListener('change', (event) => {
+  const message = document.getElementById('progressFormMessage');
+  message.textContent = '';
+  const keptExisting = editingProgressEntry
+    ? (editingProgressEntry.attachments || []).filter((item) => !removedProgressPhotoIds.has(item._id)).length
+    : 0;
+  const problems = [];
+  Array.from(event.target.files || []).forEach((file) => {
+    if (!PROGRESS_PHOTO_TYPES.includes(file.type)) problems.push(`${file.name} is not a JPG, PNG or WEBP image.`);
+    else if (file.size > PROGRESS_PHOTO_MAX_BYTES) problems.push(`${file.name} is larger than 5 MB.`);
+    else if (pendingProgressPhotos.length >= PROGRESS_PHOTOS_PER_UPLOAD) problems.push(`Add up to ${PROGRESS_PHOTOS_PER_UPLOAD} new photos per save.`);
+    else if (keptExisting + pendingProgressPhotos.length >= PROGRESS_PHOTOS_PER_ENTRY) problems.push(`A record can have at most ${PROGRESS_PHOTOS_PER_ENTRY} photos.`);
+    else pendingProgressPhotos.push({ file, url: URL.createObjectURL(file) });
+  });
+  event.target.value = '';
+  if (problems.length) showMsg(message, [...new Set(problems)].join(' '));
+  renderProgressPhotoPreview();
+});
+
+document.querySelectorAll('input[name="pEntryType"]').forEach((radio) => radio.addEventListener('change', updateProgressTypeFields));
+document.getElementById('pDate').addEventListener('change', updateProgressTypeFields);
+
+const ASSESSMENT_FIELD_IDS = ['pAssessment', 'pEvaluation', 'pStrengths', 'pAreasForImprovement', 'pOverallDevelopment'];
+const assessmentBackdrop = document.getElementById('assessmentDetailsBackdrop');
+
+function updateAssessmentDetailsStatus() {
+  const filled = ASSESSMENT_FIELD_IDS.filter((id) => document.getElementById(id).value.trim()).length;
+  document.getElementById('assessmentDetailsStatus').textContent = filled ? `${filled} of ${ASSESSMENT_FIELD_IDS.length} filled` : '';
+}
+
+function openAssessmentDetails() {
+  assessmentBackdrop.classList.add('open');
+  document.getElementById('pAssessment').focus();
+}
+
+function closeAssessmentDetails() {
+  if (!assessmentBackdrop.classList.contains('open')) return;
+  assessmentBackdrop.classList.remove('open');
+  updateAssessmentDetailsStatus();
+  document.getElementById('openAssessmentDetails').focus();
+}
+
+document.getElementById('openAssessmentDetails').addEventListener('click', openAssessmentDetails);
+document.getElementById('closeAssessmentDetails').addEventListener('click', closeAssessmentDetails);
+document.getElementById('doneAssessmentDetails').addEventListener('click', closeAssessmentDetails);
+assessmentBackdrop.addEventListener('click', (event) => { if (event.target === assessmentBackdrop) closeAssessmentDetails(); });
+document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeAssessmentDetails(); });
+
 function resetProgressEdit() {
-  editingProgressId = '';
-  const form = document.getElementById('progressForm');
-  form.reset();
-  document.getElementById('pDate').value = new Date().toISOString().slice(0, 10);
-  document.getElementById('progressFormTitle').innerHTML = '<i class="fa-solid fa-plus-circle" style="color:var(--primary); margin-right:6px;"></i>Log Milestone or Activity';
-  document.getElementById('progressSaveButton').innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save Entry';
+  editingProgressEntry = null;
+  revokePendingPhotoPreviews();
+  pendingProgressPhotos = [];
+  removedProgressPhotoIds = new Set();
+  document.getElementById('progressForm').reset();
+  document.getElementById('pDate').value = localDateValue();
+  document.getElementById('pMonth').value = localDateValue().slice(0, 7);
+  setProgressEntryType('activity');
+  document.getElementById('progressFormTitle').innerHTML = '<i class="fa-solid fa-plus-circle" style="color:var(--primary); margin-right:6px;"></i>Add Progress Record';
+  document.getElementById('progressSaveButton').innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save Record';
   document.getElementById('progressCancelEdit').hidden = true;
+  updateAssessmentDetailsStatus();
+  renderProgressPhotoPreview();
 }
 
 function editProgressEntry(entry) {
-  editingProgressId = entry._id;
-  document.getElementById('pDate').value = entry.date ? new Date(entry.date).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
-  document.getElementById('pLearningArea').value = entry.learningArea || '';
-  document.getElementById('pMilestone').value = entry.milestone || '';
-  document.getElementById('pActivity').value = entry.activity || '';
-  document.getElementById('pAssessment').value = entry.assessment || '';
-  document.getElementById('pEvaluation').value = entry.evaluation || '';
-  document.getElementById('pStrengths').value = entry.strengths || '';
-  document.getElementById('pAreasForImprovement').value = entry.areasForImprovement || '';
-  document.getElementById('pOverallDevelopment').value = entry.overallDevelopment || '';
-  document.getElementById('pNotes').value = entry.notes || '';
-  document.getElementById('progressFormTitle').textContent = 'Update Progress Entry';
-  document.getElementById('progressSaveButton').innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Update Entry';
+  resetProgressEdit();
+  editingProgressEntry = entry;
+  const type = entry.entryType || 'activity';
+  setProgressEntryType(type);
+  const isoDate = entry.date ? new Date(entry.date).toISOString().slice(0, 10) : localDateValue();
+  document.getElementById('pDate').value = isoDate;
+  document.getElementById('pMonth').value = isoDate.slice(0, 7);
+  updateProgressTypeFields();
+  ['LearningArea', 'Milestone', 'Activity', 'Observations', 'Notes', 'Assessment', 'Evaluation', 'Strengths', 'AreasForImprovement', 'OverallDevelopment'].forEach((name) => {
+    const key = name[0].toLowerCase() + name.slice(1);
+    document.getElementById(`p${name}`).value = entry[key] || '';
+  });
+  updateAssessmentDetailsStatus();
+  const studentName = myStudents.find((student) => relatedUserId(student) === relatedUserId(entry.student))?.name || 'student';
+  document.getElementById('progressFormTitle').innerHTML = `<i class="fa-solid fa-pen" style="color:var(--primary); margin-right:6px;"></i>Edit ${escapeTeacherHtml(PROGRESS_TYPE_LABELS[type].toLowerCase())} for ${escapeTeacherHtml(studentName)}`;
+  document.getElementById('progressSaveButton').innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Update Record';
   document.getElementById('progressCancelEdit').hidden = false;
-  document.getElementById('progressForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  renderProgressPhotoPreview();
+  document.getElementById('progressForm').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function activeProgressStudents() {
+  return myStudents.filter((student) => student.status !== 'archived');
+}
+
+function renderProgressStudentOptions() {
+  const classSelect = document.getElementById('progClassSelect');
+  const studentSelect = document.getElementById('progStudentSelect');
+  const previousStudent = studentSelect.value;
+  const students = activeProgressStudents().filter((student) => !classSelect.value || (student.className || 'Unassigned') === classSelect.value);
+  studentSelect.innerHTML = students.length
+    ? students.map((student) => `<option value="${escapeTeacherHtml(student._id)}">${escapeTeacherHtml(student.name)}</option>`).join('')
+    : '<option value="">No students in this class</option>';
+  if (students.some((student) => student._id === previousStudent)) studentSelect.value = previousStudent;
 }
 
 async function loadProgressPanel() {
-  if (!document.getElementById('pDate').value) document.getElementById('pDate').value = new Date().toISOString().slice(0, 10);
   await loadMyStudents();
-  const sel = document.getElementById('progStudentSelect');
-  sel.innerHTML = myStudents.map((s) => `<option value="${escapeTeacherHtml(s._id)}">${escapeTeacherHtml(s.name)}</option>`).join('');
-  sel.onchange = renderProgressList;
-  if (myStudents.length) renderProgressList();
-  else document.getElementById('progressList').innerHTML = '<div class="empty-state"><i class="fa-solid fa-chart-simple"></i><p>No students are assigned to you.</p></div>';
+  const classSelect = document.getElementById('progClassSelect');
+  const previousClass = classSelect.value;
+  // Teachers see only the classes of students assigned to them.
+  const classes = [...new Set(activeProgressStudents().map((student) => student.className || 'Unassigned'))].sort();
+  classSelect.innerHTML = `<option value="">All my classes</option>${classes.map((name) => `<option value="${escapeTeacherHtml(name)}">${escapeTeacherHtml(name)}</option>`).join('')}`;
+  if (classes.includes(previousClass)) classSelect.value = previousClass;
+  renderProgressStudentOptions();
+  if (!editingProgressEntry && !document.getElementById('pDate').value) resetProgressEdit();
+  if (activeProgressStudents().length) {
+    await renderProgressList();
+  } else {
+    document.getElementById('progressStudentHeader').innerHTML = '';
+    document.getElementById('progressList').innerHTML = '<div class="empty-state"><i class="fa-solid fa-chart-simple"></i><p>No students are assigned to you.</p></div>';
+  }
 }
 
 async function renderProgressList() {
   const sid = document.getElementById('progStudentSelect').value;
-  if (!sid) return;
-  const { progress } = await api.get(`/progress/student/${sid}`);
   const list = document.getElementById('progressList');
-  list.innerHTML = progress.length ? progress.map((p) => `
-    <div class="card" style="margin-bottom:12px;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-        <span style="color:var(--primary); font-weight:700;"><i class="fa-regular fa-calendar"></i> ${fmtDate(p.date)}${p.learningArea ? ` &middot; ${escapeProgressText(p.learningArea)}` : ''}</span>
-        ${String(p.teacher?._id || p.teacher) === String(user.id) ? `<button type="button" class="btn btn-ghost btn-sm" data-edit-progress="${escapeProgressText(p._id)}"><i class="fa-solid fa-pen"></i> Edit</button>` : ''}
-      </div>
-      ${p.milestone ? `<p style="margin-bottom:4px;"><strong>Milestone:</strong> ${escapeProgressText(p.milestone)}</p>` : ''}
-      ${p.activity ? `<p style="margin-bottom:4px;"><strong>Activity:</strong> ${escapeProgressText(p.activity)}</p>` : ''}
-      ${p.assessment ? `<p style="margin-bottom:4px;"><strong>Assessment:</strong> ${escapeProgressText(p.assessment)}</p>` : ''}
-      ${p.evaluation ? `<p style="margin-bottom:4px;"><strong>Teacher evaluation:</strong> ${escapeProgressText(p.evaluation)}</p>` : ''}
-      ${p.strengths ? `<p style="margin-bottom:4px;"><strong>Strengths:</strong> ${escapeProgressText(p.strengths)}</p>` : ''}
-      ${p.areasForImprovement ? `<p style="margin-bottom:4px;"><strong>Areas for improvement:</strong> ${escapeProgressText(p.areasForImprovement)}</p>` : ''}
-      ${p.overallDevelopment ? `<p style="margin-bottom:4px;"><strong>Overall development:</strong> ${escapeProgressText(p.overallDevelopment)}</p>` : ''}
-      ${p.notes ? `<p style="margin:0; color:var(--ink-soft); font-style:italic;">Notes: ${escapeProgressText(p.notes)}</p>` : ''}
-    </div>
-  `).join('') : '<div class="empty-state"><i class="fa-solid fa-chart-simple"></i><p>No progress entries logged yet for this student.</p></div>';
-  list.querySelectorAll('[data-edit-progress]').forEach((button) => {
-    const entry = progress.find((item) => item._id === button.dataset.editProgress);
-    if (entry) button.addEventListener('click', () => editProgressEntry(entry));
-  });
+  const header = document.getElementById('progressStudentHeader');
+  if (!sid) {
+    header.innerHTML = '';
+    list.innerHTML = '<div class="empty-state"><i class="fa-solid fa-chart-simple"></i><p>Choose a student to see their records.</p></div>';
+    return;
+  }
+  const student = myStudents.find((item) => item._id === sid);
+  list.innerHTML = '<div class="empty-state"><p>Loading records…</p></div>';
+  try {
+    const { progress } = await api.get(`/progress/student/${sid}`);
+    if (document.getElementById('progStudentSelect').value !== sid) return;
+    progressEntriesForStudent = progress;
+    header.innerHTML = studentProgressHeaderHtml(student || { name: 'Student' }, progress);
+    list.innerHTML = progress.length
+      ? `<h3 class="progress-list-heading">Records for ${escapeTeacherHtml(student?.name || 'this student')}</h3>${progress.map((entry) => progressEntryCardHtml(entry, {
+        actionsHtml: relatedUserId(entry.teacher) === String(user.id)
+          ? `<button type="button" class="btn btn-ghost btn-sm" data-edit-progress="${escapeTeacherHtml(entry._id)}"><i class="fa-solid fa-pen"></i> Edit</button>`
+          : '',
+      })).join('')}`
+      : `<div class="empty-state"><i class="fa-solid fa-chart-simple"></i><p>No progress records for ${escapeTeacherHtml(student?.name || 'this student')} yet.</p></div>`;
+    hydrateProtectedImages(list);
+    list.querySelectorAll('[data-edit-progress]').forEach((button) => {
+      const entry = progress.find((item) => item._id === button.dataset.editProgress);
+      if (entry) button.addEventListener('click', () => editProgressEntry(entry));
+    });
+  } catch (err) {
+    list.innerHTML = '<div class="empty-state"><p>Progress records could not be loaded.</p></div>';
+    showMsg(document.getElementById('progressFormMessage'), err.message);
+  }
 }
+
+function confirmDiscardProgressEdit() {
+  if (!editingProgressEntry && !pendingProgressPhotos.length) return true;
+  return confirm('Discard the record you are editing?');
+}
+
+document.getElementById('progClassSelect').addEventListener('change', () => {
+  renderProgressStudentOptions();
+  renderProgressList();
+});
+
+let lastProgressStudent = '';
+document.getElementById('progStudentSelect').addEventListener('focus', (event) => { lastProgressStudent = event.target.value; });
+document.getElementById('progStudentSelect').addEventListener('change', (event) => {
+  // An edit belongs to one student; switching students must not carry it over.
+  if (!confirmDiscardProgressEdit()) {
+    event.target.value = lastProgressStudent;
+    return;
+  }
+  resetProgressEdit();
+  lastProgressStudent = event.target.value;
+  renderProgressList();
+});
 
 document.getElementById('progressForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const sid = document.getElementById('progStudentSelect').value;
-  if (!sid) return;
   const message = document.getElementById('progressFormMessage');
   message.textContent = '';
+  if (!sid && !editingProgressEntry) {
+    showMsg(message, 'Choose a student first.');
+    return;
+  }
+  const type = progressEntryType();
+  const title = document.getElementById('pMilestone').value.trim();
+  if (type !== 'activity' && !title) {
+    showMsg(message, 'Give the milestone a title.');
+    document.getElementById('pMilestone').focus();
+    return;
+  }
+  if (!title && !document.getElementById('pActivity').value.trim()) {
+    showMsg(message, 'Enter a title or describe the activity.');
+    document.getElementById('pMilestone').focus();
+    return;
+  }
+  if (type === 'monthly' ? !document.getElementById('pMonth').value : !document.getElementById('pDate').value) {
+    showMsg(message, type === 'monthly' ? 'Choose the month.' : 'Choose a date.');
+    return;
+  }
+
+  const form = new FormData();
+  form.append('entryType', type);
+  if (type === 'monthly') form.append('month', document.getElementById('pMonth').value);
+  else form.append('date', document.getElementById('pDate').value);
+  ['LearningArea', 'Milestone', 'Activity', 'Observations', 'Notes', 'Assessment', 'Evaluation', 'Strengths', 'AreasForImprovement', 'OverallDevelopment'].forEach((name) => {
+    form.append(name[0].toLowerCase() + name.slice(1), document.getElementById(`p${name}`).value.trim());
+  });
+  pendingProgressPhotos.forEach((item) => form.append('photos', item.file, item.file.name));
+
+  const button = document.getElementById('progressSaveButton');
+  setButtonLoading(button, true, pendingProgressPhotos.length ? 'Uploading' : 'Saving');
   try {
-    const values = {
-      student: sid,
-      date: document.getElementById('pDate').value,
-      milestone: document.getElementById('pMilestone').value.trim(),
-      activity: document.getElementById('pActivity').value.trim(),
-      assessment: document.getElementById('pAssessment').value.trim(),
-      learningArea: document.getElementById('pLearningArea').value,
-      evaluation: document.getElementById('pEvaluation').value.trim(),
-      strengths: document.getElementById('pStrengths').value.trim(),
-      areasForImprovement: document.getElementById('pAreasForImprovement').value.trim(),
-      overallDevelopment: document.getElementById('pOverallDevelopment').value.trim(),
-      notes: document.getElementById('pNotes').value.trim(),
-    };
-    if (editingProgressId) {
-      delete values.student;
-      await api.patch(`/progress/${editingProgressId}`, values);
+    if (editingProgressEntry) {
+      form.append('removeAttachments', JSON.stringify([...removedProgressPhotoIds]));
+      await api.patch(`/progress/${editingProgressEntry._id}`, form);
+      showToast('Progress record updated.');
     } else {
-      await api.post('/progress', values);
+      form.append('student', sid);
+      await api.post('/progress', form);
+      showToast('Progress record saved.');
     }
+    setButtonLoading(button, false);
     resetProgressEdit();
-    message.textContent = '';
     await renderProgressList();
   } catch (err) {
+    setButtonLoading(button, false);
     showMsg(message, err.message);
   }
 });

@@ -1859,6 +1859,9 @@ tr:hover td { background: rgba(248, 250, 252, 0.7); }
 .attendance-toolbar-actions { display: flex; align-items: flex-end; gap: 10px; }
 .attendance-date-control { display: grid; min-width: 180px; gap: 5px; }
 .attendance-date-control label, .attendance-report-filters .field label { margin: 0; color: var(--ink-muted); font-size: 11px; font-weight: 700; }
+.attendance-date-control label[for="attClassFilter"] { color: var(--sky); font-size: 13px; }
+.attendance-date-control #attClassFilter { min-height: 42px; padding: 8px 12px; border: 2px solid var(--sky-border); border-radius: var(--radius-md); background: var(--sky-light); color: var(--sky); font: inherit; font-size: 15px; font-weight: 700; cursor: pointer; }
+.attendance-date-control #attClassFilter:focus { border-color: var(--sky); outline: none; }
 .attendance-date-control input, .attendance-report-filters input, .attendance-report-filters select { min-height: 38px; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: #FFFFFF; color: var(--ink); font: inherit; font-size: 12px; }
 .attendance-summary { display: grid; grid-template-columns: repeat(6, minmax(90px, 1fr)); gap: 8px; margin-bottom: 14px; }
 .attendance-summary-card { display: grid; gap: 3px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: #F8FAFC; }
@@ -1877,6 +1880,7 @@ tr:hover td { background: rgba(248, 250, 252, 0.7); }
 .attendance-status-select { min-width: 112px; }
 .attendance-status-select[data-status="absent"] { border-color: #FCA5A5; background: #FEF2F2; color: #B91C1C; font-weight: 700; }
 .attendance-remarks-input { width: 100%; max-width: 240px; }
+.attendance-class-name { display: inline-block; padding: 4px 10px; border: 1px solid var(--sky-border); border-radius: 999px; background: var(--sky-light); color: var(--sky); font-size: 13px; font-weight: 700; white-space: nowrap; }
 .attendance-record-actions { display: flex; min-width: 112px; align-items: center; gap: 8px; white-space: nowrap; }
 .attendance-record-actions [data-attendance-state] { color: var(--ink-muted); font-size: 10px; }
 .attendance-absent-row .attendance-record-actions [data-attendance-state] { color: #B91C1C; }
@@ -2170,6 +2174,31 @@ tr:hover td { background: rgba(248, 250, 252, 0.7); }
   font-size: 14.5px;
   color: var(--ink);
 }
+.event-map {
+  width: 100%;
+  height: 220px;
+  margin-top: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: #F8FAFC;
+}
+.event-map iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+.event-map-directions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+}
+.event-map-directions:hover { text-decoration: underline; }
 
 /* Pickup management list in modal & tabs */
 .pickup-person-card {
@@ -2499,4 +2528,425 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .teacher-notification > .badge { grid-column: 2; justify-self: start; }
   .alert-panel-heading { display: block; }
   .toast-stack { right: 12px; bottom: 12px; }
+}
+
+/* Google Maps venue picker (event composer and edit modal) */
+.event-map-links { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.venue-map-toggle { gap: 8px; }
+.venue-selected {
+  margin-bottom: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+.venue-selected-label { font-size: 12.5px; color: var(--ink-muted); margin-bottom: 6px; }
+.venue-selected-body { display: flex; align-items: flex-start; gap: 10px; }
+.venue-selected-icon { color: var(--primary); margin-top: 3px; }
+.venue-selected-check { color: var(--primary-light); margin-left: auto; margin-top: 3px; }
+.venue-selected-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.venue-selected-text span { font-size: 13px; color: var(--ink-soft); }
+.venue-selected-text small { font-size: 12px; color: var(--ink-muted); }
+.venue-selected-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px 12px;
+  margin-top: 10px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.venue-selected-links a { color: var(--primary); text-decoration: none; }
+.venue-selected-links a:hover { text-decoration: underline; }
+.venue-selected-clear {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--coral);
+  font: inherit;
+  cursor: pointer;
+}
+.venue-selected-clear:hover { text-decoration: underline; }
+.venue-picker {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-page);
+}
+.venue-picker-search { margin-bottom: 10px; }
+.venue-picker-map {
+  width: 100%;
+  height: 340px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+}
+.venue-picker-status { min-height: 18px; margin-top: 6px; font-size: 13px; color: var(--ink-soft); }
+.venue-picker-status.warning { color: var(--amber); }
+.venue-picker-status.error { color: var(--coral); }
+.venue-picker-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+@media (max-width: 700px) {
+  .venue-picker { padding: 10px; }
+  .venue-picker-map { height: 260px; }
+  .venue-picker-actions .btn { flex: 1; }
+}
+
+/* Google Calendar sync (admin events panel and event details) */
+.badge.sync-failed { background: var(--coral-light); color: var(--coral-hover); border-color: var(--coral-border); }
+.badge.sync-off { background: var(--bg-subtle); color: var(--ink-muted); border-color: var(--border); }
+/* Header status button; details open in a dialog */
+.panel-header-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.gcal-status-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-surface);
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.gcal-status-btn:hover { border-color: var(--border-strong); background: var(--bg-subtle); }
+.gcal-status-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.gcal-status-btn > i { color: var(--ink-muted); }
+.gcal-status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-light); }
+.gcal-status-label { color: var(--ink-muted); font-weight: 500; }
+.gcal-status-btn.ok .gcal-status-dot { background: var(--primary-light); }
+.gcal-status-btn.warning .gcal-status-dot { background: var(--amber); }
+.gcal-status-btn.error .gcal-status-dot { background: var(--coral); }
+.gcal-status-btn.error .gcal-status-label { color: var(--coral-hover); }
+.gcal-title { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 4px; }
+.gcal-title h3 { margin: 0; }
+.gcal-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.gcal-tech { margin-top: 12px; font-size: 13px; color: var(--ink-muted); }
+.gcal-tech summary { cursor: pointer; font-weight: 600; color: var(--ink-soft); }
+.gcal-tech p { margin: 6px 0 0; overflow-wrap: anywhere; }
+.gcal-meta, .gcal-counts { margin: 8px 0 0; font-size: 13px; color: var(--ink-soft); overflow-wrap: anywhere; }
+.gcal-counts { color: var(--ink-muted); }
+.gcal-link-btn { border: 0; padding: 0; background: none; color: var(--primary); font: inherit; font-weight: 700; cursor: pointer; }
+.gcal-link-btn:hover { text-decoration: underline; }
+.gcal-calendar-form { margin-top: 10px; }
+.gcal-calendar-form label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.gcal-calendar-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.gcal-calendar-row input { flex: 1 1 220px; min-width: 0; }
+@media (max-width: 700px) {
+  .gcal-actions .btn { flex: 1; }
+}
+
+/* Events calendar: filter chips, month grid and day side panel */
+.cal-topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.cal-topbar-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.cal-view-toggle { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); overflow: hidden; }
+.cal-view-toggle .btn { border: 0; border-radius: 0; padding: 6px 12px; }
+.cal-filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }
+.cal-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.cal-chip:hover { border-color: var(--primary-border); background: var(--primary-surface); }
+.cal-chip.active { background: var(--primary); border-color: var(--primary); color: #FFFFFF; }
+.cal-chip:focus-visible, .calendar-cell:focus-visible, .cal-agenda-item:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.cal-chip-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--primary); }
+.cal-chip-dot.audience-parents { background: var(--amber); }
+.cal-chip-dot.audience-teachers { background: var(--sky); }
+.cal-chip.active .cal-chip-dot { box-shadow: 0 0 0 2px #FFFFFF; }
+
+.cal-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  gap: 24px;
+  align-items: start;
+  margin-bottom: 24px;
+}
+.cal-shell .calendar-card, .cal-agenda { margin-bottom: 0; border-radius: var(--radius-xl); }
+.cal-shell .calendar-days-header { background: var(--bg-surface); text-align: left; }
+.cal-shell .calendar-day-header-cell {
+  padding: 14px 12px;
+  font-size: 14px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--ink-soft);
+}
+.cal-shell .calendar-cell { min-height: 118px; padding: 12px; background: var(--bg-surface); }
+.cal-shell .calendar-cell.weekend { background: var(--bg-subtle); }
+.cal-shell .calendar-cell:hover { background: var(--primary-surface); }
+.cal-shell .calendar-cell.other-month { opacity: 1; }
+.cal-shell .calendar-cell.other-month .day-number { color: var(--ink-light); font-weight: 500; }
+.cal-shell .calendar-cell.selected { box-shadow: inset 0 0 0 2px var(--primary); }
+.cal-shell .day-number { font-size: 15px; font-weight: 600; color: var(--ink-soft); }
+.cal-shell .calendar-cell.today .day-number { width: 28px; height: 28px; font-size: 14px; }
+.calendar-more { font-size: 11px; font-weight: 700; color: var(--primary); }
+.cal-shell .status-legend { margin: 0; padding: 12px 16px; border-top: 1px solid var(--border); flex-wrap: wrap; }
+
+.cal-agenda {
+  padding: 26px 24px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+}
+.cal-agenda-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin-bottom: 10px; }
+.cal-agenda-head h3 { margin: 0; font-size: 28px; font-weight: 800; color: var(--ink); }
+.cal-agenda-head span { font-size: 15px; font-weight: 700; color: var(--ink-soft); }
+.cal-agenda-empty { margin: 6px 0 0; font-size: 14.5px; color: var(--ink-soft); }
+.cal-agenda-later { margin: 26px 0 6px; font-size: 20px; font-weight: 800; color: var(--ink); }
+.cal-agenda-date { margin: 16px 0 6px; font-size: 14px; font-weight: 800; color: var(--ink-soft); }
+.cal-agenda-item {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 14px;
+  width: 100%;
+  margin: 2px 0;
+  padding: 10px 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.cal-agenda-item:hover { background: var(--bg-subtle); }
+.cal-agenda-time { font-size: 14px; color: var(--ink-muted); padding-top: 2px; }
+.cal-agenda-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.cal-agenda-body strong { font-size: 16px; font-weight: 800; color: var(--ink); overflow-wrap: anywhere; }
+.cal-agenda-venue { font-size: 14px; color: var(--ink-soft); overflow-wrap: anywhere; }
+.cal-agenda-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 4px; }
+.cal-agenda-audience { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; color: var(--ink-soft); }
+.cal-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+.cal-state::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.cal-state.today { background: var(--status-done-bg); color: var(--status-done); }
+.cal-state.upcoming { background: var(--status-ongoing-bg); color: var(--status-ongoing); }
+.cal-state.pending { background: var(--status-pending-bg); color: var(--status-pending); }
+.cal-state.done { background: var(--bg-subtle); color: var(--ink-muted); }
+
+@media (max-width: 1100px) {
+  .cal-shell { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 700px) {
+  .cal-chip { padding: 8px 12px; font-size: 13px; }
+  .cal-shell .calendar-day-header-cell { padding: 10px 4px; font-size: 12px; text-align: center; }
+  .cal-shell .calendar-cell { min-height: 64px; padding: 6px 4px; }
+  .cal-shell .calendar-cell-top { justify-content: center; }
+  .cal-shell .day-number { font-size: 13px; }
+  /* Narrow screens: a dot marks event days; titles are listed in the side panel. */
+  .cal-shell .calendar-events-container { display: none; }
+  .cal-shell .calendar-cell.has-events .calendar-cell-top::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: 8px;
+    width: 6px;
+    height: 6px;
+    margin-left: -3px;
+    border-radius: 50%;
+    background: var(--primary);
+  }
+  .cal-agenda { padding: 20px 16px; }
+  .cal-agenda-head h3 { font-size: 24px; }
+  .cal-agenda-item { grid-template-columns: 70px minmax(0, 1fr); gap: 10px; }
+}
+
+/* Academic progress: student header, milestones, photos */
+.progress-pickers { display: flex; flex-wrap: wrap; gap: 12px; }
+.progress-pickers .field { margin: 0; min-width: 180px; }
+.progress-pickers select { width: 100%; }
+.student-progress-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px 20px;
+  margin-bottom: 18px;
+  padding: 20px 22px;
+  border: 1px solid var(--primary-border);
+  border-radius: var(--radius-lg);
+  background: var(--primary-surface);
+}
+.student-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #FFFFFF;
+  font-size: 24px;
+  font-weight: 800;
+}
+.student-progress-identity { flex: 1 1 240px; min-width: 0; }
+.student-progress-eyebrow { font-size: 12px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--primary); }
+.student-progress-identity h2 { margin: 2px 0 4px; font-size: 28px; line-height: 1.2; color: var(--ink); overflow-wrap: anywhere; }
+.student-progress-identity p { margin: 0; font-size: 14px; color: var(--ink-soft); }
+.student-progress-stats { display: flex; flex-wrap: wrap; gap: 8px; }
+.student-progress-stats span {
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+.student-progress-stats strong { color: var(--ink); }
+.progress-list-heading { margin: 0 0 12px; font-size: 17px; }
+.progress-type-picker { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; padding: 0; border: 0; }
+.progress-type-picker legend { width: 100%; margin-bottom: 6px; font-size: 13.5px; font-weight: 600; }
+.progress-type-picker label { position: relative; cursor: pointer; }
+.progress-type-picker input { position: absolute; opacity: 0; pointer-events: none; }
+.progress-type-picker span {
+  display: inline-block;
+  padding: 8px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  background: var(--bg-surface);
+}
+.progress-type-picker input:checked + span { background: var(--primary); border-color: var(--primary); color: #FFFFFF; }
+.progress-type-picker input:focus-visible + span { outline: 2px solid var(--primary); outline-offset: 2px; }
+.progress-more-details { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 4px 0 14px; }
+.progress-more-status { font-size: 12.5px; color: var(--ink-muted); }
+.progress-entry { margin-bottom: 12px; }
+.progress-entry.is-current { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary) inset; }
+.progress-entry h4 { margin: 6px 0 2px; font-size: 16px; color: var(--ink); overflow-wrap: anywhere; }
+.progress-entry-meta { font-size: 12.5px; color: var(--ink-muted); }
+.progress-entry-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.progress-entry-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.progress-type-badge { padding: 2px 9px; border-radius: var(--radius-pill); font-size: 11.5px; font-weight: 700; background: var(--bg-subtle); color: var(--ink-soft); }
+.progress-type-badge.weekly { background: var(--sky-light); color: var(--sky); }
+.progress-type-badge.monthly { background: var(--amber-light); color: var(--amber); }
+.progress-type-badge.current { background: var(--primary); color: #FFFFFF; }
+.progress-category { font-size: 12px; font-weight: 600; color: var(--ink-muted); }
+.progress-photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; margin-top: 10px; }
+.progress-photo-grid:empty { display: none; }
+.progress-photo {
+  position: relative;
+  aspect-ratio: 1;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  cursor: zoom-in;
+}
+.progress-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.progress-photo.loading { animation: progressPhotoPulse 1.2s ease-in-out infinite; }
+.progress-photo.failed::after { content: "Photo unavailable"; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 6px; font-size: 11px; text-align: center; color: var(--ink-muted); }
+.progress-photo.removed img { opacity: 0.35; filter: grayscale(1); }
+.progress-photo-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.7);
+  color: #FFFFFF;
+  cursor: pointer;
+}
+.progress-photo-flag { position: absolute; left: 4px; bottom: 4px; padding: 1px 6px; border-radius: var(--radius-sm); font-size: 10.5px; font-weight: 700; background: var(--coral); color: #FFFFFF; }
+.progress-photo-flag.saved { background: rgba(15, 23, 42, 0.6); }
+.progress-photo-flag.new { background: var(--primary); }
+@keyframes progressPhotoPulse { 50% { opacity: 0.6; } }
+.image-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px 16px;
+  background: rgba(15, 23, 42, 0.88);
+}
+.image-lightbox img { max-width: min(1100px, 100%); max-height: calc(100vh - 110px); object-fit: contain; border-radius: var(--radius-md); }
+.image-lightbox p { margin: 0; color: #E2E8F0; font-size: 13px; overflow-wrap: anywhere; text-align: center; }
+.image-lightbox-close { position: absolute; top: 14px; right: 14px; width: 40px; height: 40px; border: 0; border-radius: 50%; background: rgba(255, 255, 255, 0.15); color: #FFFFFF; font-size: 18px; cursor: pointer; }
+.image-lightbox-close:focus-visible { outline: 2px solid #FFFFFF; outline-offset: 2px; }
+
+/* Attendance: Save All */
+.attendance-saveall-bar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 12px 0;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
+}
+#attendanceUnsavedCount { font-size: 13.5px; color: var(--ink-muted); }
+#attendanceUnsavedCount.has-changes { color: var(--amber); font-weight: 700; }
+.attendance-table tr.attendance-dirty-row td { background: var(--amber-light); }
+.attendance-table tr.attendance-error-row td { background: var(--coral-light); }
+.attendance-table tr.attendance-error-row [data-attendance-state] { color: var(--coral-hover); font-weight: 600; }
+
+/* Admin: classes */
+.class-notice {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--sky-border);
+  border-radius: var(--radius-md);
+  background: var(--sky-light);
+}
+.class-notice > i { color: var(--sky); margin-top: 3px; }
+.class-notice p { margin: 2px 0 0; font-size: 13px; color: var(--ink-soft); }
+.class-notice-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.class-description { font-size: 12.5px; color: var(--ink-muted); margin-top: 2px; }
+.class-student-list { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 16px; max-height: 320px; overflow-y: auto; }
+.class-student-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); }
+.class-student-row span { display: block; font-size: 12px; color: var(--ink-muted); }
+.class-add-student label { display: block; margin-bottom: 4px; font-size: 13px; font-weight: 600; }
+.class-add-student select { flex: 1 1 220px; min-width: 0; }
+
+@media (max-width: 700px) {
+  .student-progress-header { padding: 16px; }
+  .student-avatar { width: 52px; height: 52px; font-size: 20px; }
+  .student-progress-identity h2 { font-size: 22px; }
+  .progress-pickers, .progress-pickers .field { width: 100%; }
+  .attendance-saveall-bar .btn { flex: 1; }
 }

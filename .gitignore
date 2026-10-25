@@ -6,3 +6,5 @@ build/
 *.bson
 
 backend/uploads/
+
+backend/private-records/

@@ -5,11 +5,30 @@ const Student = require('../models/Student');
 const User = require('../models/User');
 const { queueEmailDelivery } = require('../services/emailDelivery');
 const logActivity = require('../utils/logActivity');
+const { eventMapsUrl } = require('../utils/eventMaps');
+const { addToGoogleCalendarUrl, queueEventRemoval, queueEventSync } = require('../services/googleCalendar');
 
 function escapeHtml(value = '') {
   return String(value).replace(/[&<>"']/g, (character) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   })[character]);
+}
+
+// Returns a clean location, null when none was chosen, or false when it is invalid.
+function normalizeLocation(value) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'object' || Array.isArray(value)) return false;
+  const lat = Number(value.lat);
+  const lng = Number(value.lng);
+  if (value.lat === '' || value.lng === '' || !Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return false;
+  const placeId = String(value.placeId || '').trim();
+  return {
+    address: String(value.address || '').trim().slice(0, 300),
+    lat,
+    lng,
+    placeId: /^[\w-]{1,512}$/.test(placeId) ? placeId : '',
+  };
 }
 
 function validateEvent(body) {
@@ -27,6 +46,8 @@ function validateEvent(body) {
   if (!title || !description || !dateValue || !time || !venue) {
     return { error: 'Title, description, date, time and venue are required.' };
   }
+  const location = normalizeLocation(body.location);
+  if (location === false) return { error: 'The selected map location is invalid. Choose the venue on the map again.' };
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateValue) || Number.isNaN(Date.parse(`${dateValue}T00:00:00Z`))) {
     return { error: 'Enter a valid event date.' };
   }
@@ -44,6 +65,7 @@ function validateEvent(body) {
       date: new Date(`${dateValue}T00:00:00.000Z`),
       time,
       venue,
+      location,
       targetType,
       targetClasses: targetType === 'classes' ? targetClasses : [],
       publicationStatus: body.publicationStatus || 'published',
@@ -101,11 +123,12 @@ async function getEventRecipients(event) {
 function eventEmail(event) {
   const date = new Date(event.date).toLocaleDateString();
   const url = `${process.env.CLIENT_ORIGIN || 'http://127.0.0.1:5500'}/frontend/pages/login.html`;
-  const details = `${event.title}\n${event.description}\nDate: ${date}\nTime: ${event.time}\nVenue: ${event.venue}\nSign in to view your dashboard: ${url}`;
+  const mapsUrl = eventMapsUrl(event);
+  const details = `${event.title}\n${event.description}\nDate: ${date}\nTime: ${event.time}\nVenue: ${event.venue}${mapsUrl ? `\nMap: ${mapsUrl}` : ''}\nSign in to view your dashboard: ${url}`;
   return {
     subject: `School event: ${event.title}`,
     text: details,
-    html: `<div style="font-family:Arial,sans-serif;line-height:1.6;color:#25332d"><h2>${escapeHtml(event.title)}</h2><p>${escapeHtml(event.description).replace(/\r?\n/g, '<br>')}</p><p><strong>Date:</strong> ${escapeHtml(date)}<br><strong>Time:</strong> ${escapeHtml(event.time)}<br><strong>Venue:</strong> ${escapeHtml(event.venue)}</p><p><a href="${escapeHtml(url)}">Sign in to view your dashboard</a></p></div>`,
+    html: `<div style="font-family:Arial,sans-serif;line-height:1.6;color:#25332d"><h2>${escapeHtml(event.title)}</h2><p>${escapeHtml(event.description).replace(/\r?\n/g, '<br>')}</p><p><strong>Date:</strong> ${escapeHtml(date)}<br><strong>Time:</strong> ${escapeHtml(event.time)}<br><strong>Venue:</strong> ${escapeHtml(event.venue)}${mapsUrl ? ` (<a href="${escapeHtml(mapsUrl)}">View on Google Maps</a>)` : ''}</p><p><a href="${escapeHtml(url)}">Sign in to view your dashboard</a></p></div>`,
   };
 }
 
@@ -132,6 +155,7 @@ async function publishEvent(event) {
   if (recipients.length && !alreadyNotified) {
     queueEmailDelivery({ ...eventEmail(event), parents: recipients, type: 'event', eventId: event._id });
   }
+  queueEventSync(event._id);
   return recipients.length;
 }
 
@@ -185,7 +209,15 @@ exports.listEvents = async (req, res) => {
       },
     ];
   }
-  const events = await Event.find(filter).populate('createdBy', 'name role').sort({ date: 1 });
+  const query = Event.find(filter).populate('createdBy', 'name role').sort({ date: 1 });
+  if (req.user.role === 'admin') query.select('+googleCalendar');
+  const events = (await query).map((event) => {
+    const value = event.toJSON();
+    if (event.publicationStatus === 'published' && event.approvalStatus === 'approved') {
+      value.addToGoogleCalendarUrl = addToGoogleCalendarUrl(event);
+    }
+    return value;
+  });
   res.json({ events });
 };
 
@@ -249,6 +281,7 @@ exports.updateEvent = async (req, res) => {
       date: req.body.date === undefined ? new Date(event.date).toISOString().slice(0, 10) : req.body.date,
       time: req.body.time === undefined ? (event.time || '09:00') : req.body.time,
       venue: req.body.venue === undefined ? (event.venue || 'School') : req.body.venue,
+      location: req.body.location === undefined ? event.location : req.body.location,
       targetType: req.body.targetType === undefined ? (event.targetType || 'all') : req.body.targetType,
       targetClasses: req.body.targetClasses === undefined ? event.targetClasses : req.body.targetClasses,
       publicationStatus: req.body.publicationStatus === undefined
@@ -271,6 +304,7 @@ exports.updateEvent = async (req, res) => {
     Object.assign(event, validated.value);
     await event.save();
     if (previousApproval !== 'approved' && event.approvalStatus === 'approved') await publishEvent(event);
+    else queueEventSync(event._id);
     res.json({ event, emailSummary: await getEmailSummary(event) });
   } catch (err) {
     const status = err.name === 'ValidationError' || err.name === 'CastError' ? 400 : 500;
@@ -395,13 +429,14 @@ exports.deleteEvent = async (req, res) => {
       filter.publicationStatus = 'pending';
       filter.reviewStatus = 'pending';
     }
-    const event = await Event.findOneAndDelete(filter);
+    const event = await Event.findOneAndDelete(filter).select('+googleCalendar');
     if (!event) {
       if (req.user.role === 'teacher') {
         return res.status(403).json({ message: 'Teachers may remove only their own events while they are pending admin approval.' });
       }
       return res.status(404).json({ message: 'Event not found.' });
     }
+    queueEventRemoval(event);
     await logActivity(req.user._id, 'event-removed', event.title);
     return res.json({ message: 'Event removed.' });
   } catch (err) {
