@@ -247,6 +247,7 @@ async function showPaymentReceipt(feeId, paymentId) {
     const statusColor = isPaid ? '#15803D' : '#B45309';
     const statusBg = isPaid ? '#DCFCE7' : '#FEF3C7';
 
+
     const logoPath = '../img/logocollab.jpg';
 
     // Helper to build a receipt data row
@@ -536,6 +537,22 @@ function statusLabel(status) {
   return labels[status] || status;
 }
 
+// Google Calendar sync state; only admins receive event.googleCalendar from the API.
+const GOOGLE_SYNC_LABELS = {
+  synced: ['approved', 'In Google Calendar'],
+  pending: ['pending', 'Syncing…'],
+  failed: ['sync-failed', 'Google sync failed'],
+  'not-synced': ['sync-off', 'Not in Google Calendar'],
+};
+
+function googleSyncBadge(event) {
+  const sync = event.googleCalendar;
+  const shouldSync = event.publicationStatus === 'published' && event.approvalStatus === 'approved';
+  if (!sync || (!shouldSync && !sync.eventId)) return '';
+  const [className, label] = GOOGLE_SYNC_LABELS[sync.status] || GOOGLE_SYNC_LABELS['not-synced'];
+  return `<span class="badge ${className}" title="${escapeDashboardHtml(sync.error || label)}"><i class="fa-regular fa-calendar-check" aria-hidden="true"></i> ${label}</span>`;
+}
+
 function renderEventStatusList(events, container) {
   if (!container) return;
   const recent = (events || []).slice().sort((left, right) => new Date(right.date) - new Date(left.date)).slice(0, 6);
@@ -543,8 +560,371 @@ function renderEventStatusList(events, container) {
     const status = event.publicationStatus || 'published';
     const statusLabels = { draft: 'Draft', pending: 'Pending approval', rejected: 'Rejected', published: 'Published' };
     const evStatus = computeEventStatus(event);
-    return `<div class="event-status-row list-row"><div><strong>${escapeDashboardHtml(event.title)}</strong><p>${fmtDate(event.date)}${event.time ? ` · ${escapeDashboardHtml(event.time)}` : ''}${event.venue ? ` · ${escapeDashboardHtml(event.venue)}` : ''}</p></div><span class="badge status-badge-${status}">${statusLabels[status] || 'Published'}</span><span class="status-badge ${evStatus}">${statusLabel(evStatus)}</span></div>`;
+    const sync = googleSyncBadge(event);
+    return `<div class="event-status-row list-row"><div><strong>${escapeDashboardHtml(event.title)}</strong><p>${fmtDate(event.date)}${event.time ? ` · ${escapeDashboardHtml(event.time)}` : ''}${event.venue ? ` · ${escapeDashboardHtml(event.venue)}` : ''}</p></div><span class="badge status-badge-${status}">${statusLabels[status] || 'Published'}</span><span class="status-badge ${evStatus}">${statusLabel(evStatus)}</span>${sync}</div>`;
   }).join('') : '<div class="notification-empty">No events scheduled yet.</div>';
+}
+
+// ==========================================================================
+// MAP VENUE PICKER (Leaflet + OpenStreetMap; no API key or billing needed)
+// ==========================================================================
+// Initial viewport when no venue is pinned yet (the Philippines); no marker is placed.
+const DEFAULT_VENUE_MAP_VIEW = { center: [12.8797, 121.774], zoom: 5 };
+const LEAFLET_BASE_URL = 'https://unpkg.com/leaflet@1.9.4/dist';
+const NOMINATIM_URL = 'https://nominatim.openstreetmap.org';
+let leafletLoader = null;
+let nominatimQueue = Promise.resolve();
+let lastNominatimRequest = 0;
+
+function validEventLocation(location) {
+  if (!location || typeof location !== 'object') return null;
+  if (location.lat === null || location.lat === undefined || location.lat === '') return null;
+  if (location.lng === null || location.lng === undefined || location.lng === '') return null;
+  const lat = Number(location.lat);
+  const lng = Number(location.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+  return { address: String(location.address || '').trim(), lat, lng, placeId: String(location.placeId || '').trim() };
+}
+
+function eventMapsUrl(ev) {
+  const location = validEventLocation(ev && ev.location);
+  if (location) {
+    const params = new URLSearchParams({ api: '1', query: `${location.lat},${location.lng}` });
+    if (location.placeId) params.set('query_place_id', location.placeId);
+    return `https://www.google.com/maps/search/?${params}`;
+  }
+  const venue = String((ev && ev.venue) || '').trim();
+  return venue ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(venue)}` : '';
+}
+
+function eventDirectionsUrl(ev) {
+  const location = validEventLocation(ev && ev.location);
+  const params = new URLSearchParams({ api: '1', destination: location ? `${location.lat},${location.lng}` : String(ev.venue || '').trim() });
+  if (location && location.placeId) params.set('destination_place_id', location.placeId);
+  return `https://www.google.com/maps/dir/?${params}`;
+}
+
+function loadLeaflet() {
+  if (window.L && typeof window.L.map === 'function') return Promise.resolve(window.L);
+  if (!leafletLoader) {
+    leafletLoader = new Promise((resolve, reject) => {
+      const stylesheet = document.createElement('link');
+      stylesheet.rel = 'stylesheet';
+      stylesheet.href = `${LEAFLET_BASE_URL}/leaflet.css`;
+      stylesheet.integrity = 'sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=';
+      stylesheet.crossOrigin = '';
+      document.head.appendChild(stylesheet);
+      const script = document.createElement('script');
+      script.src = `${LEAFLET_BASE_URL}/leaflet.js`;
+      script.integrity = 'sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=';
+      script.crossOrigin = '';
+      script.onload = () => (window.L ? resolve(window.L) : reject(new Error('The map could not be started.')));
+      script.onerror = () => reject(new Error('The map could not be loaded. Check your internet connection and try again. You can still type the venue manually.'));
+      document.head.appendChild(script);
+    });
+    leafletLoader.catch(() => { leafletLoader = null; });
+  }
+  return leafletLoader;
+}
+
+// OpenStreetMap's Nominatim service allows at most one request per second, so requests are queued.
+function nominatimRequest(path, params) {
+  const run = nominatimQueue.then(async () => {
+    const wait = lastNominatimRequest + 1100 - Date.now();
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    lastNominatimRequest = Date.now();
+    const query = new URLSearchParams({ format: 'jsonv2', 'accept-language': navigator.language || 'en', ...params });
+    const response = await fetch(`${NOMINATIM_URL}/${path}?${query}`);
+    if (!response.ok) throw new Error(`Location service error (${response.status})`);
+    return response.json();
+  });
+  nominatimQueue = run.catch(() => {});
+  return run;
+}
+
+// Adds a "Select on Map" picker under a venue input. Only a confirmed pin is returned by getLocation().
+function createVenuePicker({ root, venueInput, initialLocation = null }) {
+  const state = {
+    confirmed: validEventLocation(initialLocation),
+    confirmedName: venueInput.value.trim(),
+    pending: null,
+    lookupId: 0,
+    searchId: 0,
+    results: [],
+    map: null,
+    marker: null,
+    leaflet: null,
+  };
+  root.innerHTML = `
+    <div class="venue-selected" data-venue-selected hidden></div>
+    <button type="button" class="btn btn-ghost btn-block venue-map-toggle" data-venue-open></button>
+    <div class="venue-picker" data-venue-panel hidden>
+      <div class="venue-picker-search">
+        <input type="search" data-venue-query maxlength="200" placeholder="Search for a school, building or street" aria-label="Search for a place" />
+        <button type="button" class="btn btn-secondary" data-venue-search><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i> Search</button>
+      </div>
+      <ul class="venue-picker-results" data-venue-results hidden></ul>
+      <div class="venue-picker-map" data-venue-map role="region" aria-label="Map for choosing the event venue"></div>
+      <div class="field-hint">Search for a place, click the map, or drag the pin to the exact spot. Click the map before using the mouse wheel to zoom, or use the + and − buttons.</div>
+      <div class="venue-picker-status" data-venue-status aria-live="polite"></div>
+      <div class="venue-picker-actions">
+        <button type="button" class="btn btn-ghost" data-venue-cancel>Cancel</button>
+        <button type="button" class="btn btn-primary" data-venue-confirm disabled><i class="fa-solid fa-location-dot" aria-hidden="true"></i> Use This Location</button>
+      </div>
+    </div>`;
+  const selected = root.querySelector('[data-venue-selected]');
+  const openButton = root.querySelector('[data-venue-open]');
+  const panel = root.querySelector('[data-venue-panel]');
+  const queryInput = root.querySelector('[data-venue-query]');
+  const searchButton = root.querySelector('[data-venue-search]');
+  const resultsList = root.querySelector('[data-venue-results]');
+  const mapNode = root.querySelector('[data-venue-map]');
+  const statusNode = root.querySelector('[data-venue-status]');
+  const confirmButton = root.querySelector('[data-venue-confirm]');
+  const formatCoords = ({ lat, lng }) => `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+  const placeName = (result) => String(result.name || String(result.display_name || '').split(',')[0] || '').trim();
+
+  const setStatus = (message, type = '') => {
+    statusNode.textContent = message;
+    statusNode.className = `venue-picker-status${type ? ` ${type}` : ''}`;
+  };
+  const describePending = () => {
+    const pending = state.pending;
+    if (pending) setStatus(`Pinned: ${pending.name || pending.address || 'Selected point'} (${formatCoords(pending)})`);
+  };
+  const hideResults = () => {
+    state.results = [];
+    resultsList.hidden = true;
+    resultsList.innerHTML = '';
+  };
+
+  function renderSelected() {
+    const location = state.confirmed;
+    openButton.innerHTML = `<i class="fa-regular fa-map" aria-hidden="true"></i> ${location ? 'Change location on map' : 'Select on Map'}`;
+    selected.hidden = !location;
+    if (!location) {
+      selected.innerHTML = '';
+      return;
+    }
+    const name = state.confirmedName || location.address || 'Pinned location';
+    selected.innerHTML = `
+      <div class="venue-selected-label">Selected venue</div>
+      <div class="venue-selected-body">
+        <i class="fa-solid fa-location-dot venue-selected-icon" aria-hidden="true"></i>
+        <div class="venue-selected-text">
+          <strong>${escapeDashboardHtml(name)}</strong>
+          ${location.address && location.address !== name ? `<span>${escapeDashboardHtml(location.address)}</span>` : ''}
+          <small>${formatCoords(location)}</small>
+        </div>
+        <i class="fa-regular fa-circle-check venue-selected-check" aria-hidden="true"></i>
+      </div>
+      <div class="venue-selected-links">
+        <a href="${escapeDashboardHtml(eventMapsUrl({ location }))}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i> View on Google Maps</a>
+        <button type="button" class="venue-selected-clear" data-venue-clear>Remove pin</button>
+      </div>`;
+    selected.querySelector('[data-venue-clear]').addEventListener('click', () => {
+      state.confirmed = null;
+      state.confirmedName = '';
+      renderSelected();
+    });
+  }
+
+  function setMarker(position) {
+    if (!position) {
+      if (state.marker) state.marker.remove();
+      state.marker = null;
+      return;
+    }
+    if (state.marker) {
+      state.marker.setLatLng([position.lat, position.lng]);
+      return;
+    }
+    state.marker = state.leaflet.marker([position.lat, position.lng], { draggable: true, title: 'Event venue' }).addTo(state.map);
+    state.marker.on('dragend', () => {
+      const latLng = state.marker.getLatLng().wrap();
+      pinAt({ lat: latLng.lat, lng: latLng.lng }, { keepName: true });
+    });
+  }
+
+  function resetPending() {
+    state.lookupId += 1;
+    state.searchId += 1;
+    state.pending = null;
+    confirmButton.disabled = true;
+    hideResults();
+    if (!state.map) return;
+    setMarker(state.confirmed);
+    if (state.confirmed) state.map.setView([state.confirmed.lat, state.confirmed.lng], 17);
+  }
+
+  async function pinAt(position, { keepName = false } = {}) {
+    const lookupId = ++state.lookupId;
+    const previousName = keepName && state.pending ? state.pending.name : '';
+    state.pending = { ...position, name: previousName, address: '', placeId: '' };
+    setMarker(position);
+    hideResults();
+    confirmButton.disabled = false;
+    setStatus(`Looking up address for ${formatCoords(position)}…`);
+    try {
+      const result = await nominatimRequest('reverse', { lat: String(position.lat), lon: String(position.lng), zoom: '18' });
+      if (lookupId !== state.lookupId) return;
+      if (result && !result.error) {
+        state.pending.address = result.display_name || '';
+        if (!state.pending.name) state.pending.name = result.name || '';
+      }
+      describePending();
+    } catch (err) {
+      if (lookupId !== state.lookupId) return;
+      setStatus(`Address lookup is unavailable, but the pinned coordinates (${formatCoords(position)}) can still be used.`, 'warning');
+    }
+  }
+
+  function chooseResult(result) {
+    const lat = Number(result.lat);
+    const lng = Number(result.lon);
+    const location = validEventLocation({ lat, lng });
+    if (!location) {
+      setStatus('That place has no map location. Try another result or click the map.', 'error');
+      return;
+    }
+    state.lookupId += 1;
+    state.pending = { lat, lng, name: placeName(result), address: result.display_name || '', placeId: '' };
+    setMarker(state.pending);
+    state.map.setView([lat, lng], 17);
+    hideResults();
+    confirmButton.disabled = false;
+    describePending();
+  }
+
+  async function runSearch() {
+    const query = queryInput.value.trim();
+    if (query.length < 3) {
+      setStatus('Type at least 3 characters to search.', 'warning');
+      return;
+    }
+    const searchId = ++state.searchId;
+    searchButton.disabled = true;
+    setStatus('Searching…');
+    try {
+      const params = { q: query, limit: '6' };
+      if (state.map.getZoom() >= 9) {
+        const bounds = state.map.getBounds();
+        params.viewbox = [bounds.getWest(), bounds.getNorth(), bounds.getEast(), bounds.getSouth()].join(',');
+      }
+      const results = await nominatimRequest('search', params);
+      if (searchId !== state.searchId) return;
+      state.results = Array.isArray(results) ? results : [];
+      if (!state.results.length) {
+        hideResults();
+        setStatus('No places found. Try a different search or click the map to pin the venue.', 'warning');
+        return;
+      }
+      resultsList.innerHTML = state.results.map((result, index) => `
+        <li><button type="button" data-result-index="${index}">
+          <strong>${escapeDashboardHtml(placeName(result) || 'Unnamed place')}</strong>
+          <span>${escapeDashboardHtml(result.display_name || '')}</span>
+        </button></li>`).join('');
+      resultsList.hidden = false;
+      setStatus(`${state.results.length} place${state.results.length === 1 ? '' : 's'} found. Choose one below.`);
+    } catch (err) {
+      if (searchId === state.searchId) setStatus('Place search is unavailable right now. You can still click the map to pin the venue.', 'warning');
+    } finally {
+      if (searchId === state.searchId) searchButton.disabled = false;
+    }
+  }
+
+  async function ensureMap() {
+    if (state.map) return;
+    const L = await loadLeaflet();
+    state.leaflet = L;
+    const start = state.confirmed;
+    state.map = L.map(mapNode, {
+      center: start ? [start.lat, start.lng] : DEFAULT_VENUE_MAP_VIEW.center,
+      zoom: start ? 17 : DEFAULT_VENUE_MAP_VIEW.zoom,
+      worldCopyJump: true,
+      // Let the wheel and one-finger swipes scroll the form; the map zooms by wheel only after a click.
+      scrollWheelZoom: false,
+      dragging: !L.Browser.mobile,
+    });
+    state.map.on('click focus', () => state.map.scrollWheelZoom.enable());
+    state.map.on('mouseout blur', () => state.map.scrollWheelZoom.disable());
+    let tileWarningShown = false;
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors',
+    }).on('tileerror', () => {
+      if (tileWarningShown) return;
+      tileWarningShown = true;
+      setStatus('Some map tiles failed to load. Check your internet connection.', 'warning');
+    }).addTo(state.map);
+    state.map.on('click', (event) => {
+      const latLng = event.latlng.wrap();
+      pinAt({ lat: latLng.lat, lng: latLng.lng });
+    });
+    if (start) setMarker(start);
+  }
+
+  openButton.addEventListener('click', async () => {
+    panel.hidden = false;
+    openButton.hidden = true;
+    setStatus('Loading map…');
+    try {
+      await ensureMap();
+      state.map.invalidateSize();
+      resetPending();
+      setStatus(state.confirmed ? 'Showing the saved location. Search, click, or drag the pin to change it.' : 'Search for the venue or click the map to drop a pin.');
+      queryInput.focus();
+    } catch (err) {
+      setStatus(err.message || 'The map could not be loaded.', 'error');
+    }
+  });
+
+  searchButton.addEventListener('click', () => {
+    if (state.map) runSearch();
+  });
+  // Enter would otherwise submit the surrounding event form.
+  queryInput.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    if (state.map) runSearch();
+  });
+  resultsList.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-result-index]');
+    const result = button && state.results[Number(button.dataset.resultIndex)];
+    if (result) chooseResult(result);
+  });
+
+  root.querySelector('[data-venue-cancel]').addEventListener('click', () => {
+    resetPending();
+    setStatus('');
+    panel.hidden = true;
+    openButton.hidden = false;
+    openButton.focus();
+  });
+
+  confirmButton.addEventListener('click', () => {
+    const pending = state.pending;
+    const location = validEventLocation(pending);
+    if (!location) {
+      setStatus('Pin a location on the map first.', 'error');
+      return;
+    }
+    state.lookupId += 1;
+    state.confirmed = location;
+    state.confirmedName = (pending.name || pending.address || formatCoords(location)).slice(0, 160);
+    venueInput.value = state.confirmedName;
+    venueInput.dispatchEvent(new Event('input', { bubbles: true }));
+    state.pending = null;
+    confirmButton.disabled = true;
+    setStatus('');
+    panel.hidden = true;
+    openButton.hidden = false;
+    renderSelected();
+    openButton.focus();
+  });
+
+  renderSelected();
+  return { getLocation: () => (state.confirmed ? { ...state.confirmed } : null) };
 }
 
 function openEventComposer({ classes = [], onSave, onComplete, approvalRequired = false }) {
@@ -571,6 +951,7 @@ function openEventComposer({ classes = [], onSave, onComplete, approvalRequired 
         <section class="event-composer-section">
           <h4>Location</h4>
           <div class="field" data-event-field="venue"><label for="composerVenue">Venue <span class="required-mark" aria-hidden="true">*</span></label><input id="composerVenue" maxlength="160" value="${escapeDashboardHtml(values.venue || '')}" placeholder="e.g. School garden" required aria-describedby="composerVenueError" /><small class="field-error" id="composerVenueError" data-event-error="venue"></small></div>
+          <div class="field" id="composerVenueMap"></div>
         </section>
         <section class="event-composer-section">
           <h4>Recipients</h4>
@@ -586,6 +967,11 @@ function openEventComposer({ classes = [], onSave, onComplete, approvalRequired 
 
     const form = document.getElementById('eventComposerForm');
     const target = document.getElementById('composerTarget');
+    const venuePicker = createVenuePicker({
+      root: document.getElementById('composerVenueMap'),
+      venueInput: document.getElementById('composerVenue'),
+      initialLocation: values.location,
+    });
     target.addEventListener('change', () => {
       document.getElementById('composerClassesField').hidden = target.value !== 'classes';
     });
@@ -597,6 +983,7 @@ function openEventComposer({ classes = [], onSave, onComplete, approvalRequired 
         date: document.getElementById('composerDate').value,
         time: document.getElementById('composerTime').value,
         venue: document.getElementById('composerVenue').value.trim(),
+        location: venuePicker.getLocation(),
         targetType: target.value,
         targetClasses: Array.from(document.getElementById('composerClasses').selectedOptions, (option) => option.value),
         audience: document.getElementById('composerAudience').value,
@@ -637,7 +1024,7 @@ function openEventComposer({ classes = [], onSave, onComplete, approvalRequired 
         <dt><strong>Title</strong></dt><dd>${escapeDashboardHtml(data.title)}</dd>
         <dt><strong>Description</strong></dt><dd>${escapeDashboardHtml(data.description)}</dd>
         <dt><strong>Schedule</strong></dt><dd>${escapeDashboardHtml(date)} at ${escapeDashboardHtml(data.time)}</dd>
-        <dt><strong>Location</strong></dt><dd>${escapeDashboardHtml(data.venue)}</dd>
+        <dt><strong>Location</strong></dt><dd>${escapeDashboardHtml(data.venue)}${data.location ? `${data.location.address && data.location.address !== data.venue ? `<br><small>${escapeDashboardHtml(data.location.address)}</small>` : ''}<br><a href="${escapeDashboardHtml(eventMapsUrl(data))}" target="_blank" rel="noopener noreferrer">View on Google Maps</a>` : ''}</dd>
         <dt><strong>Recipients</strong></dt><dd>${escapeDashboardHtml(recipients)}</dd>
         <dt><strong>Status</strong></dt><dd>${data.publicationStatus === 'draft' ? 'Draft' : (data.publicationStatus === 'pending' ? 'Submit for admin approval' : 'Published')}</dd>
       </dl>
@@ -805,6 +1192,13 @@ function createEmergencyAudiencePicker({ containerId, students = [], wholeDescri
 // ==========================================================================
 // EVENTS CALENDAR COMPONENT
 // ==========================================================================
+const CALENDAR_AUDIENCE_FILTERS = [
+  { key: 'any', label: 'All events' },
+  { key: 'all', label: 'Everyone' },
+  { key: 'parents', label: 'Parents' },
+  { key: 'teachers', label: 'Teachers' },
+];
+
 class EventsCalendar {
   constructor({ containerId, events = [], canManage = false, onDeleteEvent, onEventAdded, onEventUpdated, canEditEvent, canDeleteEvent }) {
     this.container = document.getElementById(containerId);
@@ -817,6 +1211,8 @@ class EventsCalendar {
     this.canDeleteEventFn = canDeleteEvent;
     this.currentDate = new Date();
     this.viewMode = 'calendar'; // 'calendar' or 'schedule'
+    this.filter = 'any'; // 'any' or an audience: 'all', 'parents', 'teachers'
+    this.selectedDate = this.startOfDay(new Date());
     // Auto-register for periodic status refresh
     if (!window.__eventCalendars) window.__eventCalendars = [];
     window.__eventCalendars.push(this);
@@ -836,18 +1232,26 @@ class EventsCalendar {
     this.render();
   }
 
-  nextMonth() {
-    this.currentDate.setMonth(this.currentDate.getMonth() + 1);
+  // Moving months shows today in the side panel when visible, otherwise the 1st.
+  showMonth(offset) {
+    this.currentDate = new Date(this.currentDate.getFullYear(), this.currentDate.getMonth() + offset, 1);
+    const now = new Date();
+    const isCurrentMonth = now.getFullYear() === this.currentDate.getFullYear() && now.getMonth() === this.currentDate.getMonth();
+    this.selectedDate = this.startOfDay(isCurrentMonth ? now : this.currentDate);
     this.render();
   }
 
+  nextMonth() {
+    this.showMonth(1);
+  }
+
   prevMonth() {
-    this.currentDate.setMonth(this.currentDate.getMonth() - 1);
-    this.render();
+    this.showMonth(-1);
   }
 
   today() {
     this.currentDate = new Date();
+    this.selectedDate = this.startOfDay(new Date());
     this.render();
   }
 
@@ -883,6 +1287,15 @@ class EventsCalendar {
       teachers: 'Teachers only',
     };
     const evStatus = computeEventStatus(ev);
+    const venue = String(ev.venue || '').trim();
+    const location = validEventLocation(ev.location);
+    const mapEmbedUrl = location
+      ? `https://www.openstreetmap.org/export/embed.html?${new URLSearchParams({
+        bbox: [location.lng - 0.004, location.lat - 0.003, location.lng + 0.004, location.lat + 0.003].join(','),
+        layer: 'mapnik',
+        marker: `${location.lat},${location.lng}`,
+      })}`
+      : `https://www.google.com/maps?q=${encodeURIComponent(venue)}&output=embed`;
 
     Modal.open(`
       <h3>Event Details</h3>
@@ -895,7 +1308,29 @@ class EventsCalendar {
         <div class="event-detail-label">Date</div>
         <div class="event-detail-val"><i class="fa-regular fa-calendar" style="margin-right:6px; color:var(--primary);"></i> ${formattedDate}${ev.time ? ` · ${escapeValue(ev.time)}` : ''}</div>
       </div>
-      ${ev.venue ? `<div class="event-detail-item"><div class="event-detail-label">Venue</div><div class="event-detail-val">${escapeValue(ev.venue)}</div></div>` : ''}
+      ${venue ? `
+        <div class="event-detail-item">
+          <div class="event-detail-label">Venue</div>
+          <div class="event-detail-val">${escapeValue(venue)}</div>
+          ${location && location.address && location.address !== venue ? `<div class="field-hint">${escapeValue(location.address)}</div>` : ''}
+          <div class="event-map" aria-label="Map showing ${escapeValue(venue)}">
+            <iframe
+              src="${escapeValue(mapEmbedUrl)}"
+              title="Google Map for ${escapeValue(venue)}"
+              loading="lazy"
+              referrerpolicy="no-referrer-when-downgrade"
+              allowfullscreen></iframe>
+          </div>
+          <div class="event-map-links">
+            <a class="event-map-directions" href="${escapeValue(eventMapsUrl(ev))}" target="_blank" rel="noopener noreferrer">
+              <i class="fa-solid fa-map-location-dot" aria-hidden="true"></i> View on Google Maps
+            </a>
+            <a class="event-map-directions" href="${escapeValue(eventDirectionsUrl(ev))}" target="_blank" rel="noopener noreferrer">
+              <i class="fa-solid fa-diamond-turn-right" aria-hidden="true"></i> Get directions
+            </a>
+          </div>
+        </div>
+      ` : ''}
       <div class="event-detail-item">
         <div class="event-detail-label">Audience</div>
         <div class="event-detail-val">
@@ -904,6 +1339,7 @@ class EventsCalendar {
           </span>
         </div>
       </div>
+      ${this.googleCalendarDetailHtml(ev, escapeValue)}
       ${ev.description ? `
         <div class="event-detail-item">
           <div class="event-detail-label">Description</div>
@@ -931,6 +1367,21 @@ class EventsCalendar {
     document.getElementById('calCloseEventBtn').addEventListener('click', () => Modal.close());
     const editBtn = document.getElementById('calEditEventBtn');
     if (editBtn) editBtn.addEventListener('click', () => this.showEditEvent(ev));
+    const retrySyncBtn = document.getElementById('calRetrySyncBtn');
+    if (retrySyncBtn) {
+      retrySyncBtn.addEventListener('click', async () => {
+        setButtonLoading(retrySyncBtn, true, 'Syncing');
+        try {
+          const { googleCalendar } = await api.post(`/calendar/google/events/${ev._id}/sync`, {});
+          ev.googleCalendar = googleCalendar;
+          showToast(googleCalendar.status === 'synced' ? 'Event synced to Google Calendar.' : (googleCalendar.error || 'Google Calendar sync did not complete.'), googleCalendar.status === 'synced' ? 'success' : 'error');
+          this.showEventDetails(ev);
+        } catch (err) {
+          showToast(err.message, 'error');
+          setButtonLoading(retrySyncBtn, false);
+        }
+      });
+    }
     const deleteBtn = document.getElementById('calDeleteEventBtn');
     if (deleteBtn && canDeleteEvent && this.onDeleteEvent) {
       deleteBtn.addEventListener('click', async () => {
@@ -940,6 +1391,27 @@ class EventsCalendar {
         }
       });
     }
+  }
+
+  googleCalendarDetailHtml(ev, escapeValue) {
+    const sync = ev.googleCalendar;
+    const syncBadge = googleSyncBadge(ev);
+    const addLink = ev.addToGoogleCalendarUrl && !(sync && sync.htmlLink && sync.status === 'synced')
+      ? `<a class="event-map-directions" href="${escapeValue(ev.addToGoogleCalendarUrl)}" target="_blank" rel="noopener noreferrer"><i class="fa-regular fa-calendar-plus" aria-hidden="true"></i> Add to my Google Calendar</a>`
+      : '';
+    if (!syncBadge && !addLink) return '';
+    return `
+      <div class="event-detail-item">
+        <div class="event-detail-label">Google Calendar</div>
+        ${syncBadge ? `<div class="event-detail-val">${syncBadge}</div>` : ''}
+        ${sync && sync.status === 'failed' && sync.error ? `<div class="form-msg error" role="alert">${escapeValue(sync.error)}</div>` : ''}
+        ${sync && sync.lastSyncedAt && sync.status === 'synced' ? `<div class="field-hint">Last synced ${escapeValue(new Date(sync.lastSyncedAt).toLocaleString())}</div>` : ''}
+        <div class="event-map-links">
+          ${sync && sync.htmlLink && sync.status === 'synced' ? `<a class="event-map-directions" href="${escapeValue(sync.htmlLink)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i> Open in Google Calendar</a>` : ''}
+          ${addLink}
+          ${syncBadge && sync.status !== 'synced' ? '<button type="button" class="btn btn-ghost btn-sm" id="calRetrySyncBtn"><i class="fa-solid fa-rotate" aria-hidden="true"></i> Retry sync</button>' : ''}
+        </div>
+      </div>`;
   }
 
   showEditEvent(ev) {
@@ -958,6 +1430,7 @@ class EventsCalendar {
           <div class="field"><label for="editEventTime">Time</label><input type="time" id="editEventTime" value="${escapeValue(ev.time || '09:00')}" required /></div>
           <div class="field"><label for="editEventVenue">Venue</label><input id="editEventVenue" value="${escapeValue(ev.venue || '')}" required /></div>
         </div>
+        <div class="field" id="editEventVenueMap"></div>
         <div class="field"><label>Target Audience</label>
           <select id="editEventAudience">
             <option value="all" ${ev.audience === 'all' ? 'selected' : ''}>Everyone (Parents &amp; Staff)</option>
@@ -969,6 +1442,11 @@ class EventsCalendar {
         <button class="btn btn-primary btn-block" type="submit" style="margin-top:14px;">Save Changes</button>
       </form>
     `);
+    const venuePicker = createVenuePicker({
+      root: document.getElementById('editEventVenueMap'),
+      venueInput: document.getElementById('editEventVenue'),
+      initialLocation: ev.location,
+    });
     document.getElementById('editEventForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const msg = document.getElementById('editEventMsg');
@@ -978,6 +1456,7 @@ class EventsCalendar {
           date: document.getElementById('editEventDate').value,
           time: document.getElementById('editEventTime').value,
           venue: document.getElementById('editEventVenue').value.trim(),
+          location: venuePicker.getLocation(),
           audience: document.getElementById('editEventAudience').value,
           description: document.getElementById('editEventDescription').value.trim(),
         });
@@ -988,182 +1467,241 @@ class EventsCalendar {
     });
   }
 
+  startOfDay(date) {
+    const day = new Date(date);
+    day.setHours(0, 0, 0, 0);
+    return day;
+  }
+
+  isSameDay(left, right) {
+    return left.getFullYear() === right.getFullYear()
+      && left.getMonth() === right.getMonth()
+      && left.getDate() === right.getDate();
+  }
+
+  setFilter(filter) {
+    this.filter = filter;
+    this.render();
+  }
+
+  selectDay(date) {
+    this.selectedDate = this.startOfDay(date);
+    if (date.getMonth() !== this.currentDate.getMonth() || date.getFullYear() !== this.currentDate.getFullYear()) {
+      this.currentDate = new Date(date.getFullYear(), date.getMonth(), 1);
+    }
+    this.render();
+    // The side panel sits under the grid on narrow screens; bring it into view.
+    if (window.matchMedia && window.matchMedia('(max-width: 1100px)').matches) {
+      this.container.querySelector('.cal-agenda')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }
+
+  // Chips filter by audience, the only grouping school events have.
+  filteredEvents() {
+    if (this.filter === 'any') return this.events;
+    return this.events.filter((ev) => (ev.audience || 'all') === this.filter);
+  }
+
+  formatEventTime(ev) {
+    const match = /^(\d{2}):(\d{2})$/.exec(ev.time || '');
+    if (!match) return 'All day';
+    return new Date(2000, 0, 1, Number(match[1]), Number(match[2])).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  }
+
+  eventState(ev) {
+    const status = computeEventStatus(ev);
+    if (status === 'pending') return ['pending', 'Pending approval'];
+    if (status === 'done') return ['done', 'Done'];
+    if (this.isSameDay(this.getEventDate(ev), new Date())) return ['today', 'Happening today'];
+    return ['upcoming', 'Upcoming'];
+  }
+
+  agendaItemHtml(ev) {
+    const audience = CALENDAR_AUDIENCE_FILTERS.find((item) => item.key === (ev.audience || 'all')) || CALENDAR_AUDIENCE_FILTERS[1];
+    const [stateClass, stateLabel] = this.eventState(ev);
+    return `
+      <button type="button" class="cal-agenda-item" data-agenda-event-id="${escapeDashboardHtml(ev._id)}">
+        <span class="cal-agenda-time">${this.formatEventTime(ev)}</span>
+        <span class="cal-agenda-body">
+          <strong>${escapeDashboardHtml(ev.title)}</strong>
+          ${ev.venue ? `<span class="cal-agenda-venue">${escapeDashboardHtml(ev.venue)}</span>` : ''}
+          <span class="cal-agenda-meta">
+            <span class="cal-agenda-audience"><span class="cal-chip-dot audience-${audience.key}" aria-hidden="true"></span>${audience.label}</span>
+            <span class="cal-state ${stateClass}">${stateLabel}</span>
+          </span>
+        </span>
+      </button>`;
+  }
+
+  agendaHtml(events) {
+    const selected = this.selectedDate;
+    const isToday = this.isSameDay(selected, new Date());
+    const byTime = (a, b) => this.getEventDate(a) - this.getEventDate(b) || String(a.time || '').localeCompare(String(b.time || ''));
+    const dayEvents = events.filter((ev) => this.isSameDay(this.getEventDate(ev), selected)).sort(byTime);
+    const monthEnd = new Date(selected.getFullYear(), selected.getMonth() + 1, 1);
+    const laterEvents = events.filter((ev) => {
+      const date = this.getEventDate(ev);
+      return date > selected && date < monthEnd && !this.isSameDay(date, selected);
+    }).sort(byTime);
+    const laterGroups = laterEvents.reduce((groups, ev) => {
+      const date = this.getEventDate(ev);
+      const key = date.toDateString();
+      if (!groups.has(key)) groups.set(key, { date, events: [] });
+      groups.get(key).events.push(ev);
+      return groups;
+    }, new Map());
+    const monthName = selected.toLocaleDateString(undefined, { month: 'long' });
+
+    return `
+      <aside class="cal-agenda" aria-label="Events for the selected day">
+        <div class="cal-agenda-head">
+          <h3>${isToday ? 'Today' : selected.toLocaleDateString(undefined, { weekday: 'short' })}</h3>
+          <span>${selected.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}</span>
+        </div>
+        ${dayEvents.length ? dayEvents.map((ev) => this.agendaItemHtml(ev)).join('') : '<p class="cal-agenda-empty">Nothing scheduled on this day.</p>'}
+        <h4 class="cal-agenda-later">Later in ${monthName}</h4>
+        ${laterGroups.size ? [...laterGroups.values()].map(({ date, events: groupEvents }) => `
+          <div class="cal-agenda-date">${date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}</div>
+          ${groupEvents.map((ev) => this.agendaItemHtml(ev)).join('')}
+        `).join('') : `<p class="cal-agenda-empty">No more events in ${monthName}.</p>`}
+      </aside>`;
+  }
+
   render() {
     if (!this.container) return;
 
     const year = this.currentDate.getFullYear();
     const month = this.currentDate.getMonth();
-    const monthNames = [
-      'January', 'February', 'March', 'April', 'May', 'June',
-      'July', 'August', 'September', 'October', 'November', 'December'
-    ];
-    const monthName = monthNames[month];
-
+    const monthName = this.currentDate.toLocaleDateString(undefined, { month: 'long' });
     const today = new Date();
-    const isCurrentMonth = today.getFullYear() === year && today.getMonth() === month;
+    const events = this.filteredEvents();
 
-    // Build Toolbar
     let html = `
-      <div class="calendar-card">
-        <div class="calendar-toolbar">
-          <div class="calendar-month-heading">
-            <i class="fa-regular fa-calendar-days" style="color:var(--primary);"></i>
-            <span>${monthName} ${year}</span>
+      <div class="cal-topbar">
+        <div class="calendar-month-heading">
+          <i class="fa-regular fa-calendar-days" style="color:var(--primary);"></i>
+          <span>${monthName} ${year}</span>
+        </div>
+        <div class="cal-topbar-actions">
+          <div class="calendar-nav-group">
+            <button class="calendar-nav-btn" data-cal-prev title="Previous Month" aria-label="Previous Month">
+              <i class="fa-solid fa-chevron-left"></i>
+            </button>
+            <button class="btn btn-ghost btn-sm" data-cal-today>Today</button>
+            <button class="calendar-nav-btn" data-cal-next title="Next Month" aria-label="Next Month">
+              <i class="fa-solid fa-chevron-right"></i>
+            </button>
           </div>
-
-          <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
-            <div class="calendar-nav-group">
-              <button class="calendar-nav-btn" data-cal-prev title="Previous Month" aria-label="Previous Month">
-                <i class="fa-solid fa-chevron-left"></i>
-              </button>
-              <button class="btn btn-ghost btn-sm" data-cal-today>Today</button>
-              <button class="calendar-nav-btn" data-cal-next title="Next Month" aria-label="Next Month">
-                <i class="fa-solid fa-chevron-right"></i>
-              </button>
-            </div>
-
-            <div style="display:inline-flex; border:1px solid #CBD5E1; border-radius:6px; overflow:hidden;">
-              <button class="btn btn-sm ${this.viewMode === 'calendar' ? 'btn-primary' : 'btn-ghost'}" data-cal-view="calendar" style="border-radius:0; border:none; padding:6px 12px;">
-                <i class="fa-solid fa-calendar-days"></i> Calendar
-              </button>
-              <button class="btn btn-sm ${this.viewMode === 'schedule' ? 'btn-primary' : 'btn-ghost'}" data-cal-view="schedule" style="border-radius:0; border:none; padding:6px 12px;">
-                <i class="fa-solid fa-calendar-week"></i> Schedule
-              </button>
-            </div>
+          <div class="cal-view-toggle" role="group" aria-label="Calendar view">
+            <button class="btn btn-sm ${this.viewMode === 'calendar' ? 'btn-primary' : 'btn-ghost'}" data-cal-view="calendar" aria-pressed="${this.viewMode === 'calendar'}">
+              <i class="fa-solid fa-calendar-days"></i> Calendar
+            </button>
+            <button class="btn btn-sm ${this.viewMode === 'schedule' ? 'btn-primary' : 'btn-ghost'}" data-cal-view="schedule" aria-pressed="${this.viewMode === 'schedule'}">
+              <i class="fa-solid fa-calendar-week"></i> Schedule
+            </button>
           </div>
         </div>
-
-        <!-- Status Legend -->
-        <div class="status-legend">
-          <div class="status-legend-item"><div class="status-legend-dot" style="background:var(--status-done);"></div><span>Done</span></div>
-          <div class="status-legend-item"><div class="status-legend-dot" style="background:var(--status-ongoing);"></div><span>Approved</span></div>
-          <div class="status-legend-item"><div class="status-legend-dot" style="background:var(--status-pending);"></div><span>Pending</span></div>
-        </div>
+      </div>
+      <div class="cal-filters" role="group" aria-label="Filter events by audience">
+        ${CALENDAR_AUDIENCE_FILTERS.map((item) => `
+          <button type="button" class="cal-chip ${this.filter === item.key ? 'active' : ''}" data-cal-filter="${item.key}" aria-pressed="${this.filter === item.key}">
+            ${item.key === 'any' ? '' : `<span class="cal-chip-dot audience-${item.key}" aria-hidden="true"></span>`}${item.label}
+          </button>`).join('')}
+      </div>
     `;
 
     if (this.viewMode === 'calendar') {
-      // Days of the week header
       html += `
-        <div class="calendar-days-header">
-          <div class="calendar-day-header-cell">Sun</div>
-          <div class="calendar-day-header-cell">Mon</div>
-          <div class="calendar-day-header-cell">Tue</div>
-          <div class="calendar-day-header-cell">Wed</div>
-          <div class="calendar-day-header-cell">Thu</div>
-          <div class="calendar-day-header-cell">Fri</div>
-          <div class="calendar-day-header-cell">Sat</div>
-        </div>
-        <div class="calendar-grid">
+        <div class="cal-shell">
+          <div class="calendar-card">
+            <div class="calendar-days-header">
+              ${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => `<div class="calendar-day-header-cell">${day}</div>`).join('')}
+            </div>
+            <div class="calendar-grid">
       `;
 
       const firstDay = new Date(year, month, 1).getDay();
       const daysInMonth = new Date(year, month + 1, 0).getDate();
-      const daysInPrevMonth = new Date(year, month, 0).getDate();
-
       // Total calendar cells (either 35 or 42)
       const totalCells = (firstDay + daysInMonth) > 35 ? 42 : 35;
 
       for (let i = 0; i < totalCells; i++) {
-        let cellDay = 0;
-        let isOtherMonth = false;
-        let cellDate = null;
-
-        if (i < firstDay) {
-          cellDay = daysInPrevMonth - firstDay + 1 + i;
-          isOtherMonth = true;
-          cellDate = new Date(year, month - 1, cellDay);
-        } else if (i >= firstDay + daysInMonth) {
-          cellDay = i - (firstDay + daysInMonth) + 1;
-          isOtherMonth = true;
-          cellDate = new Date(year, month + 1, cellDay);
-        } else {
-          cellDay = i - firstDay + 1;
-          cellDate = new Date(year, month, cellDay);
-        }
-
-        const isTodayCell = isCurrentMonth && !isOtherMonth && cellDay === today.getDate();
-
-        // Match events for this date
-        const matchingEvents = this.events.filter((e) => {
-          const d = this.getEventDate(e);
-          return (
-            d.getFullYear() === cellDate.getFullYear() &&
-            d.getMonth() === cellDate.getMonth() &&
-            d.getDate() === cellDate.getDate()
-          );
-        });
-
+        const cellDate = new Date(year, month, i - firstDay + 1);
+        const isOtherMonth = cellDate.getMonth() !== month;
+        const isWeekend = cellDate.getDay() === 0 || cellDate.getDay() === 6;
+        const matchingEvents = events.filter((ev) => this.isSameDay(this.getEventDate(ev), cellDate));
         const hasEvents = matchingEvents.length > 0;
+        const classes = [
+          'calendar-cell',
+          isOtherMonth ? 'other-month' : '',
+          isWeekend ? 'weekend' : '',
+          this.isSameDay(cellDate, today) ? 'today' : '',
+          this.isSameDay(cellDate, this.selectedDate) ? 'selected' : '',
+          hasEvents ? 'has-events' : '',
+        ].filter(Boolean).join(' ');
 
         html += `
-          <div class="calendar-cell ${isOtherMonth ? 'other-month' : ''} ${isTodayCell ? 'today' : ''} ${hasEvents ? 'has-events' : ''}" data-cal-date="${cellDate.toISOString()}">
+          <div class="${classes}" data-cal-date="${cellDate.toISOString()}" role="button" tabindex="0" aria-label="${cellDate.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}${hasEvents ? `, ${matchingEvents.length} event${matchingEvents.length === 1 ? '' : 's'}` : ''}">
             <div class="calendar-cell-top">
-              <span class="day-number">${cellDay}</span>
-              ${hasEvents ? `<span class="has-events-badge">${matchingEvents.length}</span>` : ''}
+              <span class="day-number">${cellDate.getDate()}</span>
             </div>
             <div class="calendar-events-container">
               ${matchingEvents.slice(0, 3).map((ev) => {
                 const evStatus = computeEventStatus(ev);
-                return `<div class="event-pill audience-${ev.audience || 'all'} status-${evStatus}" data-event-id="${ev._id}" title="${ev.title}">
-                  ${ev.title}
-                </div>`;
+                return `<div class="event-pill audience-${escapeDashboardHtml(ev.audience || 'all')} status-${evStatus}" data-event-id="${escapeDashboardHtml(ev._id)}" title="${escapeDashboardHtml(ev.title)}">${escapeDashboardHtml(ev.title)}</div>`;
               }).join('')}
-              ${matchingEvents.length > 3 ? `<div style="font-size:10px; color:var(--primary); font-weight:700;">+${matchingEvents.length - 3} more</div>` : ''}
+              ${matchingEvents.length > 3 ? `<div class="calendar-more">+${matchingEvents.length - 3} more</div>` : ''}
             </div>
           </div>
         `;
       }
 
-      html += `</div>`;
-      if (!this.events.length) {
-        html += `
-          <div class="empty-state calendar-empty-state">
-            <i class="fa-regular fa-calendar-xmark"></i>
-            <p>No events yet.</p>
+      html += `
+            </div>
+            <div class="status-legend">
+              <div class="status-legend-item"><div class="status-legend-dot" style="background:var(--status-done);"></div><span>Done</span></div>
+              <div class="status-legend-item"><div class="status-legend-dot" style="background:var(--status-ongoing);"></div><span>Approved</span></div>
+              <div class="status-legend-item"><div class="status-legend-dot" style="background:var(--status-pending);"></div><span>Pending</span></div>
+            </div>
           </div>
-        `;
-      }
-      html += `</div>`; // Close calendar card
+          ${this.agendaHtml(events)}
+        </div>
+      `;
     } else {
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
-      const compareEvents = (a, b) => this.getEventDate(a) - this.getEventDate(b) || a.title.localeCompare(b.title);
-      const upcoming = this.events.filter((ev) => this.getEventDate(ev) >= todayStart).sort(compareEvents);
-      const past = this.events.filter((ev) => this.getEventDate(ev) < todayStart).sort((a, b) => compareEvents(b, a));
-      const sortedEvents = [...upcoming, ...past];
-      const groups = sortedEvents.reduce((result, ev) => {
+      const todayStart = this.startOfDay(today);
+      const compareEvents = (a, b) => this.getEventDate(a) - this.getEventDate(b) || String(a.time || '').localeCompare(String(b.time || '')) || a.title.localeCompare(b.title);
+      const upcoming = events.filter((ev) => this.getEventDate(ev) >= todayStart).sort(compareEvents);
+      const past = events.filter((ev) => this.getEventDate(ev) < todayStart).sort((a, b) => compareEvents(b, a));
+      const groups = [...upcoming, ...past].reduce((result, ev) => {
         const date = this.getEventDate(ev);
-        const key = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+        const key = date.toDateString();
         if (!result.has(key)) result.set(key, { date, events: [] });
         result.get(key).events.push(ev);
         return result;
       }, new Map());
 
-      html += `<div class="calendar-schedule">`;
+      html += '<div class="calendar-card"><div class="calendar-schedule">';
       if (groups.size) {
-        groups.forEach(({ date, events }) => {
-          const isToday = date.getFullYear() === todayStart.getFullYear() && date.getMonth() === todayStart.getMonth() && date.getDate() === todayStart.getDate();
+        groups.forEach(({ date, events: dayEvents }) => {
+          const isToday = this.isSameDay(date, todayStart);
           const dayLabel = date.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
           html += `
             <section class="schedule-day ${isToday ? 'today' : ''}">
               <h3 class="schedule-day-heading">${dayLabel}${isToday ? ' · Today' : ''}</h3>
-              ${events.map((ev) => {
-                const eventDate = this.getEventDate(ev);
-                const hasTime = eventDate.getHours() || eventDate.getMinutes() || eventDate.getSeconds();
-                const time = hasTime ? eventDate.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : 'All day';
-                const detail = ev.location || ev.description;
+              ${dayEvents.map((ev) => {
+                const detail = ev.venue || ev.description;
                 const evStatus = computeEventStatus(ev);
                 return `
                   <article class="schedule-event status-${evStatus}">
-                    <time class="schedule-event-time">${time}</time>
+                    <time class="schedule-event-time">${this.formatEventTime(ev)}</time>
                     <div class="schedule-event-info">
                       <span class="status-badge ${evStatus}">${statusLabel(evStatus)}</span>
-                      <h4>${ev.title}</h4>
-                      ${detail ? `<p>${detail}</p>` : ''}
+                      <h4>${escapeDashboardHtml(ev.title)}</h4>
+                      ${detail ? `<p>${escapeDashboardHtml(detail)}</p>` : ''}
                     </div>
                     <div class="schedule-event-actions">
-                      <button class="btn btn-secondary btn-sm" data-view-event-id="${ev._id}"><i class="fa-solid fa-eye"></i> Details</button>
-                      ${this.canDelete(ev) && this.onDeleteEvent ? `<button class="btn btn-ghost btn-sm" data-del-event-id="${ev._id}" aria-label="Remove ${ev.title}" title="Remove event"><i class="fa-solid fa-trash-can"></i></button>` : ''}
+                      <button class="btn btn-secondary btn-sm" data-view-event-id="${escapeDashboardHtml(ev._id)}"><i class="fa-solid fa-eye"></i> Details</button>
+                      ${this.canDelete(ev) && this.onDeleteEvent ? `<button class="btn btn-ghost btn-sm" data-del-event-id="${escapeDashboardHtml(ev._id)}" aria-label="Remove ${escapeDashboardHtml(ev.title)}" title="Remove event"><i class="fa-solid fa-trash-can"></i></button>` : ''}
                     </div>
                   </article>
                 `;
@@ -1175,85 +1713,61 @@ class EventsCalendar {
         html += `
           <div class="empty-state">
             <i class="fa-regular fa-calendar-xmark"></i>
-            <p>No events yet.</p>
+            <p>${this.filter === 'any' ? 'No events yet.' : 'No events for this audience.'}</p>
           </div>
         `;
       }
-      html += `</div></div>`; // Close schedule and card
+      html += '</div></div>';
     }
 
     this.container.innerHTML = html;
 
-    // Attach Toolbar Event Listeners
-    const prevBtn = this.container.querySelector('[data-cal-prev]');
-    const nextBtn = this.container.querySelector('[data-cal-next]');
-    const todayBtn = this.container.querySelector('[data-cal-today]');
-    if (prevBtn) prevBtn.addEventListener('click', () => this.prevMonth());
-    if (nextBtn) nextBtn.addEventListener('click', () => this.nextMonth());
-    if (todayBtn) todayBtn.addEventListener('click', () => this.today());
-
+    const findEvent = (id) => this.events.find((x) => x._id === id);
+    this.container.querySelector('[data-cal-prev]')?.addEventListener('click', () => this.prevMonth());
+    this.container.querySelector('[data-cal-next]')?.addEventListener('click', () => this.nextMonth());
+    this.container.querySelector('[data-cal-today]')?.addEventListener('click', () => this.today());
     this.container.querySelectorAll('[data-cal-view]').forEach((btn) => {
       btn.addEventListener('click', () => this.setView(btn.dataset.calView));
     });
+    this.container.querySelectorAll('[data-cal-filter]').forEach((btn) => {
+      btn.addEventListener('click', () => this.setFilter(btn.dataset.calFilter));
+    });
 
-    // Attach Event Pill Listeners (Calendar View)
+    // Event pills open details; clicking elsewhere in a day shows that day in the side panel.
     this.container.querySelectorAll('[data-event-id]').forEach((pill) => {
       pill.addEventListener('click', (e) => {
         e.stopPropagation();
-        const ev = this.events.find((x) => x._id === pill.dataset.eventId);
+        const ev = findEvent(pill.dataset.eventId);
         if (ev) this.showEventDetails(ev);
       });
     });
-
-    // Attach Date Cell Click Listeners
-    this.container.querySelectorAll('.calendar-cell.has-events').forEach((cell) => {
-      cell.addEventListener('click', () => {
-        const cellDate = new Date(cell.dataset.calDate);
-        const dayEvents = this.events.filter((e) => {
-          const d = this.getEventDate(e);
-          return (
-            d.getFullYear() === cellDate.getFullYear() &&
-            d.getMonth() === cellDate.getMonth() &&
-            d.getDate() === cellDate.getDate()
-          );
-        });
-        if (dayEvents.length === 1) {
-          this.showEventDetails(dayEvents[0]);
-        } else if (dayEvents.length > 1) {
-          // Show list of events on this date
-          Modal.open(`
-            <h3>Events on ${cellDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</h3>
-            <div style="display:flex; flex-direction:column; gap:10px; margin-top:14px;">
-              ${dayEvents.map((ev) => `
-                <div class="card" style="padding:14px; cursor:pointer;" data-sub-event="${ev._id}">
-                  <div style="font-weight:700; color:var(--primary); font-size:15px;">${ev.title}</div>
-                  <div style="font-size:12.5px; color:var(--ink-muted); margin-top:2px;">Audience: ${ev.audience}</div>
-                  ${ev.description ? `<p style="margin:4px 0 0; font-size:13px;">${ev.description}</p>` : ''}
-                </div>
-              `).join('')}
-            </div>
-          `);
-          document.querySelectorAll('[data-sub-event]').forEach((card) => {
-            card.addEventListener('click', () => {
-              const ev = this.events.find((x) => x._id === card.dataset.subEvent);
-              if (ev) this.showEventDetails(ev);
-            });
-          });
-        }
+    this.container.querySelectorAll('.calendar-cell').forEach((cell) => {
+      const select = () => this.selectDay(new Date(cell.dataset.calDate));
+      cell.addEventListener('click', select);
+      cell.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        select();
+      });
+    });
+    this.container.querySelectorAll('[data-agenda-event-id]').forEach((item) => {
+      item.addEventListener('click', () => {
+        const ev = findEvent(item.dataset.agendaEventId);
+        if (ev) this.showEventDetails(ev);
       });
     });
 
     // Attach List View Listeners
     this.container.querySelectorAll('[data-view-event-id]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        const ev = this.events.find((x) => x._id === btn.dataset.viewEventId);
+        const ev = findEvent(btn.dataset.viewEventId);
         if (ev) this.showEventDetails(ev);
       });
     });
     if (this.canManage && this.onDeleteEvent) {
       this.container.querySelectorAll('[data-del-event-id]').forEach((btn) => {
         btn.addEventListener('click', async () => {
-          const ev = this.events.find((x) => x._id === btn.dataset.delEventId);
+          const ev = findEvent(btn.dataset.delEventId);
           if (ev && confirm(`Are you sure you want to remove "${ev.title}"?`)) {
             await this.onDeleteEvent(ev._id);
           }
@@ -1470,7 +1984,7 @@ async function openEditStudentModal(student, onSaved, { teacherMode = false } = 
         </div>
         <div class="field">
           <label for="esClass">Class / Grade</label>
-          <input type="text" id="esClass" value="${escapeStudentModalValue(student.className || '')}" maxlength="80" placeholder="e.g. Sunbeams" />
+          <input type="text" id="esClass" list="managedClassOptions" value="${escapeStudentModalValue(student.className || '')}" maxlength="80" placeholder="e.g. Sunbeams" />
         </div>
       </div>
 
@@ -1674,3 +2188,161 @@ document.addEventListener('DOMContentLoaded', () => {
   initDashboardSync();
   if (document.getElementById('modalBackdrop')) Modal.init();
 });
+
+// ==========================================================================
+// ACADEMIC PROGRESS: SHARED RENDERING (Admin & Teacher)
+// ==========================================================================
+const PROGRESS_TYPE_LABELS = { activity: 'Activity', weekly: 'Weekly milestone', monthly: 'Monthly milestone' };
+const protectedImageCache = new Map();
+
+// Photos need the login token, so they are fetched and shown from a local blob URL.
+function fetchProtectedImage(path) {
+  if (!protectedImageCache.has(path)) {
+    const request = fetch(`${API_BASE}${path}`, { headers: { Authorization: `Bearer ${Auth.getToken()}` } })
+      .then((response) => {
+        if (!response.ok) throw new Error(response.status === 403 ? 'Not allowed' : 'Photo unavailable');
+        return response.blob();
+      })
+      .then((blob) => URL.createObjectURL(blob));
+    request.catch(() => protectedImageCache.delete(path));
+    protectedImageCache.set(path, request);
+  }
+  return protectedImageCache.get(path);
+}
+
+function hydrateProtectedImages(root) {
+  root.querySelectorAll('img[data-protected-src]').forEach((image) => {
+    const path = image.dataset.protectedSrc;
+    image.removeAttribute('data-protected-src');
+    image.closest('.progress-photo')?.classList.add('loading');
+    fetchProtectedImage(path)
+      .then((url) => { image.src = url; })
+      .catch(() => {
+        image.alt = 'Photo unavailable';
+        image.closest('.progress-photo')?.classList.add('failed');
+      })
+      .finally(() => image.closest('.progress-photo')?.classList.remove('loading'));
+  });
+  root.querySelectorAll('[data-photo-open]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const image = button.querySelector('img');
+      if (image && image.src) openImageLightbox(image.src, image.alt);
+    });
+  });
+}
+
+function openImageLightbox(src, alt = '') {
+  document.querySelector('.image-lightbox')?.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'image-lightbox';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-label', alt || 'Photo preview');
+  overlay.innerHTML = `
+    <button type="button" class="image-lightbox-close" aria-label="Close photo"><i class="fa-solid fa-xmark"></i></button>
+    <img alt="${escapeDashboardHtml(alt)}" />
+    ${alt ? `<p>${escapeDashboardHtml(alt)}</p>` : ''}`;
+  overlay.querySelector('img').src = src;
+  const previousFocus = document.activeElement;
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener('keydown', onKey, true);
+    previousFocus?.focus?.();
+  };
+  // Capture phase so Escape closes the photo before the dialog underneath.
+  const onKey = (event) => {
+    if (event.key !== 'Escape') return;
+    event.stopPropagation();
+    close();
+  };
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay || event.target.closest('.image-lightbox-close')) close();
+  });
+  document.addEventListener('keydown', onKey, true);
+  document.body.appendChild(overlay);
+  overlay.querySelector('.image-lightbox-close').focus();
+}
+
+function utcDateLabel(value, options = { month: 'short', day: 'numeric', year: 'numeric' }) {
+  return value ? new Date(value).toLocaleDateString(undefined, { ...options, timeZone: 'UTC' }) : '';
+}
+
+function progressPeriodLabel(entry) {
+  if (entry.entryType === 'monthly' && entry.periodStart) return utcDateLabel(entry.periodStart, { month: 'long', year: 'numeric' });
+  if (entry.entryType === 'weekly' && entry.periodStart) {
+    return `Week of ${utcDateLabel(entry.periodStart, { month: 'short', day: 'numeric' })} – ${utcDateLabel(entry.periodEnd)}`;
+  }
+  return utcDateLabel(entry.date);
+}
+
+function isCurrentProgressPeriod(entry) {
+  if (!entry.periodStart || !entry.periodEnd) return false;
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  return new Date(entry.periodStart).toISOString().slice(0, 10) <= today && today <= new Date(entry.periodEnd).toISOString().slice(0, 10);
+}
+
+function studentInitials(name = '') {
+  return String(name).trim().split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0].toUpperCase()).join('') || '?';
+}
+
+// Prominent "whose record is this" header.
+function studentProgressHeaderHtml(student, entries = [], extraHtml = '') {
+  const milestones = entries.filter((entry) => entry.entryType === 'weekly' || entry.entryType === 'monthly').length;
+  const photos = entries.reduce((total, entry) => total + (entry.attachments || []).length, 0);
+  return `
+    <div class="student-progress-header">
+      <div class="student-avatar" aria-hidden="true">${escapeDashboardHtml(studentInitials(student.name))}</div>
+      <div class="student-progress-identity">
+        <span class="student-progress-eyebrow">Academic progress record</span>
+        <h2>${escapeDashboardHtml(student.name)}</h2>
+        <p>${escapeDashboardHtml(student.className || 'Unassigned')}${student.studentId ? ` · ID ${escapeDashboardHtml(student.studentId)}` : ''}${student.teacher?.name ? ` · Teacher: ${escapeDashboardHtml(student.teacher.name)}` : ''}</p>
+      </div>
+      <div class="student-progress-stats">
+        <span><strong>${entries.length}</strong> records</span>
+        <span><strong>${milestones}</strong> milestones</span>
+        <span><strong>${photos}</strong> photos</span>
+      </div>
+      ${extraHtml}
+    </div>`;
+}
+
+function progressPhotoGridHtml(entry) {
+  const attachments = entry.attachments || [];
+  if (!attachments.length) return '';
+  return `<div class="progress-photo-grid">${attachments.map((attachment) => `
+    <button type="button" class="progress-photo" data-photo-open aria-label="Open photo ${escapeDashboardHtml(attachment.originalName)}">
+      <img data-protected-src="/progress/${escapeDashboardHtml(entry._id)}/attachments/${escapeDashboardHtml(attachment._id)}" alt="${escapeDashboardHtml(attachment.originalName)}" loading="lazy" />
+    </button>`).join('')}</div>`;
+}
+
+function progressEntryCardHtml(entry, { actionsHtml = '' } = {}) {
+  const type = entry.entryType || 'activity';
+  const current = isCurrentProgressPeriod(entry);
+  const field = (label, value) => (value ? `<p><strong>${label}:</strong> ${escapeDashboardHtml(value)}</p>` : '');
+  const title = entry.milestone || entry.activity || 'Progress record';
+  return `
+    <article class="progress-entry progress-entry-${type} ${current ? 'is-current' : ''}">
+      <div class="progress-entry-heading">
+        <div>
+          <div class="progress-entry-tags">
+            <span class="progress-type-badge ${type}">${PROGRESS_TYPE_LABELS[type] || 'Activity'}</span>
+            ${current ? `<span class="progress-type-badge current">This ${type === 'weekly' ? 'week' : 'month'}</span>` : ''}
+            ${entry.learningArea ? `<span class="progress-category">${escapeDashboardHtml(entry.learningArea)}</span>` : ''}
+          </div>
+          <h4>${escapeDashboardHtml(title)}</h4>
+          <div class="progress-entry-meta">${escapeDashboardHtml(progressPeriodLabel(entry))}${entry.teacher?.name ? ` · ${escapeDashboardHtml(entry.teacher.name)}` : ''}${entry.className ? ` · ${escapeDashboardHtml(entry.className)}` : ''}</div>
+        </div>
+        ${actionsHtml ? `<div class="progress-entry-actions">${actionsHtml}</div>` : ''}
+      </div>
+      ${entry.milestone && entry.activity ? field('Description', entry.activity) : ''}
+      ${field('Observations', entry.observations)}
+      ${field('Assessment result', entry.assessment)}
+      ${field('Teacher evaluation', entry.evaluation)}
+      ${field('Strengths', entry.strengths)}
+      ${field('Needs support', entry.areasForImprovement)}
+      ${field('Overall development', entry.overallDevelopment)}
+      ${field('Progress notes', entry.notes)}
+      ${progressPhotoGridHtml(entry)}
+    </article>`;
+}

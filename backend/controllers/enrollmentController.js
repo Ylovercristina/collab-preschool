@@ -2,6 +2,7 @@ const EnrollmentPeriod = require('../models/EnrollmentPeriod');
 const EnrollmentApplication = require('../models/EnrollmentApplication');
 const Student = require('../models/Student');
 const logActivity = require('../utils/logActivity');
+const { resolveClassAssignment } = require('../utils/classAssignment');
 const crypto = require('crypto');
 
 function normalizeStudentName(studentName) {
@@ -219,6 +220,12 @@ exports.reviewApplication = async (req, res) => {
         teacher: application.teacher,
         enrollmentApplication: application._id,
       };
+      // A requested class that is set up under Classes brings its teacher.
+      const resolvedClass = await resolveClassAssignment(studentData.className);
+      if (!resolvedClass.error) {
+        studentData.className = resolvedClass.className;
+        if (resolvedClass.teacher) studentData.teacher = resolvedClass.teacher;
+      }
       try {
         student = await Student.findOneAndUpdate(
           { enrollmentApplication: application._id },

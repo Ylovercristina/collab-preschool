@@ -54,6 +54,7 @@ function onPanelShown(panel) {
   if (panel === 'users') return loadUsers();
   if (panel === 'students') return loadStudents();
   if (panel === 'enrollment') return loadAdminEnrollment();
+  if (panel === 'classes') return window.loadClasses();
   if (panel === 'academic-progress') return window.loadAcademicProgress();
   if (panel === 'records') return window.loadManagedRecords();
   if (panel === 'fees') return loadFees();
@@ -1328,8 +1329,11 @@ async function loadEvents() {
     adminCalendar.setEvents(calendarEvents);
   }
   renderEventStatusList(events, document.getElementById('adminEventStatusList'));
+  loadGoogleCalendarStatus();
+  scheduleGoogleSyncRefresh(events);
   const pending = events.filter((event) => event.publicationStatus === 'pending' && event.reviewStatus !== 'publishing');
   document.getElementById('pendingEventsCount').textContent = `${pending.length} pending`;
+  document.getElementById('pendingEventsSection').hidden = !pending.length;
   document.getElementById('pendingEventsList').innerHTML = pending.length ? pending.map((event) => `
     <article class="event-review-card">
       <div><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><strong>${escapeDashboardHtml(event.title)}</strong><span class="badge status-badge-pending">Pending approval</span></div>
@@ -1366,7 +1370,7 @@ function openEventReview(event, decision) {
     <h3>${approving ? 'Approve and Publish Event' : 'Reject Event'}</h3>
     <p><strong>${escapeDashboardHtml(event.title)}</strong></p>
     <p>${escapeDashboardHtml(event.description)}</p>
-    <p><strong>Date:</strong> ${fmtDate(event.date)} · ${escapeDashboardHtml(event.time || '—')}<br><strong>Venue:</strong> ${escapeDashboardHtml(event.venue || '—')}</p>
+    <p><strong>Date:</strong> ${fmtDate(event.date)} · ${escapeDashboardHtml(event.time || '—')}<br><strong>Venue:</strong> ${escapeDashboardHtml(event.venue || '—')}${eventMapsUrl(event) ? ` · <a href="${escapeDashboardHtml(eventMapsUrl(event))}" target="_blank" rel="noopener noreferrer">View on Google Maps</a>` : ''}</p>
     <p><strong>Recipients:</strong> ${event.audience === 'parents' ? 'Parents' : (event.audience === 'teachers' ? 'Teachers' : 'Parents and teachers')}${event.targetType === 'classes' ? ` · ${escapeDashboardHtml((event.targetClasses || []).join(', '))}` : ' · All classes'}</p>
     <p class="field-hint">${approving ? 'Selected recipients will receive an in-app notification and an email after approval.' : 'Rejected events will not be shown or send notifications.'}</p>
     <div class="field"><label for="eventReviewNotes">Review note <span class="field-hint">(optional)</span></label><textarea id="eventReviewNotes" rows="2" maxlength="500"></textarea></div>
@@ -1396,6 +1400,189 @@ function openEventReview(event, decision) {
     }
   });
 }
+
+// ---------- Google Calendar sync ----------
+let googleSyncRefreshTimer = null;
+let googleSyncRefreshCount = 0;
+
+// Sync runs in the background after each save; refresh a few times so "Syncing…" settles.
+function scheduleGoogleSyncRefresh(events) {
+  const syncing = events.some((event) => event.googleCalendar?.status === 'pending');
+  if (!syncing) {
+    googleSyncRefreshCount = 0;
+    return;
+  }
+  if (googleSyncRefreshTimer || googleSyncRefreshCount >= 5) return;
+  googleSyncRefreshCount += 1;
+  googleSyncRefreshTimer = setTimeout(() => {
+    googleSyncRefreshTimer = null;
+    loadEvents().catch(() => {});
+  }, 4000);
+}
+
+let googleCalendarStatus = null;
+
+function googleCalendarState(status) {
+  if (!status) return ['unavailable', 'Unavailable'];
+  if (!status.configured) return ['off', 'Not set up'];
+  if (status.connected && status.needsReconnect) return ['error', 'Reconnect needed'];
+  if (status.connected && (status.counts?.failed || status.lastError)) return ['warning', 'Sync issues'];
+  if (status.connected) return ['ok', 'Connected'];
+  return ['off', 'Not connected'];
+}
+
+// Compact header button; details and actions open in a dialog.
+async function loadGoogleCalendarStatus() {
+  const button = document.getElementById('googleCalendarStatusBtn');
+  if (!button) return;
+  try {
+    ({ status: googleCalendarStatus } = await api.get('/calendar/google/status'));
+  } catch (err) {
+    googleCalendarStatus = null;
+  }
+  const [state, label] = googleCalendarState(googleCalendarStatus);
+  button.className = `gcal-status-btn ${state}`;
+  button.innerHTML = `<i class="fa-brands fa-google" aria-hidden="true"></i><span>Google Calendar</span><span class="gcal-status-dot" aria-hidden="true"></span><span class="gcal-status-label">${label}</span>`;
+  button.setAttribute('aria-label', `Google Calendar sync: ${label}`);
+  button.hidden = false;
+  const openCard = document.getElementById('googleCalendarCard');
+  if (openCard && googleCalendarStatus) renderGoogleCalendarCard(openCard, googleCalendarStatus);
+}
+
+document.getElementById('googleCalendarStatusBtn')?.addEventListener('click', () => {
+  Modal.open('<div id="googleCalendarCard" class="gcal-card" aria-live="polite"></div>');
+  const card = document.getElementById('googleCalendarCard');
+  if (googleCalendarStatus) renderGoogleCalendarCard(card, googleCalendarStatus);
+  else card.innerHTML = '<h3>Google Calendar sync</h3><div class="form-msg error" role="alert">Google Calendar status could not be loaded. The school calendar still works. Try again in a moment.</div>';
+});
+
+function renderGoogleCalendarCard(card, status) {
+  const [state, label] = googleCalendarState(status);
+  const badgeClass = { ok: 'approved', warning: 'pending', error: 'sync-failed' }[state] || 'sync-off';
+  const badge = `<span class="badge ${badgeClass}">${label}</span>`;
+
+  let body = '';
+  let actions = '';
+  if (!status.configured) {
+    body = `
+      <p class="gcal-meta">Copy published school events to a Google Calendar automatically. This needs a one-time setup on the server before an admin can connect an account.</p>
+      <details class="gcal-tech">
+        <summary>Setup details</summary>
+        <p>${escapeDashboardHtml(status.configurationError)} Follow "Google Calendar sync" in the project README, then restart the server.</p>
+      </details>`;
+  } else if (!status.connected) {
+    body = '<p class="gcal-meta">Connect a Google account to copy published school events to its calendar. The school calendar here works either way.</p>';
+    actions = '<button type="button" class="btn btn-primary btn-sm" data-gcal-action="connect"><i class="fa-brands fa-google" aria-hidden="true"></i> Connect Google Calendar</button>';
+  } else {
+    const counts = status.counts || {};
+    body = `
+      <p class="gcal-meta">Account: <strong>${escapeDashboardHtml(status.accountEmail || 'Google account')}</strong> · Calendar: <strong>${escapeDashboardHtml(status.calendarId)}</strong> <button type="button" class="gcal-link-btn" data-gcal-action="edit-calendar">Change</button> · Time zone: ${escapeDashboardHtml(status.timeZone)} · Default length: ${status.durationMinutes} min</p>
+      <form class="gcal-calendar-form" data-gcal-calendar-form hidden>
+        <label for="gcalCalendarId">Google Calendar ID</label>
+        <div class="gcal-calendar-row">
+          <input id="gcalCalendarId" maxlength="255" value="${escapeDashboardHtml(status.calendarId)}" placeholder="primary" />
+          <button type="submit" class="btn btn-primary btn-sm">Save</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-gcal-action="cancel-calendar">Cancel</button>
+        </div>
+        <div class="field-hint">Use "primary" or a calendar ID from Google Calendar › Settings › Integrate calendar.</div>
+      </form>
+      <p class="gcal-counts">${counts.synced || 0} synced · ${counts.failed || 0} failed · ${counts.pending || 0} syncing · ${counts.notSynced || 0} not synced${status.lastFullSyncAt ? ` · Last full sync ${escapeDashboardHtml(new Date(status.lastFullSyncAt).toLocaleString())}` : ''}</p>
+      ${status.pendingDeletions ? `<p class="gcal-meta">${status.pendingDeletions} deleted event${status.pendingDeletions === 1 ? '' : 's'} still to remove from Google Calendar. Use Sync now to retry.</p>` : ''}
+      ${status.lastError ? `<div class="form-msg error" role="alert">${escapeDashboardHtml(status.lastError)}</div>` : ''}`;
+    actions = `
+      ${status.needsReconnect
+    ? '<button type="button" class="btn btn-primary btn-sm" data-gcal-action="connect"><i class="fa-brands fa-google" aria-hidden="true"></i> Reconnect</button>'
+    : '<button type="button" class="btn btn-primary btn-sm" data-gcal-action="sync"><i class="fa-solid fa-rotate" aria-hidden="true"></i> Sync now</button>'}
+      <button type="button" class="btn btn-ghost btn-sm" data-gcal-action="disconnect">Disconnect</button>`;
+  }
+
+  card.innerHTML = `
+    <div class="gcal-title"><h3>Google Calendar sync</h3>${badge}</div>
+    ${body}
+    ${actions ? `<div class="gcal-actions">${actions}</div>` : ''}`;
+
+  const calendarForm = card.querySelector('[data-gcal-calendar-form]');
+  card.querySelectorAll('[data-gcal-action]').forEach((button) => button.addEventListener('click', () => {
+    handleGoogleCalendarAction(button.dataset.gcalAction, button, calendarForm);
+  }));
+  calendarForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const button = calendarForm.querySelector('button[type="submit"]');
+    setButtonLoading(button, true, 'Saving');
+    try {
+      const { status: updated } = await api.patch('/calendar/google/settings', { calendarId: document.getElementById('gcalCalendarId').value.trim() });
+      showToast('Calendar saved. Use Sync now to copy events to it.', 'success');
+      renderGoogleCalendarCard(card, updated);
+    } catch (err) {
+      showToast(err.message, 'error');
+      setButtonLoading(button, false);
+    }
+  });
+}
+
+async function handleGoogleCalendarAction(action, button, calendarForm) {
+  if (action === 'edit-calendar' || action === 'cancel-calendar') {
+    calendarForm.hidden = action === 'cancel-calendar';
+    if (!calendarForm.hidden) document.getElementById('gcalCalendarId').focus();
+    return;
+  }
+  if (action === 'disconnect' && !confirm('Disconnect Google Calendar? Events already copied to Google Calendar will stay there, and new changes will stop syncing.')) return;
+  setButtonLoading(button, true, { connect: 'Opening Google', sync: 'Syncing', disconnect: 'Disconnecting' }[action]);
+  try {
+    if (action === 'connect') {
+      const { authorizationUrl } = await api.post('/calendar/google/connect', {});
+      window.location.assign(authorizationUrl);
+      return;
+    }
+    if (action === 'sync') {
+      await runGoogleCalendarSync();
+    } else if (action === 'disconnect') {
+      const { message } = await api.del('/calendar/google/connection');
+      showToast(message, 'success');
+    }
+    await loadEvents();
+  } catch (err) {
+    showToast(err.message, 'error');
+    setButtonLoading(button, false);
+  }
+}
+
+async function runGoogleCalendarSync() {
+  const { summary } = await api.post('/calendar/google/sync', {});
+  const parts = [`${summary.synced} synced`];
+  if (summary.removed) parts.push(`${summary.removed} removed`);
+  if (summary.deletionsRetried) parts.push(`${summary.deletionsRetried} deleted event${summary.deletionsRetried === 1 ? '' : 's'} cleaned up`);
+  if (summary.failed || summary.deletionsFailed) parts.push(`${summary.failed + summary.deletionsFailed} failed`);
+  showToast(`Google Calendar: ${parts.join(', ')}.`, summary.failed || summary.deletionsFailed ? 'error' : 'success');
+}
+
+// Result of the Google consent screen, passed back by the backend redirect.
+(async function handleGoogleCalendarRedirect() {
+  const params = new URLSearchParams(window.location.search);
+  const result = params.get('googleCalendar');
+  if (!result) return;
+  params.delete('googleCalendar');
+  window.history.replaceState({}, document.title, `${window.location.pathname}${params.toString() ? `?${params}` : ''}`);
+  const messages = {
+    cancelled: ['Google Calendar connection was cancelled.', 'info'],
+    'missing-scope': ['Calendar permission was not granted. Connect again and allow calendar access.', 'error'],
+    'invalid-state': ['The connection link expired or was already used. Try connecting again.', 'error'],
+    forbidden: ['Only an admin can connect Google Calendar.', 'error'],
+    failed: ['Google Calendar could not be connected. Try again.', 'error'],
+  };
+  if (result !== 'connected') {
+    const [message, type] = messages[result] || messages.failed;
+    showToast(message, type);
+    return;
+  }
+  showToast('Google Calendar connected. Copying published events…', 'success');
+  try {
+    await runGoogleCalendarSync();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+  if (document.getElementById('panel-events')?.classList.contains('active')) await loadEvents();
+})();
 
 document.getElementById('addEventBtn').addEventListener('click', async () => {
   try {

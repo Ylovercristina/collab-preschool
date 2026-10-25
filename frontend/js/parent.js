@@ -289,7 +289,7 @@ function bindFullNotificationControls(container, notifications, renderList) {
     const alert = notification.alert;
     const details = event ? `
       <p>${escapeParentMessage(event.description || notification.message)}</p>
-      <p><strong>Date:</strong> ${fmtDate(event.date)}<br><strong>Time:</strong> ${escapeParentMessage(event.time || '—')}<br><strong>Venue:</strong> ${escapeParentMessage(event.venue || '—')}</p>
+      <p><strong>Date:</strong> ${fmtDate(event.date)}<br><strong>Time:</strong> ${escapeParentMessage(event.time || '—')}<br><strong>Venue:</strong> ${escapeParentMessage(event.venue || '—')}${eventMapsUrl(event) ? ` · <a href="${escapeParentMessage(eventMapsUrl(event))}" target="_blank" rel="noopener noreferrer">View on Google Maps</a>` : ''}</p>
     ` : alert ? `
       <p>${escapeParentMessage(notification.message)}</p>
       ${alert.safetyInstructions ? `<p><strong>Safety instructions:</strong> ${escapeParentMessage(alert.safetyInstructions)}</p>` : ''}

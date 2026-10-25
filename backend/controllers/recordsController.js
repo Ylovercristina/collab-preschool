@@ -6,6 +6,7 @@ const Student = require('../models/Student');
 const User = require('../models/User');
 const { uploadDirectory } = require('../middleware/recordUpload');
 const logActivity = require('../utils/logActivity');
+const { applyClassToStudentData } = require('../utils/classAssignment');
 
 const studentFields = ['name', 'className', 'birthdate', 'enrollmentDate', 'guardianName', 'guardianPhone', 'parent', 'teacher', 'notes'];
 const teacherFields = ['name', 'phone', 'assignedClass', 'employmentStartDate', 'employmentType'];
@@ -67,6 +68,8 @@ exports.createStudent = async (req, res) => {
   try {
     const data = selectedFields(req.body, studentFields);
     if (!data.name || !data.className) return res.status(400).json({ message: 'Student name and class or section are required.' });
+    const classError = await applyClassToStudentData(data);
+    if (classError) return res.status(400).json({ message: classError });
     const referenceError = await validateStudentReferences(data);
     if (referenceError) return res.status(400).json({ message: referenceError });
     const student = await Student.create(data);
@@ -85,6 +88,8 @@ exports.updateStudent = async (req, res) => {
     const data = selectedFields(req.body, studentFields);
     if (data.name === '' || (data.name === undefined && !student.name)) return res.status(400).json({ message: 'Student name is required.' });
     if (data.className === '' || (data.className === undefined && !student.className)) return res.status(400).json({ message: 'Student class or section is required.' });
+    const classError = await applyClassToStudentData(data, student.className);
+    if (classError) return res.status(400).json({ message: classError });
     const referenceError = await validateStudentReferences(data);
     if (referenceError) return res.status(400).json({ message: referenceError });
     Object.assign(student, data);
