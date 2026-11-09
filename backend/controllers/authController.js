@@ -5,6 +5,10 @@ const bcrypt = require('bcryptjs');
 const { OAuth2Client } = require('google-auth-library');
 const User = require('../models/User');
 const AuthSettings = require('../models/AuthSettings');
+const GoogleOAuthClient = require('../models/GoogleOAuthClient');
+const CalendarIntegration = require('../models/CalendarIntegration');
+const PersonalGoogleCalendarConnection = require('../models/PersonalGoogleCalendarConnection');
+const googleOAuthClients = require('../services/googleOAuthClients');
 const logActivity = require('../utils/logActivity');
 const { sendEmail, verifyEmailTransport, emailTransportError } = require('../services/emailService');
 
@@ -19,7 +23,12 @@ const GOOGLE_CAPTCHA_COOKIE = 'play_google_captcha';
 const GOOGLE_STATE_TTL_MS = 10 * 60 * 1000;
 const GOOGLE_HANDOFF_TTL_MS = 2 * 60 * 1000;
 const GOOGLE_CAPTCHA_TTL_MS = 10 * 60 * 1000;
-const DEFAULT_AUTH_SETTINGS = { googleAuthEnabled: true, captchaEnabled: true };
+const DEFAULT_AUTH_SETTINGS = {
+  googleAuthEnabled: true,
+  captchaEnabled: true,
+  customGoogleClientEnabled: false,
+  activeGoogleOAuthClientId: googleOAuthClients.DEFAULT_CLIENT_ID,
+};
 function logResetDebug(...args) {
   if (process.env.NODE_ENV !== 'production') console.log(...args);
 }
@@ -131,12 +140,18 @@ function resendCooldownSeconds(user) {
   return Math.max(0, Math.ceil((user.passwordResetOtpSentAt.getTime() + RESET_OTP_COOLDOWN_MS - Date.now()) / 1000));
 }
 
-function createGoogleOAuthClient() {
-  const { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_CALLBACK_URL } = process.env;
-  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !GOOGLE_CALLBACK_URL) {
-    throw new Error('Google OAuth environment variables are not configured.');
-  }
-  return new OAuth2Client(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_CALLBACK_URL);
+function activeGoogleOAuthClientId(settings) {
+  if (settings.activeGoogleOAuthClientId) return settings.activeGoogleOAuthClientId;
+  return settings.customGoogleClientEnabled === true
+    ? googleOAuthClients.ENV_CUSTOM_CLIENT_ID
+    : googleOAuthClients.DEFAULT_CLIENT_ID;
+}
+
+async function createGoogleOAuthClient(selectionId, settings = {}) {
+  const credentials = await googleOAuthClients.resolveClient(selectionId, settings);
+  const callbackUrl = String(process.env.GOOGLE_CALLBACK_URL || '').trim();
+  if (!callbackUrl) throw new Error('GOOGLE_CALLBACK_URL is not configured.');
+  return new OAuth2Client(credentials.clientId, credentials.clientSecret, callbackUrl);
 }
 
 function recaptchaSiteKey() {
@@ -156,9 +171,12 @@ async function loadAuthSettings() {
 }
 
 function authSettingsPayload(settings) {
+  const activeClientId = activeGoogleOAuthClientId(settings);
   return {
     googleAuthEnabled: settings.googleAuthEnabled === true,
     captchaEnabled: settings.captchaEnabled === true,
+    customGoogleClientEnabled: activeClientId !== googleOAuthClients.DEFAULT_CLIENT_ID,
+    activeGoogleOAuthClientId: activeClientId,
     captchaConfigured: Boolean(recaptchaSiteKey() && recaptchaSecretKey()),
   };
 }
@@ -221,8 +239,8 @@ function googleStateMac(payload) {
   return crypto.createHmac('sha256', process.env.JWT_SECRET).update(payload).digest('hex');
 }
 
-function createGoogleState(mode) {
-  const payload = `${mode}.${Date.now()}.${crypto.randomBytes(24).toString('hex')}`;
+function createGoogleState(mode, clientSelectionId) {
+  const payload = `${mode}.${clientSelectionId}.${Date.now()}.${crypto.randomBytes(24).toString('hex')}`;
   return `${payload}.${googleStateMac(payload)}`;
 }
 
@@ -238,16 +256,32 @@ function validateGoogleState(state, cookieState) {
   if (stateBuffer.length !== cookieBuffer.length || !crypto.timingSafeEqual(stateBuffer, cookieBuffer)) return null;
 
   const parts = state.split('.');
-  if (parts.length !== 4) return null;
-  const [mode, timestampValue, nonce, signature] = parts;
+  if (parts.length === 4) {
+    const [mode, timestampValue, nonce, signature] = parts;
+    const timestamp = Number(timestampValue);
+    if (!['login', 'signup'].includes(mode) || !Number.isFinite(timestamp)
+      || !/^[a-f0-9]{48}$/.test(nonce)
+      || Date.now() - timestamp < 0
+      || Date.now() - timestamp > GOOGLE_STATE_TTL_MS) return null;
+    const expectedSignature = Buffer.from(googleStateMac(parts.slice(0, 3).join('.')), 'hex');
+    const providedSignature = Buffer.from(signature, 'hex');
+    if (expectedSignature.length !== providedSignature.length
+      || !crypto.timingSafeEqual(expectedSignature, providedSignature)) return null;
+    return { mode, clientSelectionId: null };
+  }
+  if (parts.length !== 5) return null;
+  const [mode, clientSelectionId, timestampValue, nonce, signature] = parts;
   const timestamp = Number(timestampValue);
-  if (!['login', 'signup'].includes(mode) || !Number.isFinite(timestamp) || !/^[a-f0-9]{48}$/.test(nonce)) return null;
+  if (!['login', 'signup'].includes(mode)
+    || !/^(default|env-custom|[a-f\d]{24})$/i.test(clientSelectionId)
+    || !Number.isFinite(timestamp)
+    || !/^[a-f0-9]{48}$/.test(nonce)) return null;
   if (Date.now() - timestamp < 0 || Date.now() - timestamp > GOOGLE_STATE_TTL_MS) return null;
 
-  const expectedSignature = Buffer.from(googleStateMac(parts.slice(0, 3).join('.')), 'hex');
+  const expectedSignature = Buffer.from(googleStateMac(parts.slice(0, 4).join('.')), 'hex');
   const providedSignature = Buffer.from(signature, 'hex');
   if (expectedSignature.length !== providedSignature.length || !crypto.timingSafeEqual(expectedSignature, providedSignature)) return null;
-  return mode;
+  return { mode, clientSelectionId };
 }
 
 function setGoogleStateCookie(res, state, clear = false) {
@@ -548,20 +582,170 @@ exports.getAuthSettings = async (req, res) => {
   }
 };
 
+exports.listGoogleOAuthClients = async (req, res) => {
+  try {
+    const settings = await AuthSettings.findOne({ key: 'global' }) || DEFAULT_AUTH_SETTINGS;
+    const catalog = await googleOAuthClients.listClients(settings);
+    const options = catalog.options.map((client) => ({
+      ...client,
+      selected: client.id === activeGoogleOAuthClientId(settings),
+    }));
+    res.json({
+      options,
+      clients: catalog.clients,
+      activeGoogleOAuthClientId: activeGoogleOAuthClientId(settings),
+    });
+  } catch (err) {
+    console.error('[auth] Could not load Google OAuth clients:', err.message);
+    res.status(503).json({ message: 'Could not load Google OAuth clients.' });
+  }
+};
+
+function googleOAuthClientInput(body, { requireSecret = true } = {}) {
+  const label = typeof body.label === 'string' ? body.label.trim() : '';
+  const clientId = typeof body.clientId === 'string' ? body.clientId.trim() : '';
+  const clientSecret = typeof body.clientSecret === 'string' ? body.clientSecret.trim() : '';
+  if (!label || label.length > 80) throw new Error('Enter a client name of 1 to 80 characters.');
+  if (!googleOAuthClients.validClientId(clientId)) {
+    throw new Error('Enter a valid Google OAuth Client ID ending in .apps.googleusercontent.com.');
+  }
+  if (requireSecret && !clientSecret) throw new Error('Enter the Google OAuth Client Secret.');
+  if (clientSecret.length > 2048) throw new Error('Google OAuth Client Secret is too long.');
+  return { label, clientId, clientSecret };
+}
+
+exports.addGoogleOAuthClient = async (req, res) => {
+  try {
+    const input = googleOAuthClientInput(req.body || {});
+    if (await googleOAuthClients.findDuplicate(input.clientId, null, await loadAuthSettings())) {
+      return res.status(409).json({ message: 'That Google OAuth Client ID is already configured.' });
+    }
+    const client = await GoogleOAuthClient.create({
+      label: input.label,
+      clientId: input.clientId,
+      normalizedClientId: input.clientId.toLowerCase(),
+      encryptedClientSecret: googleOAuthClients.encryptSecret(input.clientSecret),
+    });
+    res.status(201).json({ message: 'Google OAuth client added.', client: googleOAuthClients.publicManagedClient(client) });
+  } catch (err) {
+    if (err.code === 11000) return res.status(409).json({ message: 'That Google OAuth Client ID is already configured.' });
+    if (err.name === 'ValidationError' || err.message.startsWith('Enter ') || err.message.startsWith('Google OAuth')) {
+      return res.status(400).json({ message: err.message });
+    }
+    console.error('[auth] Could not add Google OAuth client:', err.message);
+    res.status(503).json({ message: 'Could not add Google OAuth client.' });
+  }
+};
+
+exports.updateGoogleOAuthClient = async (req, res) => {
+  try {
+    if (!/^[a-f\d]{24}$/i.test(req.params.id)) return res.status(404).json({ message: 'Google OAuth client not found.' });
+    const client = await GoogleOAuthClient.findById(req.params.id).select('+encryptedClientSecret');
+    if (!client) return res.status(404).json({ message: 'Google OAuth client not found.' });
+    const input = googleOAuthClientInput(req.body || {}, { requireSecret: false });
+    if (await googleOAuthClients.findDuplicate(input.clientId, client._id, await loadAuthSettings())) {
+      return res.status(409).json({ message: 'That Google OAuth Client ID is already configured.' });
+    }
+    client.label = input.label;
+    client.clientId = input.clientId;
+    client.normalizedClientId = input.clientId.toLowerCase();
+    if (input.clientSecret) {
+      client.encryptedClientSecret = googleOAuthClients.encryptSecret(input.clientSecret);
+    }
+    await client.save();
+    res.json({ message: 'Google OAuth client updated.', client: googleOAuthClients.publicManagedClient(client) });
+  } catch (err) {
+    if (err.code === 11000) return res.status(409).json({ message: 'That Google OAuth Client ID is already configured.' });
+    if (err.name === 'ValidationError' || err.message.startsWith('Enter ') || err.message.startsWith('Google OAuth')) {
+      return res.status(400).json({ message: err.message });
+    }
+    console.error('[auth] Could not update Google OAuth client:', err.message);
+    res.status(503).json({ message: 'Could not update Google OAuth client.' });
+  }
+};
+
+exports.deleteGoogleOAuthClient = async (req, res) => {
+  try {
+    if (!/^[a-f\d]{24}$/i.test(req.params.id)) return res.status(404).json({ message: 'Google OAuth client not found.' });
+    const settings = await loadAuthSettings();
+    if (activeGoogleOAuthClientId(settings).toLowerCase() === req.params.id.toLowerCase()) {
+      return res.status(409).json({ message: 'Select a different active Google OAuth client before deleting this one.' });
+    }
+    const [schoolConnection, personalConnection] = await Promise.all([
+      CalendarIntegration.exists({
+        $or: [
+          { connected: true, oauthClientSelectionId: req.params.id },
+          { pendingOAuthClientSelectionId: req.params.id, pendingStateExpires: { $gt: new Date() } },
+        ],
+      }),
+      PersonalGoogleCalendarConnection.exists({
+        $or: [
+          { connected: true, oauthClientSelectionId: req.params.id },
+          { pendingOAuthClientSelectionId: req.params.id, pendingStateExpires: { $gt: new Date() } },
+        ],
+      }),
+    ]);
+    if (schoolConnection || personalConnection) {
+      return res.status(409).json({ message: 'This client is used by a connected or pending Google Calendar. Disconnect or reconnect that calendar before removing the client.' });
+    }
+    const client = await GoogleOAuthClient.findByIdAndDelete(req.params.id);
+    if (!client) return res.status(404).json({ message: 'Google OAuth client not found.' });
+    res.json({ message: 'Google OAuth client removed.' });
+  } catch (err) {
+    console.error('[auth] Could not remove Google OAuth client:', err.message);
+    res.status(503).json({ message: 'Could not remove Google OAuth client.' });
+  }
+};
+
 // PATCH /api/auth/settings (admin only)
 exports.updateAuthSettings = async (req, res) => {
-  const { googleAuthEnabled, captchaEnabled } = req.body || {};
+  const body = req.body || {};
+  const { googleAuthEnabled, captchaEnabled } = body;
+  const hasActiveClient = Object.prototype.hasOwnProperty.call(body, 'activeGoogleOAuthClientId');
+  const hasLegacyClientToggle = Object.prototype.hasOwnProperty.call(body, 'customGoogleClientEnabled');
+  const requestedActiveClientId = hasActiveClient
+    ? body.activeGoogleOAuthClientId
+    : hasLegacyClientToggle
+      ? body.customGoogleClientEnabled === true
+        ? googleOAuthClients.ENV_CUSTOM_CLIENT_ID
+        : googleOAuthClients.DEFAULT_CLIENT_ID
+      : undefined;
   if (typeof googleAuthEnabled !== 'boolean' || typeof captchaEnabled !== 'boolean') {
     return res.status(400).json({ message: 'Google Authentication and CAPTCHA values must be true or false.' });
+  }
+  if (hasLegacyClientToggle && typeof body.customGoogleClientEnabled !== 'boolean') {
+    return res.status(400).json({ message: 'Custom Google client selection must be true or false.' });
+  }
+  if (typeof requestedActiveClientId !== 'undefined'
+    && (typeof requestedActiveClientId !== 'string' || requestedActiveClientId.length > 64)) {
+    return res.status(400).json({ message: 'Select a valid Google OAuth client.' });
   }
   if (captchaEnabled && (!recaptchaSiteKey() || !recaptchaSecretKey())) {
     return res.status(400).json({ message: 'CAPTCHA cannot be enabled until its site and secret keys are configured.' });
   }
 
   try {
+    if (typeof requestedActiveClientId !== 'undefined') {
+      try {
+        const settings = await loadAuthSettings();
+        if (googleAuthEnabled) {
+          await googleOAuthClients.resolveClient(requestedActiveClientId, settings);
+        } else if (!await googleOAuthClients.clientExists(requestedActiveClientId, settings)) {
+          return res.status(400).json({ message: 'Select a Google OAuth client that is available in the catalog.' });
+        }
+      } catch (err) {
+        return res.status(400).json({ message: err.message });
+      }
+    }
+
+    const updates = { googleAuthEnabled, captchaEnabled };
+    if (typeof requestedActiveClientId !== 'undefined') {
+      updates.activeGoogleOAuthClientId = requestedActiveClientId;
+      updates.customGoogleClientEnabled = requestedActiveClientId !== googleOAuthClients.DEFAULT_CLIENT_ID;
+    }
     const settings = await AuthSettings.findOneAndUpdate(
       { key: 'global' },
-      { $set: { googleAuthEnabled, captchaEnabled } },
+      { $set: updates },
       { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true }
     );
     res.json({ message: 'Authentication security settings saved.', settings: authSettingsPayload(settings) });
@@ -588,8 +772,10 @@ exports.googleStart = async (req, res) => {
   }
 
   try {
-    const state = createGoogleState(mode);
-    const authorizationUrl = createGoogleOAuthClient().generateAuthUrl({
+    const clientSelectionId = activeGoogleOAuthClientId(settings);
+    const googleClient = await createGoogleOAuthClient(clientSelectionId, settings);
+    const state = createGoogleState(mode, clientSelectionId);
+    const authorizationUrl = googleClient.generateAuthUrl({
       access_type: 'online',
       prompt: 'login',
       scope: ['profile', 'email'],
@@ -641,8 +827,10 @@ exports.googleStartWithCaptcha = async (req, res) => {
   }
 
   try {
-    const state = createGoogleState('login');
-    const authorizationUrl = createGoogleOAuthClient().generateAuthUrl({
+    const clientSelectionId = activeGoogleOAuthClientId(settings);
+    const googleClient = await createGoogleOAuthClient(clientSelectionId, settings);
+    const state = createGoogleState('login', clientSelectionId);
+    const authorizationUrl = googleClient.generateAuthUrl({
       access_type: 'online',
       prompt: 'login',
       scope: ['profile', 'email'],
@@ -659,13 +847,14 @@ exports.googleStartWithCaptcha = async (req, res) => {
 
 // GET /api/auth/google/callback
 exports.googleCallback = async (req, res) => {
-  let mode;
+  let googleState;
   try {
-    mode = validateGoogleState(req.query.state, requestCookie(req, GOOGLE_STATE_COOKIE));
+    googleState = validateGoogleState(req.query.state, requestCookie(req, GOOGLE_STATE_COOKIE));
   } catch (err) {
     return redirectGoogleError(res, 'invalid-state');
   }
-  if (!mode) return redirectGoogleError(res, 'invalid-state');
+  if (!googleState) return redirectGoogleError(res, 'invalid-state');
+  const { mode } = googleState;
   let settings;
   try {
     settings = await loadAuthSettings();
@@ -685,7 +874,8 @@ exports.googleCallback = async (req, res) => {
   if (typeof req.query.code !== 'string') return redirectGoogleError(res, 'failed');
 
   try {
-    const googleClient = createGoogleOAuthClient();
+    const clientSelectionId = googleState.clientSelectionId || activeGoogleOAuthClientId(settings);
+    const googleClient = await createGoogleOAuthClient(clientSelectionId, settings);
     const { tokens } = await googleClient.getToken(req.query.code);
     googleClient.setCredentials(tokens);
     const { data: profile } = await googleClient.request({ url: 'https://www.googleapis.com/oauth2/v2/userinfo' });

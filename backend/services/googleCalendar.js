@@ -1,7 +1,13 @@
 const crypto = require('crypto');
 const { OAuth2Client } = require('google-auth-library');
+const AuthSettings = require('../models/AuthSettings');
 const CalendarIntegration = require('../models/CalendarIntegration');
 const Event = require('../models/Event');
+const PersonalGoogleCalendarConnection = require('../models/PersonalGoogleCalendarConnection');
+const PersonalGoogleCalendarEvent = require('../models/PersonalGoogleCalendarEvent');
+const User = require('../models/User');
+const googleOAuthClients = require('./googleOAuthClients');
+const { isEventVisibleToUser } = require('./eventVisibility');
 const { eventMapsUrl } = require('../utils/eventMaps');
 
 const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
@@ -15,6 +21,7 @@ const DEFAULT_DURATION_MINUTES = 60;
 const RECONNECT_MESSAGE = 'Google Calendar access expired or was revoked. An admin needs to reconnect Google Calendar.';
 
 const syncQueues = new Map();
+const personalSyncQueues = new Map();
 
 function schoolTimeZone() {
   const timeZone = String(process.env.SCHOOL_TIME_ZONE || '').trim() || DEFAULT_TIME_ZONE;
@@ -39,10 +46,20 @@ function configurationError() {
   return missing.length ? `Missing ${missing.join(', ')} in backend/.env.` : '';
 }
 
-function oauthClient() {
+async function activeOAuthClientSelectionId() {
+  const settings = await AuthSettings.findOne({ key: 'global' }).select('activeGoogleOAuthClientId customGoogleClientEnabled');
+  if (settings && settings.activeGoogleOAuthClientId) return settings.activeGoogleOAuthClientId;
+  return settings && settings.customGoogleClientEnabled
+    ? googleOAuthClients.ENV_CUSTOM_CLIENT_ID
+    : googleOAuthClients.DEFAULT_CLIENT_ID;
+}
+
+async function oauthClient(selectionId = googleOAuthClients.DEFAULT_CLIENT_ID) {
+  const settings = await AuthSettings.findOne({ key: 'global' }) || {};
+  const credentials = await googleOAuthClients.resolveClient(selectionId, settings);
   return new OAuth2Client(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET,
+    credentials.clientId,
+    credentials.clientSecret,
     process.env.GOOGLE_CALENDAR_CALLBACK_URL
   );
 }
@@ -190,7 +207,7 @@ async function authorizedClient() {
     await markReconnectNeeded();
     throw new CalendarSyncError(RECONNECT_MESSAGE, { reconnect: true });
   }
-  const client = oauthClient();
+  const client = await oauthClient(integration.oauthClientSelectionId || googleOAuthClients.DEFAULT_CLIENT_ID);
   client.setCredentials({ refresh_token: refreshToken });
   return { integration, client };
 }
@@ -200,7 +217,13 @@ async function calendarRequest(client, options) {
     const response = await client.request({ timeout: REQUEST_TIMEOUT_MS, ...options });
     return response.data;
   } catch (err) {
-    const syncError = toSyncError(err);
+    const mappedError = toSyncError(err);
+    const syncError = mappedError.reconnect
+      ? new CalendarSyncError('Your Google Calendar access expired or was revoked. Reconnect your account.', {
+        status: mappedError.status,
+        reconnect: true,
+      })
+      : mappedError;
     if (syncError.reconnect) await markReconnectNeeded();
     throw syncError;
   }
@@ -379,11 +402,18 @@ async function syncAll() {
 
 async function createAuthorizationUrl(userId) {
   const state = crypto.randomBytes(32).toString('hex');
+  const clientSelectionId = await activeOAuthClientSelectionId();
+  const client = await oauthClient(clientSelectionId);
   await getIntegration();
   await CalendarIntegration.updateOne({ key: 'google' }, {
-    $set: { pendingStateHash: hashState(state), pendingStateExpires: new Date(Date.now() + STATE_TTL_MS), pendingStateUser: userId },
+    $set: {
+      pendingStateHash: hashState(state),
+      pendingStateExpires: new Date(Date.now() + STATE_TTL_MS),
+      pendingStateUser: userId,
+      pendingOAuthClientSelectionId: clientSelectionId,
+    },
   });
-  return oauthClient().generateAuthUrl({
+  return client.generateAuthUrl({
     access_type: 'offline',
     // consent guarantees Google returns a refresh token on every connect.
     prompt: 'consent',
@@ -399,12 +429,15 @@ async function consumeState(state) {
     { key: 'google', pendingStateHash: hashState(state), pendingStateExpires: { $gt: new Date() } },
     { $set: { pendingStateHash: '', pendingStateExpires: null, pendingStateUser: null } },
     { projection: { pendingStateUser: 1 } }
-  );
-  return integration ? integration.pendingStateUser : null;
+  ).select('+pendingOAuthClientSelectionId');
+  return integration ? {
+    userId: integration.pendingStateUser,
+    clientSelectionId: integration.pendingOAuthClientSelectionId || googleOAuthClients.DEFAULT_CLIENT_ID,
+  } : null;
 }
 
-async function completeConnection(code, userId) {
-  const client = oauthClient();
+async function completeConnection(code, userId, clientSelectionId = googleOAuthClients.DEFAULT_CLIENT_ID) {
+  const client = await oauthClient(clientSelectionId);
   const { tokens } = await client.getToken(code);
   const grantedScopes = String(tokens.scope || '').split(/\s+/);
   if (!grantedScopes.includes(CALENDAR_SCOPE)) {
@@ -413,7 +446,7 @@ async function completeConnection(code, userId) {
   if (!tokens.refresh_token) throw new CalendarSyncError('Google did not return offline access. Try connecting again.');
   let accountEmail = '';
   if (tokens.id_token) {
-    const ticket = await client.verifyIdToken({ idToken: tokens.id_token, audience: process.env.GOOGLE_CLIENT_ID });
+    const ticket = await client.verifyIdToken({ idToken: tokens.id_token, audience: client.clientId });
     accountEmail = (ticket.getPayload() || {}).email || '';
   }
   await CalendarIntegration.updateOne({ key: 'google' }, {
@@ -421,6 +454,7 @@ async function completeConnection(code, userId) {
       connected: true,
       needsReconnect: false,
       accountEmail,
+      oauthClientSelectionId: clientSelectionId,
       encryptedRefreshToken: encryptToken(tokens.refresh_token),
       connectedBy: userId,
       connectedAt: new Date(),
@@ -434,7 +468,8 @@ async function disconnect() {
   const integration = await getIntegration('+encryptedRefreshToken');
   if (integration.encryptedRefreshToken) {
     try {
-      await oauthClient().revokeToken(decryptToken(integration.encryptedRefreshToken));
+      await (await oauthClient(integration.oauthClientSelectionId || googleOAuthClients.DEFAULT_CLIENT_ID))
+        .revokeToken(decryptToken(integration.encryptedRefreshToken));
     } catch (err) {
       console.error('[calendar] Token revoke failed (continuing with disconnect):', err.message);
     }
@@ -473,20 +508,343 @@ async function getStatus() {
   };
 }
 
+async function getPersonalConnection(userId, fields = '') {
+  const query = PersonalGoogleCalendarConnection.findOneAndUpdate(
+    { userId },
+    { $setOnInsert: { userId } },
+    { new: true, upsert: true, setDefaultsOnInsert: true }
+  );
+  if (fields) query.select(fields);
+  return query;
+}
+
+function createPersonalGoogleEventId() {
+  return `pis${crypto.randomBytes(16).toString('hex')}`;
+}
+
+async function createPersonalAuthorizationUrl(userId) {
+  const state = crypto.randomBytes(32).toString('hex');
+  const clientSelectionId = await activeOAuthClientSelectionId();
+  const client = await oauthClient(clientSelectionId);
+  await getPersonalConnection(userId);
+  await PersonalGoogleCalendarConnection.updateOne({ userId }, {
+    $set: {
+      pendingStateHash: hashState(state),
+      pendingStateExpires: new Date(Date.now() + STATE_TTL_MS),
+      pendingOAuthClientSelectionId: clientSelectionId,
+    },
+  });
+  return client.generateAuthUrl({
+    access_type: 'offline',
+    prompt: 'consent select_account',
+    scope: CONNECT_SCOPES,
+    state,
+  });
+}
+
+async function consumePersonalState(state) {
+  if (typeof state !== 'string' || !/^[a-f0-9]{64}$/.test(state)) return null;
+  const connection = await PersonalGoogleCalendarConnection.findOneAndUpdate(
+    { pendingStateHash: hashState(state), pendingStateExpires: { $gt: new Date() } },
+    { $set: { pendingStateHash: '', pendingStateExpires: null } },
+    { projection: { userId: 1 } }
+  ).select('+pendingOAuthClientSelectionId');
+  return connection ? {
+    userId: connection.userId,
+    clientSelectionId: connection.pendingOAuthClientSelectionId || googleOAuthClients.DEFAULT_CLIENT_ID,
+  } : null;
+}
+
+async function completePersonalConnection(code, userId, clientSelectionId = googleOAuthClients.DEFAULT_CLIENT_ID) {
+  const client = await oauthClient(clientSelectionId);
+  const { tokens } = await client.getToken(code);
+  const grantedScopes = String(tokens.scope || '').split(/\s+/);
+  if (!grantedScopes.includes(CALENDAR_SCOPE)) {
+    throw new CalendarSyncError('Google Calendar permission was not granted. Please allow calendar access and try again.');
+  }
+  if (!tokens.refresh_token) throw new CalendarSyncError('Google did not return offline access. Try connecting again.');
+  const ticket = tokens.id_token
+    ? await client.verifyIdToken({ idToken: tokens.id_token, audience: client.clientId })
+    : null;
+  const accountEmail = (ticket && ticket.getPayload() && ticket.getPayload().email) || '';
+  await PersonalGoogleCalendarConnection.updateOne({ userId }, {
+    $set: {
+      connected: true,
+      needsReconnect: false,
+      accountEmail,
+      oauthClientSelectionId: clientSelectionId,
+      encryptedRefreshToken: encryptToken(tokens.refresh_token),
+      connectedAt: new Date(),
+      lastError: '',
+    },
+  });
+  queuePersonalUserEvents(userId)
+    .catch((err) => console.error(`[calendar] Could not sync selected events for user ${userId}:`, err.message));
+}
+
+async function personalCalendarClient(userId) {
+  const connection = await getPersonalConnection(userId, '+encryptedRefreshToken');
+  if (!connection.connected || !connection.encryptedRefreshToken) return { connection, client: null };
+  let refreshToken;
+  try {
+    refreshToken = decryptToken(connection.encryptedRefreshToken);
+  } catch (err) {
+    await PersonalGoogleCalendarConnection.updateOne({ userId }, {
+      $set: { needsReconnect: true, lastError: 'Stored Google Calendar access could not be read. Reconnect your account.' },
+    });
+    throw new CalendarSyncError('Stored Google Calendar access could not be read. Reconnect your account.', { reconnect: true });
+  }
+  const client = await oauthClient(connection.oauthClientSelectionId || googleOAuthClients.DEFAULT_CLIENT_ID);
+  client.setCredentials({ refresh_token: refreshToken });
+  return { connection, client };
+}
+
+async function personalCalendarRequest(userId, client, options) {
+  try {
+    const response = await client.request({ timeout: REQUEST_TIMEOUT_MS, ...options });
+    return response.data;
+  } catch (err) {
+    const syncError = toSyncError(err);
+    if (syncError.reconnect) {
+      await PersonalGoogleCalendarConnection.updateOne({ userId }, {
+        $set: { needsReconnect: true, lastError: syncError.message },
+      });
+    }
+    throw syncError;
+  }
+}
+
+function personalEventUrl(calendarId, eventId) {
+  return `${CALENDAR_API}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`;
+}
+
+async function upsertPersonalGoogleEvent(userId, client, event, link) {
+  const body = googleEventBody(event);
+  const url = personalEventUrl(link.calendarId || 'primary', link.googleEventId);
+  const params = { sendUpdates: 'none' };
+  try {
+    return await personalCalendarRequest(userId, client, { url, method: 'PUT', data: body, params });
+  } catch (err) {
+    if (![404, 410].includes(err.status)) throw err;
+  }
+  try {
+    return await personalCalendarRequest(userId, client, {
+      url: `${CALENDAR_API}/calendars/${encodeURIComponent(link.calendarId || 'primary')}/events`,
+      method: 'POST',
+      data: { id: link.googleEventId, ...body },
+      params,
+    });
+  } catch (err) {
+    if (err.status !== 409) throw err;
+    return personalCalendarRequest(userId, client, { url, method: 'PUT', data: body, params });
+  }
+}
+
+async function deletePersonalGoogleEvent(userId, client, link) {
+  try {
+    await personalCalendarRequest(userId, client, {
+      url: personalEventUrl(link.calendarId || 'primary', link.googleEventId),
+      method: 'DELETE',
+      params: { sendUpdates: 'none' },
+    });
+  } catch (err) {
+    if (![404, 410].includes(err.status)) throw err;
+  }
+}
+
+async function savePersonalEventState(linkId, values) {
+  await PersonalGoogleCalendarEvent.updateOne({ _id: linkId }, { $set: values });
+}
+
+async function syncPersonalMappingNow(linkId, { remove = false } = {}) {
+  const link = await PersonalGoogleCalendarEvent.findById(linkId);
+  if (!link || link.status === 'removed') return link;
+  const userId = link.userId;
+  let connection;
+  let client;
+  try {
+    ({ connection, client } = await personalCalendarClient(userId));
+  } catch (err) {
+    const message = toSyncError(err).message;
+    await savePersonalEventState(link._id, { status: 'failed', error: message });
+    return { ...link.toObject(), status: 'failed', error: message };
+  }
+  if (!client) {
+    const error = 'Connect your personal Google Calendar to sync this event.';
+    await savePersonalEventState(link._id, { status: 'pending', error });
+    return { ...link.toObject(), status: 'pending', error };
+  }
+  try {
+    const event = remove ? null : await Event.findById(link.eventId);
+    let shouldExist = false;
+    if (event && belongsInGoogle(event)) {
+      const user = await User.findById(userId).select('role assignedClass');
+      shouldExist = await isEventVisibleToUser(event, user);
+    }
+    if (!shouldExist) {
+      await deletePersonalGoogleEvent(userId, client, link);
+      const state = remove ? 'removed' : 'cancelled';
+      await savePersonalEventState(link._id, { status: state, htmlLink: '', error: '', lastSyncedAt: new Date() });
+      return { ...link.toObject(), status: state, htmlLink: '', error: '' };
+    }
+    const googleEvent = await upsertPersonalGoogleEvent(userId, client, event, link);
+    const values = { status: 'synced', htmlLink: googleEvent.htmlLink || '', error: '', lastSyncedAt: new Date() };
+    await savePersonalEventState(link._id, values);
+    return { ...link.toObject(), ...values };
+  } catch (err) {
+    const message = toSyncError(err).message;
+    console.error(`[calendar] Personal event sync failed for user ${userId}, event ${link.eventId}:`, message);
+    await savePersonalEventState(link._id, { status: 'failed', error: message });
+    return { ...link.toObject(), status: 'failed', error: message };
+  }
+}
+
+function queuePersonalMappingSync(linkId, options) {
+  const key = String(linkId);
+  const previous = personalSyncQueues.get(key) || Promise.resolve();
+  const next = previous.catch(() => {}).then(() => syncPersonalMappingNow(linkId, options));
+  const settled = next.catch((err) => console.error(`[calendar] Personal sync error for ${key}:`, err.message));
+  personalSyncQueues.set(key, settled);
+  settled.finally(() => {
+    if (personalSyncQueues.get(key) === settled) personalSyncQueues.delete(key);
+  });
+  return next;
+}
+
+async function addPersonalEvent(userId, event) {
+  const { client } = await personalCalendarClient(userId);
+  if (!client) throw new CalendarSyncError('Connect your personal Google Calendar before adding events.');
+  if (!belongsInGoogle(event)) throw new CalendarSyncError('Only approved, published events can be added.');
+  const link = await PersonalGoogleCalendarEvent.findOneAndUpdate(
+    { userId, eventId: event._id },
+    {
+      $set: { status: 'pending', error: '' },
+      $setOnInsert: {
+        userId,
+        eventId: event._id,
+        googleEventId: createPersonalGoogleEventId(),
+        calendarId: 'primary',
+      },
+    },
+    { new: true, upsert: true, setDefaultsOnInsert: true }
+  );
+  return queuePersonalMappingSync(link._id);
+}
+
+async function removePersonalEvent(userId, eventId) {
+  const link = await PersonalGoogleCalendarEvent.findOne({ userId, eventId });
+  if (!link || link.status === 'removed') return { status: 'removed', htmlLink: '' };
+  const { client } = await personalCalendarClient(userId);
+  if (!client) throw new CalendarSyncError('Reconnect your personal Google Calendar before removing this event.');
+  return queuePersonalMappingSync(link._id, { remove: true });
+}
+
+async function syncPersonalEvent(eventId) {
+  const links = await PersonalGoogleCalendarEvent.find({ eventId, status: { $ne: 'removed' } }).select('_id');
+  for (const link of links) await queuePersonalMappingSync(link._id);
+}
+
+function queuePersonalEventSync(eventId) {
+  syncPersonalEvent(eventId).catch((err) => console.error(`[calendar] Personal event update failed for ${eventId}:`, err.message));
+}
+
+function queuePersonalEventRemoval(eventId) {
+  PersonalGoogleCalendarEvent.find({ eventId, status: { $ne: 'removed' } })
+    .select('_id')
+    .then((links) => Promise.all(links.map((link) => queuePersonalMappingSync(link._id, { remove: true }))))
+    .catch((err) => console.error(`[calendar] Personal event removal failed for ${eventId}:`, err.message));
+}
+
+async function queuePersonalUserEvents(userId) {
+  const links = await PersonalGoogleCalendarEvent.find({ userId, status: { $ne: 'removed' } }).select('_id');
+  for (const link of links) queuePersonalMappingSync(link._id);
+}
+
+async function syncPersonalUserEvents(userId) {
+  const { client } = await personalCalendarClient(userId);
+  if (!client) throw new CalendarSyncError('Connect your personal Google Calendar before syncing selected events.');
+  const links = await PersonalGoogleCalendarEvent.find({ userId, status: { $ne: 'removed' } }).select('_id');
+  const summary = { synced: 0, cancelled: 0, failed: 0, pending: 0 };
+  for (const link of links) {
+    const result = await queuePersonalMappingSync(link._id);
+    if (result.status === 'synced') summary.synced += 1;
+    else if (result.status === 'cancelled' || result.status === 'removed') summary.cancelled += 1;
+    else if (result.status === 'failed') summary.failed += 1;
+    else summary.pending += 1;
+  }
+  return summary;
+}
+
+async function disconnectPersonalCalendar(userId) {
+  const connection = await getPersonalConnection(userId, '+encryptedRefreshToken');
+  if (connection.encryptedRefreshToken) {
+    try {
+      await (await oauthClient(connection.oauthClientSelectionId || googleOAuthClients.DEFAULT_CLIENT_ID))
+        .revokeToken(decryptToken(connection.encryptedRefreshToken));
+    } catch (err) {
+      console.error('[calendar] Personal token revoke failed (continuing with disconnect):', err.message);
+    }
+  }
+  await PersonalGoogleCalendarConnection.updateOne({ userId }, {
+    $set: {
+      connected: false,
+      needsReconnect: false,
+      encryptedRefreshToken: '',
+      accountEmail: '',
+      lastError: '',
+      pendingStateHash: '',
+      pendingStateExpires: null,
+    },
+  });
+}
+
+async function getPersonalCalendarStatus(userId) {
+  const connection = await PersonalGoogleCalendarConnection.findOne({ userId });
+  return {
+    configured: !configurationError(),
+    configurationError: configurationError(),
+    connected: Boolean(connection && connection.connected),
+    needsReconnect: Boolean(connection && connection.needsReconnect),
+    accountEmail: connection ? connection.accountEmail : '',
+    connectedAt: connection ? connection.connectedAt : null,
+    lastError: connection ? connection.lastError : '',
+  };
+}
+
+async function getPersonalEventStates(userId, eventIds) {
+  const [status, links] = await Promise.all([
+    getPersonalCalendarStatus(userId),
+    PersonalGoogleCalendarEvent.find({ userId, eventId: { $in: eventIds } }).select('eventId status htmlLink error lastSyncedAt'),
+  ]);
+  const states = new Map(links.map((link) => [String(link.eventId), link]));
+  return { status, states };
+}
+
 module.exports = {
   CalendarSyncError,
   addToGoogleCalendarUrl,
+  addPersonalEvent,
   completeConnection,
+  completePersonalConnection,
   configurationError,
   consumeState,
+  consumePersonalState,
   createAuthorizationUrl,
+  createPersonalAuthorizationUrl,
   disconnect,
+  disconnectPersonalCalendar,
+  getPersonalCalendarStatus,
+  getPersonalEventStates,
   getIntegration,
   getStatus,
   googleEventBody,
   googleEventIdFor,
+  queuePersonalEventRemoval,
+  queuePersonalEventSync,
   queueEventRemoval,
   queueEventSync,
+  removePersonalEvent,
+  syncPersonalUserEvents,
   syncAll,
   syncEvent,
   _test: { encryptToken, decryptToken, eventTimes, toSyncError, upsertGoogleEvent, deleteGoogleEvent },

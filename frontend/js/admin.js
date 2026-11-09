@@ -2,6 +2,9 @@
 const user = requireRole('admin');
 let adminCalendar = null;
 let authSecuritySettingsBound = false;
+let googleOAuthClientsBound = false;
+let googleOAuthClientEditingId = '';
+let googleOAuthManagedClients = [];
 
 async function loadAuthSecuritySettings() {
   const googleToggle = document.getElementById('googleAuthEnabled');
@@ -9,16 +12,24 @@ async function loadAuthSecuritySettings() {
   const saveButton = document.getElementById('saveAuthSecuritySettings');
   const message = document.getElementById('authSecurityMessage');
   if (!googleToggle || !captchaToggle || !saveButton || !message) return;
+  bindGoogleOAuthClientDialog();
 
   try {
-    const response = await api.get('/auth/settings');
+    const [response, catalog] = await Promise.all([
+      api.get('/auth/settings'),
+      api.get('/auth/google-clients'),
+    ]);
     const settings = response.settings || {};
     googleToggle.checked = settings.googleAuthEnabled === true;
     captchaToggle.checked = settings.captchaEnabled === true;
-    message.textContent = settings.captchaEnabled && !settings.captchaConfigured
-      ? 'CAPTCHA is enabled, but its backend keys are not configured.'
-      : '';
-    message.className = settings.captchaEnabled && !settings.captchaConfigured ? 'form-msg error' : 'form-msg';
+    renderGoogleOAuthClients(catalog, settings.activeGoogleOAuthClientId);
+    bindGoogleOAuthClientActivation();
+    if (settings.captchaEnabled && !settings.captchaConfigured) {
+      showMsg(message, 'CAPTCHA is enabled, but its backend keys are not configured.');
+    } else {
+      message.textContent = '';
+      message.className = 'form-msg';
+    }
   } catch (err) {
     showMsg(message, err.message);
     saveButton.disabled = true;
@@ -28,7 +39,7 @@ async function loadAuthSecuritySettings() {
   if (authSecuritySettingsBound) return;
   authSecuritySettingsBound = true;
   saveButton.addEventListener('click', async () => {
-    if (!window.confirm('Save these Google authentication and CAPTCHA settings?')) return;
+    if (!window.confirm('Save these Google authentication settings?')) return;
     setButtonLoading(saveButton, true, 'Saving');
     message.textContent = '';
     message.className = 'form-msg';
@@ -47,6 +58,229 @@ async function loadAuthSecuritySettings() {
       setButtonLoading(saveButton, false);
     }
   });
+  bindGoogleOAuthClientManagement();
+}
+
+function renderGoogleOAuthClients(catalog, selectedId) {
+  const defaultClientId = document.getElementById('defaultGoogleOAuthClientId');
+  const defaultStatus = document.getElementById('defaultGoogleOAuthStatus');
+  const defaultButton = document.getElementById('activateDefaultGoogleOAuthClient');
+  const clientList = document.getElementById('googleOAuthClientsList');
+  if (!defaultClientId || !defaultStatus || !defaultButton || !clientList) return;
+  googleOAuthManagedClients = catalog.clients || [];
+  const activeId = selectedId || catalog.activeGoogleOAuthClientId || 'default';
+  const options = catalog.options || [];
+  const defaultClient = options.find((client) => client.id === 'default');
+  defaultClientId.value = defaultClient?.clientId || 'Default Google client is not configured';
+  defaultButton.disabled = !defaultClient?.configured;
+  defaultButton.textContent = activeId === 'default' ? 'Currently active' : 'Use default configuration';
+  defaultButton.dataset.activateOAuthClient = 'default';
+  defaultStatus.textContent = `Original configuration · ${document.querySelector('.oauth-credential-section').open ? 'Close' : 'Edit'}`;
+
+  clientList.replaceChildren();
+  const customClients = options.filter((client) => client.id !== 'default');
+  if (!customClients.length) {
+    const emptyMessage = document.createElement('p');
+    emptyMessage.className = 'oauth-credential-hint';
+    emptyMessage.textContent = 'No custom Google clients have been added.';
+    clientList.append(emptyMessage);
+  }
+  customClients.forEach((client) => {
+    const entry = document.createElement('article');
+    entry.className = 'oauth-client-entry';
+    const heading = document.createElement('div');
+    heading.className = 'oauth-client-entry-heading';
+    const label = document.createElement('strong');
+    label.textContent = client.label;
+    const status = document.createElement('span');
+    status.textContent = `Custom configuration · ${activeId === client.id ? 'Active' : 'Inactive'}`;
+    heading.append(label, status);
+    const id = document.createElement('p');
+    id.className = 'oauth-credential-hint oauth-client-id';
+    id.textContent = client.clientId || 'Client ID is not configured';
+    const actions = document.createElement('div');
+    actions.className = 'oauth-client-actions';
+    const activateButton = document.createElement('button');
+    activateButton.type = 'button';
+    activateButton.className = 'btn oauth-save-button';
+    activateButton.textContent = activeId === client.id ? 'Currently active' : 'Use this configuration';
+    activateButton.disabled = !client.configured || activeId === client.id;
+    activateButton.dataset.activateOAuthClient = client.id;
+    actions.append(activateButton);
+
+    const managedClient = googleOAuthManagedClients.find((item) => item.id === client.id);
+    if (managedClient) {
+      const editButton = document.createElement('button');
+      editButton.type = 'button';
+      editButton.className = 'btn btn-secondary btn-sm';
+      editButton.textContent = 'Edit';
+      editButton.dataset.editOAuthClient = client.id;
+      const deleteButton = document.createElement('button');
+      deleteButton.type = 'button';
+      deleteButton.className = 'btn btn-danger btn-sm';
+      deleteButton.textContent = 'Remove';
+      deleteButton.dataset.deleteOAuthClient = client.id;
+      actions.append(editButton, deleteButton);
+    }
+    entry.append(heading, id, actions);
+    clientList.append(entry);
+  });
+}
+
+async function refreshGoogleOAuthClients() {
+  const catalog = await api.get('/auth/google-clients');
+  renderGoogleOAuthClients(catalog, catalog.activeGoogleOAuthClientId);
+}
+
+function bindGoogleOAuthClientActivation() {
+  const defaultButton = document.getElementById('activateDefaultGoogleOAuthClient');
+  const clientList = document.getElementById('googleOAuthClientsList');
+  if (!defaultButton || !clientList) return;
+  if (defaultButton.dataset.activationBound) return;
+  defaultButton.dataset.activationBound = 'true';
+  const activate = async (clientId, button) => {
+    const message = document.getElementById('defaultGoogleOAuthMessage');
+    const googleToggle = document.getElementById('googleAuthEnabled');
+    const captchaToggle = document.getElementById('captchaEnabled');
+    let saved = false;
+    setButtonLoading(button, true, 'Saving');
+    message.textContent = '';
+    message.className = 'oauth-credential-message';
+    try {
+      await api.patch('/auth/settings', {
+        googleAuthEnabled: googleToggle.checked,
+        captchaEnabled: captchaToggle.checked,
+        activeGoogleOAuthClientId: clientId,
+      });
+      saved = true;
+      showMsg(message, 'Google sign-in configuration saved.', 'success');
+    } catch (err) {
+      showMsg(message, err.message);
+    } finally {
+      setButtonLoading(button, false);
+    }
+    if (saved) {
+      try {
+        await refreshGoogleOAuthClients();
+      } catch (err) {
+        showMsg(message, `Configuration saved, but its status could not be refreshed: ${err.message}`);
+      }
+    }
+  };
+  defaultButton.addEventListener('click', () => activate('default', defaultButton));
+  clientList.addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-activate-oauth-client]');
+    if (button && !button.disabled) {
+      await activate(button.dataset.activateOAuthClient, button);
+      return;
+    }
+    const editButton = event.target.closest('[data-edit-oauth-client]');
+    const deleteButton = event.target.closest('[data-delete-oauth-client]');
+    if (editButton || deleteButton) {
+      await handleGoogleOAuthClientAction(editButton, deleteButton);
+    }
+  });
+  document.querySelector('.oauth-credential-section').addEventListener('toggle', (event) => {
+    document.getElementById('defaultGoogleOAuthStatus').textContent =
+      `Original configuration · ${event.currentTarget.open ? 'Close' : 'Edit'}`;
+  });
+}
+
+function bindGoogleOAuthClientDialog() {
+  const openButton = document.getElementById('openGoogleOAuthClientSettings');
+  const dialog = document.getElementById('googleOAuthClientDialog');
+  const closeButton = document.getElementById('closeGoogleOAuthClientDialog');
+  if (!openButton || !dialog || !closeButton || openButton.dataset.dialogBound) return;
+  openButton.dataset.dialogBound = 'true';
+  openButton.addEventListener('click', () => dialog.showModal());
+  closeButton.addEventListener('click', () => dialog.close());
+  dialog.addEventListener('click', (event) => {
+    if (event.target === dialog) dialog.close();
+  });
+}
+
+function resetGoogleOAuthClientForm() {
+  const form = document.getElementById('googleOAuthClientForm');
+  if (!form) return;
+  form.reset();
+  googleOAuthClientEditingId = '';
+  document.getElementById('googleOAuthClientSecret').required = true;
+  document.getElementById('googleOAuthClientSecret').placeholder = '';
+  document.getElementById('saveGoogleOAuthClient').textContent = 'Add client';
+  document.getElementById('googleOAuthFormTitle').textContent = 'Add custom Google client';
+  document.getElementById('cancelGoogleOAuthClientEdit').hidden = true;
+}
+
+function bindGoogleOAuthClientManagement() {
+  if (googleOAuthClientsBound) return;
+  googleOAuthClientsBound = true;
+  const form = document.getElementById('googleOAuthClientForm');
+  const message = document.getElementById('googleOAuthClientMessage');
+  const cancelButton = document.getElementById('cancelGoogleOAuthClientEdit');
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const saveButton = document.getElementById('saveGoogleOAuthClient');
+    setButtonLoading(saveButton, true, googleOAuthClientEditingId ? 'Updating' : 'Adding');
+    message.textContent = '';
+    message.className = 'form-msg';
+    const payload = {
+      label: document.getElementById('googleOAuthClientLabel').value,
+      clientId: document.getElementById('googleOAuthClientId').value,
+      clientSecret: document.getElementById('googleOAuthClientSecret').value,
+    };
+    try {
+      if (googleOAuthClientEditingId) {
+        await api.patch(`/auth/google-clients/${googleOAuthClientEditingId}`, payload);
+        showMsg(message, 'Google OAuth client updated.', 'success');
+      } else {
+        await api.post('/auth/google-clients', payload);
+        showMsg(message, 'Google OAuth client added.', 'success');
+      }
+      resetGoogleOAuthClientForm();
+      await refreshGoogleOAuthClients();
+    } catch (err) {
+      showMsg(message, err.message);
+    } finally {
+      setButtonLoading(saveButton, false);
+    }
+  });
+
+  cancelButton.addEventListener('click', resetGoogleOAuthClientForm);
+}
+
+async function handleGoogleOAuthClientAction(editButton, deleteButton) {
+  const message = document.getElementById('googleOAuthClientMessage');
+  const cancelButton = document.getElementById('cancelGoogleOAuthClientEdit');
+  if (editButton) {
+    const client = googleOAuthManagedClients.find((item) => item.id === editButton.dataset.editOAuthClient);
+    if (!client) return;
+    googleOAuthClientEditingId = client.id;
+    document.getElementById('googleOAuthClientLabel').value = client.label;
+    document.getElementById('googleOAuthClientId').value = client.clientId;
+    const secretInput = document.getElementById('googleOAuthClientSecret');
+    secretInput.value = '';
+    secretInput.required = false;
+    secretInput.placeholder = 'Leave blank to keep the current secret';
+    document.getElementById('saveGoogleOAuthClient').textContent = 'Update client';
+    document.getElementById('googleOAuthFormTitle').textContent = 'Edit custom Google client';
+    cancelButton.hidden = false;
+    message.textContent = '';
+    message.className = 'form-msg';
+    document.getElementById('googleOAuthClientForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return;
+  }
+  if (deleteButton) {
+    const client = googleOAuthManagedClients.find((item) => item.id === deleteButton.dataset.deleteOAuthClient);
+    if (!client || !window.confirm(`Remove "${client.label}" from the Google OAuth client catalog?`)) return;
+    try {
+      await api.del(`/auth/google-clients/${client.id}`);
+      showMsg(message, 'Google OAuth client removed.', 'success');
+      await refreshGoogleOAuthClients();
+    } catch (err) {
+      showMsg(message, err.message);
+    }
+  }
 }
 
 function onPanelShown(panel) {

@@ -8,6 +8,7 @@ const calendarIntegrationSchema = new mongoose.Schema(
     needsReconnect: { type: Boolean, default: false },
     accountEmail: { type: String, trim: true, default: '' },
     calendarId: { type: String, trim: true, default: 'primary' },
+    oauthClientSelectionId: { type: String, trim: true, default: 'default' },
     // AES-256-GCM encrypted; never returned to the browser.
     encryptedRefreshToken: { type: String, default: '', select: false },
     connectedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
@@ -18,6 +19,7 @@ const calendarIntegrationSchema = new mongoose.Schema(
     pendingStateHash: { type: String, default: '', select: false },
     pendingStateExpires: { type: Date, default: null, select: false },
     pendingStateUser: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, select: false },
+    pendingOAuthClientSelectionId: { type: String, trim: true, default: 'default', select: false },
     // Google events whose school event was deleted while Google was unreachable; retried by "Sync now".
     pendingDeletions: [{
       _id: false,

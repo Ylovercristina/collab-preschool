@@ -6,7 +6,14 @@ const User = require('../models/User');
 const { queueEmailDelivery } = require('../services/emailDelivery');
 const logActivity = require('../utils/logActivity');
 const { eventMapsUrl } = require('../utils/eventMaps');
-const { addToGoogleCalendarUrl, queueEventRemoval, queueEventSync } = require('../services/googleCalendar');
+const {
+  addToGoogleCalendarUrl,
+  getPersonalEventStates,
+  queueEventRemoval,
+  queueEventSync,
+  queuePersonalEventRemoval,
+  queuePersonalEventSync,
+} = require('../services/googleCalendar');
 
 function escapeHtml(value = '') {
   return String(value).replace(/[&<>"']/g, (character) => ({
@@ -156,6 +163,7 @@ async function publishEvent(event) {
     queueEmailDelivery({ ...eventEmail(event), parents: recipients, type: 'event', eventId: event._id });
   }
   queueEventSync(event._id);
+  queuePersonalEventSync(event._id);
   return recipients.length;
 }
 
@@ -211,8 +219,23 @@ exports.listEvents = async (req, res) => {
   }
   const query = Event.find(filter).populate('createdBy', 'name role').sort({ date: 1 });
   if (req.user.role === 'admin') query.select('+googleCalendar');
-  const events = (await query).map((event) => {
+  const eventDocuments = await query;
+  const { status: personalCalendarStatus, states: personalCalendarStates } = await getPersonalEventStates(
+    req.user._id,
+    eventDocuments.map((event) => event._id)
+  );
+  const events = eventDocuments.map((event) => {
     const value = event.toJSON();
+    const personalEvent = personalCalendarStates.get(String(event._id));
+    value.personalGoogleCalendar = {
+      connected: personalCalendarStatus.connected,
+      needsReconnect: personalCalendarStatus.needsReconnect,
+      accountEmail: personalCalendarStatus.accountEmail,
+      status: personalEvent ? personalEvent.status : 'not-added',
+      htmlLink: personalEvent ? personalEvent.htmlLink : '',
+      error: personalEvent ? personalEvent.error : '',
+      lastSyncedAt: personalEvent ? personalEvent.lastSyncedAt : null,
+    };
     if (event.publicationStatus === 'published' && event.approvalStatus === 'approved') {
       value.addToGoogleCalendarUrl = addToGoogleCalendarUrl(event);
     }
@@ -305,6 +328,7 @@ exports.updateEvent = async (req, res) => {
     await event.save();
     if (previousApproval !== 'approved' && event.approvalStatus === 'approved') await publishEvent(event);
     else queueEventSync(event._id);
+    queuePersonalEventSync(event._id);
     res.json({ event, emailSummary: await getEmailSummary(event) });
   } catch (err) {
     const status = err.name === 'ValidationError' || err.name === 'CastError' ? 400 : 500;
@@ -336,6 +360,7 @@ exports.reviewEvent = async (req, res) => {
     if (!event) return res.status(409).json({ message: 'This event is no longer waiting for review.' });
 
     if (decision === 'rejected') {
+      queuePersonalEventSync(event._id);
       await logActivity(req.user._id, 'event-rejected', event.title);
       return res.json({ event, message: 'Event rejected. Parents were not notified.' });
     }
@@ -437,6 +462,7 @@ exports.deleteEvent = async (req, res) => {
       return res.status(404).json({ message: 'Event not found.' });
     }
     queueEventRemoval(event);
+    queuePersonalEventRemoval(event._id);
     await logActivity(req.user._id, 'event-removed', event.title);
     return res.json({ message: 'Event removed.' });
   } catch (err) {

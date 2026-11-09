@@ -474,6 +474,21 @@
           <div class="profile-form-footer"><button class="btn btn-primary" type="submit"><i class="fa-solid fa-floppy-disk"></i> Save Changes</button></div>
         </form>
       </div>
+      <div class="card auth-security-settings-card">
+        <div class="profile-section-heading">
+          <span>INTEGRATION</span>
+          <h2>Personal Google Calendar</h2>
+          <p>Connect your Google account to add selected school events to your calendar. Events are never added automatically.</p>
+        </div>
+        <div id="personalGoogleCalendarMessage" class="form-msg" role="status" aria-live="polite"></div>
+        <p id="personalGoogleCalendarAccount" class="field-hint"></p>
+        <div class="profile-form-footer">
+          <button type="button" class="btn btn-primary" id="personalGoogleCalendarConnect">Connect Google Calendar</button>
+          <button type="button" class="btn btn-secondary" id="personalGoogleCalendarSync" hidden>Retry selected event updates</button>
+          <button type="button" class="btn btn-danger" id="personalGoogleCalendarDisconnect" hidden>Disconnect</button>
+        </div>
+        <p class="field-hint">Disconnecting stops future updates. Events already added to your calendar remain there.</p>
+      </div>
     </section>
 
   </main>

@@ -77,7 +77,7 @@
           </button>
         </form>
 
-        <div class="auth-divider">or</div>
+        <div class="auth-divider" hidden>or</div>
 
         <div class="captcha-wrap">
           <div id="recaptchaWidget"></div>
@@ -134,6 +134,7 @@
 
     // Login form handler
     const googleLoginLink = document.getElementById('googleLoginLink');
+    const authDivider = document.querySelector('.auth-divider');
     const captchaStatus = document.getElementById('captchaStatus');
     let captchaToken = '';
     let captchaWidgetId = null;
@@ -237,6 +238,7 @@
         const settings = response.settings || {};
         googleAuthEnabled = settings.googleAuthEnabled === true;
         captchaEnabled = settings.captchaEnabled === true;
+        authDivider.hidden = !googleAuthEnabled || !captchaEnabled;
 
         if (!googleAuthEnabled) {
           googleLoginLink.style.display = 'none';
@@ -258,6 +260,7 @@
           setGoogleButtonEnabled(true);
         }
       } catch (err) {
+        authDivider.hidden = true;
         googleLoginLink.style.display = 'none';
         captchaWrap.hidden = true;
         setCaptchaMessage('Google sign-in is temporarily unavailable. Please try again later.');

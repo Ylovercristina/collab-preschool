@@ -447,6 +447,21 @@
       </div>
       <div class="card auth-security-settings-card">
         <div class="profile-section-heading">
+          <span>INTEGRATION</span>
+          <h2>Personal Google Calendar</h2>
+          <p>Connect your Google account to add selected school events to your calendar. Events are never added automatically.</p>
+        </div>
+        <div id="personalGoogleCalendarMessage" class="form-msg" role="status" aria-live="polite"></div>
+        <p id="personalGoogleCalendarAccount" class="field-hint"></p>
+        <div class="profile-form-footer">
+          <button type="button" class="btn btn-primary" id="personalGoogleCalendarConnect">Connect Google Calendar</button>
+          <button type="button" class="btn btn-secondary" id="personalGoogleCalendarSync" hidden>Retry selected event updates</button>
+          <button type="button" class="btn btn-danger" id="personalGoogleCalendarDisconnect" hidden>Disconnect</button>
+        </div>
+        <p class="field-hint">Disconnecting stops future updates. Events already added to your calendar remain there.</p>
+      </div>
+      <div class="card auth-security-settings-card">
+        <div class="profile-section-heading">
           <span>SECURITY</span>
           <h2>Authentication &amp; Security Settings</h2>
           <p>Control Google authentication and CAPTCHA independently for Google sign-in.</p>
@@ -457,6 +472,10 @@
             <span><strong>Google Sign-In</strong><small>Allow users to authenticate with their Google accounts.</small></span>
             <span class="settings-switch"><input id="googleAuthEnabled" type="checkbox" /><span aria-hidden="true"></span></span>
           </label>
+          <button class="auth-security-option auth-security-trigger" id="openGoogleOAuthClientSettings" type="button" aria-haspopup="dialog" aria-controls="googleOAuthClientDialog">
+            <span><strong>Custom Google Client</strong><small>Manage custom Google sign-in credentials.</small></span>
+            <span class="oauth-trigger-label">Manage <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></span>
+          </button>
           <label class="auth-security-option" for="captchaEnabled">
             <span><strong>CAPTCHA Verification</strong><small>Require a completed CAPTCHA before Google sign-in.</small></span>
             <span class="settings-switch"><input id="captchaEnabled" type="checkbox" /><span aria-hidden="true"></span></span>
@@ -465,6 +484,48 @@
         <p class="auth-security-notice"><i class="fa-solid fa-shield-halved"></i> These settings affect Google authentication only. Password login is unchanged.</p>
         <div class="profile-form-footer"><button class="btn btn-primary" type="button" id="saveAuthSecuritySettings"><i class="fa-solid fa-floppy-disk"></i> Save security settings</button></div>
       </div>
+      <dialog id="googleOAuthClientDialog" class="oauth-dialog" aria-labelledby="googleOAuthDialogTitle">
+        <div class="oauth-dialog-header">
+          <h2 id="googleOAuthDialogTitle">Custom Google Client</h2>
+          <button type="button" class="btn btn-ghost btn-sm" id="closeGoogleOAuthClientDialog" aria-label="Close custom Google client settings">
+            <i class="fa-solid fa-xmark" aria-hidden="true"></i> Close
+          </button>
+        </div>
+        <div id="googleOAuthClientSettings" class="card auth-security-settings-card google-oauth-client-card">
+          <div class="profile-section-heading">
+            <span>INTEGRATION</span>
+            <h2>Custom credentials</h2>
+            <p>The original configuration stays unchanged. Secret fields are never filled with saved values.</p>
+          </div>
+          <details class="oauth-credential-section" open>
+            <summary>
+              <span>Google sign-in</span>
+              <span class="oauth-original-status" id="defaultGoogleOAuthStatus">Original configuration · Close</span>
+            </summary>
+            <div class="oauth-credential-body">
+              <label for="defaultGoogleOAuthClientId">Google client ID</label>
+              <input id="defaultGoogleOAuthClientId" readonly />
+              <p class="oauth-credential-hint">Use a Web application client ID. Configure the authorized redirect URI in Google Cloud.</p>
+              <button type="button" class="btn oauth-save-button" id="activateDefaultGoogleOAuthClient">Use default configuration</button>
+              <p id="defaultGoogleOAuthMessage" class="oauth-credential-message" role="status" aria-live="polite"></p>
+            </div>
+          </details>
+          <div id="googleOAuthClientMessage" class="form-msg" aria-live="polite"></div>
+          <form id="googleOAuthClientForm" class="google-oauth-client-form oauth-credential-body">
+            <h3 id="googleOAuthFormTitle">Add custom Google client</h3>
+            <div class="grid-2">
+              <div class="field"><label for="googleOAuthClientLabel">Client name</label><input id="googleOAuthClientLabel" maxlength="80" required /></div>
+              <div class="field"><label for="googleOAuthClientId">Google Client ID</label><input id="googleOAuthClientId" maxlength="256" autocomplete="off" placeholder="...apps.googleusercontent.com" required /></div>
+              <div class="field"><label for="googleOAuthClientSecret">Google Client Secret</label><input id="googleOAuthClientSecret" type="password" maxlength="2048" autocomplete="new-password" required /></div>
+            </div>
+            <div class="profile-form-footer">
+              <button class="btn btn-primary" type="submit" id="saveGoogleOAuthClient">Add client</button>
+              <button class="btn btn-secondary" type="button" id="cancelGoogleOAuthClientEdit" hidden>Cancel edit</button>
+            </div>
+          </form>
+          <div id="googleOAuthClientsList" class="oauth-client-list" aria-live="polite"></div>
+        </div>
+      </dialog>
     </section>
 
   </main>

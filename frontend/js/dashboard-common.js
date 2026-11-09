@@ -28,7 +28,10 @@ function initSidebarNav() {
       const targetPanel = document.getElementById(`panel-${btn.dataset.panel}`);
       if (targetPanel) targetPanel.classList.add('active');
       if (typeof onPanelShown === 'function') onPanelShown(btn.dataset.panel);
-      if (btn.dataset.panel === 'settings') loadSettingsProfile();
+      if (btn.dataset.panel === 'settings') {
+        loadSettingsProfile();
+        loadPersonalGoogleCalendarSettings();
+      }
     });
   });
 
@@ -46,6 +49,91 @@ function initLogout() {
     Auth.clear();
     window.location.href = '../index.html';
   });
+}
+
+async function loadPersonalGoogleCalendarSettings() {
+  const message = document.getElementById('personalGoogleCalendarMessage');
+  const account = document.getElementById('personalGoogleCalendarAccount');
+  const connect = document.getElementById('personalGoogleCalendarConnect');
+  const sync = document.getElementById('personalGoogleCalendarSync');
+  const disconnect = document.getElementById('personalGoogleCalendarDisconnect');
+  if (!message || !account || !connect || !sync || !disconnect) return;
+  try {
+    const { status } = await api.get('/calendar/google/personal/status');
+    account.textContent = status.connected && status.accountEmail ? `Connected account: ${status.accountEmail}` : '';
+    connect.hidden = status.connected && !status.needsReconnect;
+    sync.hidden = !status.connected || status.needsReconnect;
+    disconnect.hidden = !status.connected;
+    message.className = `form-msg ${status.needsReconnect ? 'error' : (status.connected ? 'success' : '')}`;
+    message.textContent = status.needsReconnect
+      ? (status.lastError || 'Reconnect your Google Calendar account to continue syncing selected events.')
+      : (status.connected ? 'Google Calendar is connected.' : (status.configurationError || 'Connect your personal Google Calendar to add selected events.'));
+  } catch (err) {
+    message.className = 'form-msg error';
+    message.textContent = err.message;
+  }
+}
+
+async function startPersonalGoogleCalendarConnection(button) {
+  if (button) setButtonLoading(button, true, 'Connecting');
+  try {
+    const { authorizationUrl } = await api.post('/calendar/google/personal/connect', {});
+    window.location.assign(authorizationUrl);
+  } catch (err) {
+    showToast(err.message, 'error');
+    if (button) setButtonLoading(button, false);
+  }
+}
+
+function initPersonalGoogleCalendarSettings() {
+  document.getElementById('personalGoogleCalendarConnect')?.addEventListener('click', (event) => {
+    startPersonalGoogleCalendarConnection(event.currentTarget);
+  });
+  document.getElementById('personalGoogleCalendarSync')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    setButtonLoading(button, true, 'Syncing');
+    try {
+      const { summary } = await api.post('/calendar/google/personal/sync', {});
+      const message = `Updated ${summary.synced}; removed/cancelled ${summary.cancelled}; failed ${summary.failed}${summary.pending ? `; waiting ${summary.pending}` : ''}.`;
+      showToast(message, summary.failed || summary.pending ? 'error' : 'success');
+      await loadPersonalGoogleCalendarSettings();
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      setButtonLoading(button, false);
+    }
+  });
+  document.getElementById('personalGoogleCalendarDisconnect')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    if (!confirm('Disconnect your personal Google Calendar? Events already added there will remain unchanged.')) return;
+    setButtonLoading(button, true, 'Disconnecting');
+    try {
+      const { message } = await api.del('/calendar/google/personal/connection');
+      showToast(message, 'success');
+      await loadPersonalGoogleCalendarSettings();
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      setButtonLoading(button, false);
+    }
+  });
+
+  const params = new URLSearchParams(window.location.search);
+  const result = params.get('personalGoogleCalendar');
+  if (result) {
+    const notices = {
+      connected: ['Google Calendar connected. Previously selected events are syncing.', 'success'],
+      cancelled: ['Google Calendar connection was cancelled.', 'info'],
+      'missing-scope': ['Google Calendar permission was not granted. Please allow calendar access and try again.', 'error'],
+      failed: ['Could not connect Google Calendar.', 'error'],
+      forbidden: ['This account cannot connect Google Calendar.', 'error'],
+    };
+    const notice = notices[result];
+    if (notice) showToast(notice[0], notice[1]);
+    params.delete('personalGoogleCalendar');
+    const query = params.toString();
+    window.history.replaceState({}, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`);
+  }
 }
 
 function profileImageUrl(avatar) {
@@ -1382,6 +1470,41 @@ class EventsCalendar {
         }
       });
     }
+    const personalConnectBtn = document.getElementById('calPersonalGoogleConnectBtn');
+    if (personalConnectBtn) {
+      personalConnectBtn.addEventListener('click', () => startPersonalGoogleCalendarConnection(personalConnectBtn));
+    }
+    const personalAddBtn = document.getElementById('calPersonalGoogleAddBtn');
+    if (personalAddBtn) {
+      personalAddBtn.addEventListener('click', async () => {
+        setButtonLoading(personalAddBtn, true, 'Adding');
+        try {
+          const { personalGoogleCalendar } = await api.post(`/calendar/google/personal/events/${ev._id}`, {});
+          ev.personalGoogleCalendar = { ...ev.personalGoogleCalendar, ...personalGoogleCalendar, connected: true };
+          showToast('Event successfully added to your Google Calendar.', 'success');
+          this.showEventDetails(ev);
+        } catch (err) {
+          showToast(err.message, 'error');
+          setButtonLoading(personalAddBtn, false);
+        }
+      });
+    }
+    const personalRemoveBtn = document.getElementById('calPersonalGoogleRemoveBtn');
+    if (personalRemoveBtn) {
+      personalRemoveBtn.addEventListener('click', async () => {
+        if (!confirm(`Remove "${ev.title}" from your Google Calendar?`)) return;
+        setButtonLoading(personalRemoveBtn, true, 'Removing');
+        try {
+          const { personalGoogleCalendar } = await api.del(`/calendar/google/personal/events/${ev._id}`);
+          ev.personalGoogleCalendar = { ...ev.personalGoogleCalendar, ...personalGoogleCalendar };
+          showToast('Event removed from your Google Calendar.', 'success');
+          this.showEventDetails(ev);
+        } catch (err) {
+          showToast(err.message, 'error');
+          setButtonLoading(personalRemoveBtn, false);
+        }
+      });
+    }
     const deleteBtn = document.getElementById('calDeleteEventBtn');
     if (deleteBtn && canDeleteEvent && this.onDeleteEvent) {
       deleteBtn.addEventListener('click', async () => {
@@ -1396,20 +1519,42 @@ class EventsCalendar {
   googleCalendarDetailHtml(ev, escapeValue) {
     const sync = ev.googleCalendar;
     const syncBadge = googleSyncBadge(ev);
-    const addLink = ev.addToGoogleCalendarUrl && !(sync && sync.htmlLink && sync.status === 'synced')
-      ? `<a class="event-map-directions" href="${escapeValue(ev.addToGoogleCalendarUrl)}" target="_blank" rel="noopener noreferrer"><i class="fa-regular fa-calendar-plus" aria-hidden="true"></i> Add to my Google Calendar</a>`
+    const personalCalendar = ev.personalGoogleCalendar;
+    const approved = ev.publicationStatus === 'published' && ev.approvalStatus === 'approved';
+    const personalActions = personalCalendar && approved
+      ? this.personalGoogleCalendarDetailHtml(ev, escapeValue)
       : '';
-    if (!syncBadge && !addLink) return '';
-    return `
+    const schoolCalendar = syncBadge ? `
       <div class="event-detail-item">
-        <div class="event-detail-label">Google Calendar</div>
+        <div class="event-detail-label">School Google Calendar</div>
         ${syncBadge ? `<div class="event-detail-val">${syncBadge}</div>` : ''}
         ${sync && sync.status === 'failed' && sync.error ? `<div class="form-msg error" role="alert">${escapeValue(sync.error)}</div>` : ''}
         ${sync && sync.lastSyncedAt && sync.status === 'synced' ? `<div class="field-hint">Last synced ${escapeValue(new Date(sync.lastSyncedAt).toLocaleString())}</div>` : ''}
         <div class="event-map-links">
           ${sync && sync.htmlLink && sync.status === 'synced' ? `<a class="event-map-directions" href="${escapeValue(sync.htmlLink)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i> Open in Google Calendar</a>` : ''}
-          ${addLink}
           ${syncBadge && sync.status !== 'synced' ? '<button type="button" class="btn btn-ghost btn-sm" id="calRetrySyncBtn"><i class="fa-solid fa-rotate" aria-hidden="true"></i> Retry sync</button>' : ''}
+        </div>
+      </div>` : '';
+    return `${personalActions}${schoolCalendar}`;
+  }
+
+  personalGoogleCalendarDetailHtml(ev, escapeValue) {
+    const personal = ev.personalGoogleCalendar;
+    const added = personal.status === 'synced';
+    const canUseConnection = personal.connected && !personal.needsReconnect;
+    const addButton = canUseConnection
+      ? `<button type="button" class="btn btn-primary btn-sm" id="calPersonalGoogleAddBtn"><i class="fa-regular fa-calendar-plus" aria-hidden="true"></i> ${personal.status === 'failed' || personal.status === 'pending' ? 'Retry adding to Google Calendar' : 'Add to Google Calendar'}</button>`
+      : `<button type="button" class="btn btn-primary btn-sm" id="calPersonalGoogleConnectBtn"><i class="fa-brands fa-google" aria-hidden="true"></i> ${personal.needsReconnect ? 'Reconnect Google Calendar' : 'Connect Google Calendar'}</button>`;
+    return `
+      <div class="event-detail-item">
+        <div class="event-detail-label">My Google Calendar</div>
+        ${personal.needsReconnect ? '<div class="form-msg error" role="alert">Reconnect your Google Calendar to manage selected events.</div>' : ''}
+        ${personal.error && personal.status === 'failed' ? `<div class="form-msg error" role="alert">${escapeValue(personal.error)}</div>` : ''}
+        ${added ? '<div class="form-msg success" role="status">This event is in your personal Google Calendar.</div>' : ''}
+        ${personal.lastSyncedAt && added ? `<div class="field-hint">Last updated ${escapeValue(new Date(personal.lastSyncedAt).toLocaleString())}</div>` : ''}
+        <div class="event-map-links">
+          ${added && personal.htmlLink ? `<a class="event-map-directions" href="${escapeValue(personal.htmlLink)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i> Open in Google Calendar</a>` : ''}
+          ${added && canUseConnection ? '<button type="button" class="btn btn-ghost btn-sm" id="calPersonalGoogleRemoveBtn"><i class="fa-solid fa-calendar-minus" aria-hidden="true"></i> Remove from my calendar</button>' : addButton}
         </div>
       </div>`;
   }
@@ -2162,6 +2307,7 @@ function initDashboardSync() {
     if (refreshInProgress || document.hidden || document.querySelector('.modal-backdrop.open')) return;
     const activePanel = document.querySelector('.panel.active');
     if (!activePanel || typeof onPanelShown !== 'function') return;
+    if (activePanel.id === 'panel-settings') return;
 
     refreshInProgress = true;
     try {
@@ -2183,6 +2329,7 @@ function initDashboardSync() {
 document.addEventListener('DOMContentLoaded', () => {
   initSidebarNav();
   initLogout();
+  initPersonalGoogleCalendarSettings();
   initSettingsProfile();
   setWhoName();
   initDashboardSync();
