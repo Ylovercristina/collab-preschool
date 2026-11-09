@@ -1,6 +1,7 @@
 const Event = require('../models/Event');
 const User = require('../models/User');
 const calendar = require('../services/googleCalendar');
+const googleDrive = require('../services/googleDrive');
 const { isEventVisibleToUser } = require('../services/eventVisibility');
 const logActivity = require('../utils/logActivity');
 
@@ -18,6 +19,50 @@ function userEventsUrl(role, result) {
   url.searchParams.set('panel', 'events');
   url.searchParams.set('personalGoogleCalendar', result);
   return url.toString();
+}
+
+function googleDrivePopupResponse(res, result) {
+  const origin = new URL(process.env.CLIENT_ORIGIN || 'http://127.0.0.1:5500').origin;
+  const message = JSON.stringify({ source: 'play-is-school', type: 'google-drive-oauth', result }).replace(/</g, '\\u003c');
+  res.type('html').send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Google Drive</title></head><body><p>Returning to Academic Progress…</p><script>if (window.opener) { window.opener.postMessage(${message}, ${JSON.stringify(origin)}); window.opener.focus(); } window.close();</script></body></html>`);
+}
+
+async function handleGoogleDriveCallback(req, res) {
+  const driveState = await googleDrive.consumeOAuthState(req.query.state);
+  if (!driveState) return false;
+  const user = await User.findById(driveState.userId);
+  if (!user || user.role !== 'teacher' || user.status === 'archived') {
+    googleDrivePopupResponse(res, 'forbidden');
+    return true;
+  }
+  if (req.query.error) {
+    googleDrivePopupResponse(res, req.query.error === 'access_denied' ? 'cancelled' : 'failed');
+    return true;
+  }
+  if (typeof req.query.code !== 'string') {
+    googleDrivePopupResponse(res, 'failed');
+    return true;
+  }
+  try {
+    await googleDrive.completeConnection(req.query.code, user._id, driveState.clientSelectionId);
+    await logActivity(user._id, 'google-drive-connected', 'Academic progress photos');
+    googleDrivePopupResponse(res, 'connected');
+  } catch (err) {
+    console.error('[progress] Google Drive connection failed:', err.message);
+    googleDrivePopupResponse(res, /permission/i.test(err.message) ? 'missing-scope' : 'failed');
+  }
+  return true;
+}
+
+function googleCalendarFailureResult(error) {
+  const responseError = error && error.response && error.response.data && error.response.data.error;
+  const detail = `${error && error.code || ''} ${responseError || ''} ${error && error.message || error || ''}`.toLowerCase();
+  if (/permission/.test(detail)) return 'missing-scope';
+  if (/refresh token|offline access/.test(detail)) return 'missing-refresh';
+  if (/redirect_uri_mismatch|redirect uri mismatch/.test(detail)) return 'redirect-mismatch';
+  if (/invalid_client|unauthorized_client/.test(detail)) return 'invalid-client';
+  if (/invalid_grant/.test(detail)) return 'invalid-grant';
+  return 'failed';
 }
 
 // GET /api/calendar/google/status
@@ -44,6 +89,8 @@ exports.connect = async (req, res) => {
 
 // GET /api/calendar/google/callback (Google redirects the admin's browser here)
 exports.callback = async (req, res) => {
+  if (await handleGoogleDriveCallback(req, res)) return;
+
   const personalState = await calendar.consumePersonalState(req.query.state).catch(() => null);
   if (personalState) {
     const user = await User.findById(personalState.userId);
@@ -51,7 +98,8 @@ exports.callback = async (req, res) => {
     if (req.query.error) return res.redirect(userEventsUrl(user.role, req.query.error === 'access_denied' ? 'cancelled' : 'failed'));
     if (typeof req.query.code !== 'string') return res.redirect(userEventsUrl(user.role, 'failed'));
     try {
-      await calendar.completePersonalConnection(req.query.code, user._id, personalState.clientSelectionId);
+      if (!personalState.shareCalendarWithSchool) return res.redirect(userEventsUrl(user.role, 'consent-required'));
+      await calendar.completePersonalConnection(req.query.code, user._id, personalState.clientSelectionId, personalState.shareCalendarWithSchool);
       await logActivity(user._id, 'personal-google-calendar-connected', 'Google Calendar');
       return res.redirect(userEventsUrl(user.role, 'connected'));
     } catch (err) {
@@ -65,7 +113,12 @@ exports.callback = async (req, res) => {
 
   const state = await calendar.consumeState(req.query.state).catch(() => null);
   if (!state) return res.redirect(adminEventsUrl('invalid-state'));
-  if (req.query.error) return res.redirect(adminEventsUrl(req.query.error === 'access_denied' ? 'cancelled' : 'failed'));
+  if (req.query.error) {
+    const result = req.query.error === 'access_denied'
+      ? 'cancelled'
+      : googleCalendarFailureResult(req.query.error);
+    return res.redirect(adminEventsUrl(result));
+  }
   if (typeof req.query.code !== 'string') return res.redirect(adminEventsUrl('failed'));
   try {
     const admin = await User.findById(state.userId);
@@ -75,8 +128,17 @@ exports.callback = async (req, res) => {
     return res.redirect(adminEventsUrl('connected'));
   } catch (err) {
     console.error('[calendar] Google connection failed:', err.message);
-    const result = err instanceof calendar.CalendarSyncError && /permission/i.test(err.message) ? 'missing-scope' : 'failed';
-    return res.redirect(adminEventsUrl(result));
+    return res.redirect(adminEventsUrl(googleCalendarFailureResult(err)));
+  }
+};
+
+exports.driveCallback = async (req, res) => {
+  try {
+    if (await handleGoogleDriveCallback(req, res)) return;
+    googleDrivePopupResponse(res, 'invalid-state');
+  } catch (err) {
+    console.error('[progress] Google Drive callback failed:', err.message);
+    googleDrivePopupResponse(res, 'failed');
   }
 };
 
@@ -95,14 +157,19 @@ exports.personalConnect = async (req, res) => {
   const configError = calendar.configurationError();
   if (configError) return res.status(400).json({ message: `Google Calendar is not set up. ${configError}` });
   try {
-    res.json({ authorizationUrl: await calendar.createPersonalAuthorizationUrl(req.user._id) });
+    const authorizationUrl = await calendar.createPersonalAuthorizationUrl(
+      req.user._id,
+      (req.body || {}).shareCalendarWithSchool
+    );
+    res.json({ authorizationUrl });
   } catch (err) {
+    if (err instanceof calendar.CalendarSyncError) return res.status(400).json({ message: err.message });
     console.error('[calendar] Could not start personal Google connection:', err.message);
     res.status(500).json({ message: 'Could not start your Google Calendar connection.' });
   }
 };
 
-// POST /api/calendar/google/personal/sync (retry selected event updates only)
+// POST /api/calendar/google/personal/sync (import Google events and update selected school events)
 exports.syncPersonalEvents = async (req, res) => {
   try {
     const summary = await calendar.syncPersonalUserEvents(req.user._id);
@@ -110,7 +177,7 @@ exports.syncPersonalEvents = async (req, res) => {
   } catch (err) {
     const status = err instanceof calendar.CalendarSyncError ? 409 : 500;
     if (status === 500) console.error('[calendar] Personal event sync failed:', err.message);
-    res.status(status).json({ message: status === 409 ? err.message : 'Could not sync selected Google Calendar events.' });
+    res.status(status).json({ message: status === 409 ? err.message : 'Could not sync Google Calendar events.' });
   }
 };
 
@@ -168,7 +235,7 @@ exports.disconnectPersonal = async (req, res) => {
     await logActivity(req.user._id, 'personal-google-calendar-disconnected', 'Google Calendar');
     res.json({
       status: await calendar.getPersonalCalendarStatus(req.user._id),
-      message: 'Google Calendar disconnected. Events already added to your calendar were left unchanged.',
+      message: 'Google Calendar disconnected. Imported events were removed from the shared system calendar; events already added to Google were left unchanged.',
     });
   } catch (err) {
     console.error('[calendar] Personal disconnect failed:', err.message);

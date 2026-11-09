@@ -7,7 +7,8 @@ const authSettingsSchema = new mongoose.Schema(
     captchaEnabled: { type: Boolean, default: true },
     customGoogleClientEnabled: { type: Boolean, default: false },
     customGoogleClientId: { type: String, default: '', trim: true, maxlength: 256 },
-    activeGoogleOAuthClientId: { type: String, default: '', trim: true, maxlength: 64 },
+    activeGoogleOAuthClientId: { type: String, default: 'default', trim: true, maxlength: 64 },
+    activeRecaptchaClientId: { type: String, default: 'default', trim: true, maxlength: 64 },
   },
   { timestamps: true }
 );

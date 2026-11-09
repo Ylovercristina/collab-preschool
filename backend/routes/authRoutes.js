@@ -1,15 +1,19 @@
 const router = require('express').Router();
-const { protect, allowRoles } = require('../middleware/auth');
+const { protect, allowRoles, requireIntegrationOtp } = require('../middleware/auth');
 const ctrl = require('../controllers/authController');
 
 router.post('/signup', ctrl.signup);
 router.post('/login', ctrl.login);
+router.post('/request-integration-otp', protect, allowRoles('admin'), ctrl.requestIntegrationOtp);
+router.post('/verify-integration-otp', protect, allowRoles('admin'), ctrl.verifyIntegrationOtp);
+router.post('/verify-integration-pin', protect, allowRoles('admin'), ctrl.verifyIntegrationPin);
 router.get('/settings', ctrl.getAuthSettings);
-router.patch('/settings', protect, allowRoles('admin'), ctrl.updateAuthSettings);
-router.get('/google-clients', protect, allowRoles('admin'), ctrl.listGoogleOAuthClients);
-router.post('/google-clients', protect, allowRoles('admin'), ctrl.addGoogleOAuthClient);
-router.patch('/google-clients/:id', protect, allowRoles('admin'), ctrl.updateGoogleOAuthClient);
-router.delete('/google-clients/:id', protect, allowRoles('admin'), ctrl.deleteGoogleOAuthClient);
+router.get('/settings/manage', protect, allowRoles('admin'), requireIntegrationOtp('access'), ctrl.getAuthSettings);
+router.patch('/settings', protect, allowRoles('admin'), requireIntegrationOtp('access'), ctrl.updateAuthSettings);
+router.get('/google-clients', protect, allowRoles('admin'), requireIntegrationOtp('access'), ctrl.getGoogleOAuthConfig);
+router.put('/google-clients', protect, allowRoles('admin'), requireIntegrationOtp('access'), ctrl.saveGoogleOAuthClient);
+router.get('/recaptcha-clients', protect, allowRoles('admin'), requireIntegrationOtp('access'), ctrl.getRecaptchaConfig);
+router.put('/recaptcha-clients', protect, allowRoles('admin'), requireIntegrationOtp('access'), ctrl.saveRecaptchaClient);
 router.get('/recaptcha-config', ctrl.recaptchaConfig);
 router.post('/google/start', ctrl.googleStartWithCaptcha);
 router.get('/google', ctrl.googleStart);

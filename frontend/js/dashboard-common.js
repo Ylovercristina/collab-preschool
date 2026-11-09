@@ -22,16 +22,48 @@ async function pollEmailSummary(path, initial, target) {
 function initSidebarNav() {
   document.querySelectorAll('.nav-item[data-panel]').forEach((btn) => {
     btn.addEventListener('click', () => {
+      if (btn.dataset.panel === 'settings') {
+        if (typeof onSettingsAccessRevoked === 'function') onSettingsAccessRevoked();
+        document.querySelectorAll('.settings-section').forEach((panel) => {
+          panel.classList.toggle('active', panel.id === 'settings-section-profile');
+        });
+        document.querySelectorAll('.settings-subnav').forEach((item) => {
+          item.classList.toggle('active', item.dataset.settingsSection === 'profile');
+        });
+      } else if (typeof onSettingsAccessRevoked === 'function') {
+        onSettingsAccessRevoked();
+      }
       document.querySelectorAll('.nav-item[data-panel]').forEach((b) => b.classList.remove('active'));
       document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
       btn.classList.add('active');
+      const settingsMenu = btn.closest('.settings-menu');
+      if (settingsMenu) settingsMenu.classList.add('open');
+      else document.querySelector('.settings-menu')?.classList.remove('open');
       const targetPanel = document.getElementById(`panel-${btn.dataset.panel}`);
       if (targetPanel) targetPanel.classList.add('active');
       if (typeof onPanelShown === 'function') onPanelShown(btn.dataset.panel);
+      if (btn.dataset.panel === 'events') loadPersonalGoogleCalendarButton();
       if (btn.dataset.panel === 'settings') {
         loadSettingsProfile();
-        loadPersonalGoogleCalendarSettings();
       }
+    });
+  });
+
+  document.querySelectorAll('.settings-subnav[data-settings-section]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const section = btn.dataset.settingsSection;
+      if (!document.getElementById('panel-settings')?.classList.contains('active')) {
+        document.querySelector('.settings-button[data-panel="settings"]')?.click();
+      }
+      if (typeof authorizeSettingsSection === 'function' && !authorizeSettingsSection(section, btn)) return;
+      document.querySelectorAll('.settings-section').forEach((panel) => {
+        panel.classList.toggle('active', panel.id === `settings-section-${section}`);
+      });
+      document.querySelectorAll('.settings-subnav').forEach((item) => {
+        item.classList.toggle('active', item === btn);
+      });
+      if (section === 'calendar') loadPersonalGoogleCalendarSettings();
+      if (typeof onSettingsSectionShown === 'function') onSettingsSectionShown(section);
     });
   });
 
@@ -57,27 +89,75 @@ async function loadPersonalGoogleCalendarSettings() {
   const connect = document.getElementById('personalGoogleCalendarConnect');
   const sync = document.getElementById('personalGoogleCalendarSync');
   const disconnect = document.getElementById('personalGoogleCalendarDisconnect');
+  const consent = document.getElementById('personalGoogleCalendarShareConsent');
   if (!message || !account || !connect || !sync || !disconnect) return;
+  loadPersonalGoogleCalendarButton();
   try {
     const { status } = await api.get('/calendar/google/personal/status');
-    account.textContent = status.connected && status.accountEmail ? `Connected account: ${status.accountEmail}` : '';
+    const consentLabel = consent && consent.closest('label');
+    if (consentLabel) consentLabel.hidden = status.connected && !status.needsReconnect;
+    if (consent) {
+      consent.checked = false;
+      connect.disabled = !consent.checked;
+    }
+    account.textContent = status.connected
+      ? `Connected account: ${status.accountEmail || 'Google Calendar'} · ${status.importedEventCount} event${status.importedEventCount === 1 ? '' : 's'} shared`
+      : '';
     connect.hidden = status.connected && !status.needsReconnect;
     sync.hidden = !status.connected || status.needsReconnect;
     disconnect.hidden = !status.connected;
     message.className = `form-msg ${status.needsReconnect ? 'error' : (status.connected ? 'success' : '')}`;
     message.textContent = status.needsReconnect
-      ? (status.lastError || 'Reconnect your Google Calendar account to continue syncing selected events.')
-      : (status.connected ? 'Google Calendar is connected.' : (status.configurationError || 'Connect your personal Google Calendar to add selected events.'));
+      ? (status.lastError || 'Reconnect your Google Calendar account to continue syncing.')
+      : (status.connected
+        ? (status.lastCalendarSyncError || (status.lastCalendarSyncAt
+          ? `Google Calendar is connected. Last synced ${new Date(status.lastCalendarSyncAt).toLocaleString()}.`
+          : 'Google Calendar is connected; the first import is starting.'))
+        : (status.configurationError || 'Connect your Google Calendar to share its events with the school calendar.'));
   } catch (err) {
     message.className = 'form-msg error';
     message.textContent = err.message;
   }
 }
 
+// Events-header button (teacher/parent) showing this user's own Google Calendar connection.
+async function loadPersonalGoogleCalendarButton() {
+  const button = document.getElementById('personalGoogleCalendarStatusBtn');
+  if (!button) return;
+  let state = 'unavailable';
+  let label = 'Unavailable';
+  try {
+    const { status } = await api.get('/calendar/google/personal/status');
+    if (!status.configured) [state, label] = ['off', 'Not set up'];
+    else if (status.connected && status.needsReconnect) [state, label] = ['error', 'Reconnect needed'];
+    else if (status.connected && (status.lastError || status.lastCalendarSyncError)) [state, label] = ['warning', 'Sync issues'];
+    else if (status.connected) [state, label] = ['ok', 'Connected'];
+    else [state, label] = ['off', 'Not connected'];
+  } catch (err) { /* keep "Unavailable" */ }
+  button.className = `gcal-status-btn ${state}`;
+  button.innerHTML = `<i class="fa-brands fa-google" aria-hidden="true"></i><span>Google Calendar</span><span class="gcal-status-dot" aria-hidden="true"></span><span class="gcal-status-label">${label}</span>`;
+  button.setAttribute('aria-label', `Google Calendar: ${label}. Open Google Calendar settings`);
+  button.hidden = false;
+}
+
+function initPersonalGoogleCalendarButton() {
+  const button = document.getElementById('personalGoogleCalendarStatusBtn');
+  if (!button) return;
+  button.addEventListener('click', () => {
+    document.querySelector('.settings-subnav[data-settings-section="calendar"]')?.click();
+  });
+  loadPersonalGoogleCalendarButton();
+}
+
 async function startPersonalGoogleCalendarConnection(button) {
+  const consent = document.getElementById('personalGoogleCalendarShareConsent');
+  if (!consent || !consent.checked) {
+    showToast('Review and accept the shared-calendar notice in Settings before connecting.', 'error');
+    return;
+  }
   if (button) setButtonLoading(button, true, 'Connecting');
   try {
-    const { authorizationUrl } = await api.post('/calendar/google/personal/connect', {});
+    const { authorizationUrl } = await api.post('/calendar/google/personal/connect', { shareCalendarWithSchool: true });
     window.location.assign(authorizationUrl);
   } catch (err) {
     showToast(err.message, 'error');
@@ -86,6 +166,11 @@ async function startPersonalGoogleCalendarConnection(button) {
 }
 
 function initPersonalGoogleCalendarSettings() {
+  const consent = document.getElementById('personalGoogleCalendarShareConsent');
+  const connect = document.getElementById('personalGoogleCalendarConnect');
+  consent?.addEventListener('change', () => {
+    if (connect) connect.disabled = !consent.checked;
+  });
   document.getElementById('personalGoogleCalendarConnect')?.addEventListener('click', (event) => {
     startPersonalGoogleCalendarConnection(event.currentTarget);
   });
@@ -94,9 +179,11 @@ function initPersonalGoogleCalendarSettings() {
     setButtonLoading(button, true, 'Syncing');
     try {
       const { summary } = await api.post('/calendar/google/personal/sync', {});
-      const message = `Updated ${summary.synced}; removed/cancelled ${summary.cancelled}; failed ${summary.failed}${summary.pending ? `; waiting ${summary.pending}` : ''}.`;
-      showToast(message, summary.failed || summary.pending ? 'error' : 'success');
+      const selected = summary.selected || {};
+      const message = `Imported/updated ${summary.imported}; removed ${summary.removed}; selected school events synced ${selected.synced || 0}; failed ${(selected.failed || 0) + (selected.pending || 0)}.`;
+      showToast(message, selected.failed || selected.pending ? 'error' : 'success');
       await loadPersonalGoogleCalendarSettings();
+      if (typeof loadEvents === 'function') await loadEvents();
     } catch (err) {
       showToast(err.message, 'error');
     } finally {
@@ -105,12 +192,13 @@ function initPersonalGoogleCalendarSettings() {
   });
   document.getElementById('personalGoogleCalendarDisconnect')?.addEventListener('click', async (event) => {
     const button = event.currentTarget;
-    if (!confirm('Disconnect your personal Google Calendar? Events already added there will remain unchanged.')) return;
+    if (!confirm('Disconnect your Google Calendar? Its imported events will be removed from the shared school calendar. Events already added to your Google Calendar will remain unchanged.')) return;
     setButtonLoading(button, true, 'Disconnecting');
     try {
       const { message } = await api.del('/calendar/google/personal/connection');
       showToast(message, 'success');
       await loadPersonalGoogleCalendarSettings();
+      if (typeof loadEvents === 'function') await loadEvents();
     } catch (err) {
       showToast(err.message, 'error');
     } finally {
@@ -122,7 +210,8 @@ function initPersonalGoogleCalendarSettings() {
   const result = params.get('personalGoogleCalendar');
   if (result) {
     const notices = {
-      connected: ['Google Calendar connected. Previously selected events are syncing.', 'success'],
+      connected: ['Google Calendar connected. Importing events into the shared school calendar.', 'success'],
+      'consent-required': ['Review and accept the shared-calendar notice before connecting Google Calendar.', 'error'],
       cancelled: ['Google Calendar connection was cancelled.', 'info'],
       'missing-scope': ['Google Calendar permission was not granted. Please allow calendar access and try again.', 'error'],
       failed: ['Could not connect Google Calendar.', 'error'],
@@ -552,7 +641,7 @@ const Modal = {
   },
 };
 
-function showToast(message, type = 'success') {
+function getToastStack() {
   let stack = document.getElementById('toastStack');
   if (!stack) {
     stack = document.createElement('div');
@@ -562,12 +651,133 @@ function showToast(message, type = 'success') {
     stack.setAttribute('aria-relevant', 'additions text');
     document.body.appendChild(stack);
   }
+  return stack;
+}
+
+function showToast(message, type = 'success') {
+  const stack = getToastStack();
   const toast = document.createElement('div');
   toast.className = `toast-message toast-${type}`;
   toast.setAttribute('role', 'status');
   toast.textContent = message;
   stack.appendChild(toast);
   window.setTimeout(() => toast.remove(), 5000);
+}
+
+// ---------- New-message popups (teachers & parents) ----------
+// Polls the inbox and pops up a notification when someone else sends a message.
+// Role scripts may define messagePopupIsThreadOpen(thread) and messagePopupOpenThread(thread).
+const MESSAGE_POPUP_POLL_MS = 5000;
+const messagePopupSeen = new Map(); // thread key -> id of the newest message already handled
+let messagePopupPrimed = false;
+
+function messagePopupKey(thread) {
+  return `${thread.type}:${thread.id}`;
+}
+
+function messagePopupSender(thread) {
+  const message = thread.lastMessage;
+  if (!message) return { id: '', name: '' };
+  if (thread.type === 'direct') {
+    const sender = message.sender || {};
+    return { id: String(sender._id || sender.id || sender), name: sender.name || thread.with.name };
+  }
+  const senderId = String(message.sender && (message.sender._id || message.sender));
+  const participant = (thread.participants || []).find((person) => person.id === senderId);
+  return { id: senderId, name: participant ? participant.name : 'Someone' };
+}
+
+function messagePopupIsOpen(thread) {
+  if (document.hidden) return false;
+  if (!document.getElementById('panel-messages')?.classList.contains('active')) return false;
+  return typeof messagePopupIsThreadOpen === 'function' && messagePopupIsThreadOpen(thread);
+}
+
+async function openMessageFromPopup(thread) {
+  // Pages whose Messages panel reopens the "current" chat on load pick the thread first.
+  if (typeof messagePopupSelectThread === 'function') {
+    messagePopupSelectThread(thread);
+    document.querySelector('.nav-item[data-panel="messages"]')?.click();
+    return;
+  }
+  document.querySelector('.nav-item[data-panel="messages"]')?.click();
+  if (typeof messagePopupOpenThread === 'function') {
+    try { await messagePopupOpenThread(thread); } catch (err) { showToast(err.message, 'error'); }
+  }
+}
+
+function showMessagePopup(thread, sender) {
+  const stack = getToastStack();
+  const title = thread.type === 'group' ? `${sender.name} · ${thread.name}` : sender.name;
+  const preview = String(thread.lastMessage.content || '').slice(0, 140);
+  const popup = document.createElement('button');
+  popup.type = 'button';
+  popup.className = 'toast-message message-popup';
+  popup.setAttribute('aria-label', `New message from ${title}: ${preview}. Open conversation`);
+  popup.innerHTML = `
+    <span class="message-popup-icon" aria-hidden="true"><i class="fa-solid ${thread.type === 'group' ? 'fa-users' : 'fa-comment-dots'}"></i></span>
+    <span class="message-popup-copy">
+      <strong>${escapeDashboardHtml(title)}</strong>
+      <span>${escapeDashboardHtml(preview)}</span>
+    </span>`;
+  popup.addEventListener('click', () => {
+    popup.remove();
+    openMessageFromPopup(thread);
+  });
+  stack.appendChild(popup);
+  window.setTimeout(() => popup.remove(), 8000);
+
+  // Background tab: also use the browser's own notification if the user allowed it.
+  if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+    try {
+      const notice = new Notification(`New message from ${title}`, { body: preview, tag: messagePopupKey(thread) });
+      notice.onclick = () => {
+        window.focus();
+        notice.close();
+        openMessageFromPopup(thread);
+      };
+    } catch { /* notifications unsupported in this context */ }
+  }
+}
+
+async function checkForNewMessages() {
+  const me = Auth.getUser() || {};
+  const myId = String(me.id || me._id || '');
+  let threads;
+  try {
+    ({ threads } = await api.get('/messages/inbox'));
+  } catch {
+    return;
+  }
+  threads.forEach((thread) => {
+    const message = thread.lastMessage;
+    if (!message || !message._id) return;
+    const key = messagePopupKey(thread);
+    const messageId = String(message._id);
+    const previous = messagePopupSeen.get(key);
+    messagePopupSeen.set(key, messageId);
+    // First poll only records what already exists; afterwards, pop up genuinely new messages.
+    if (!messagePopupPrimed || previous === messageId) return;
+    const sender = messagePopupSender(thread);
+    if (!sender.id || sender.id === myId || !thread.unread) return;
+    if (messagePopupIsOpen(thread)) return;
+    showMessagePopup(thread, sender);
+  });
+  messagePopupPrimed = true;
+}
+
+function initMessagePopups() {
+  const me = Auth.getUser();
+  if (!me || !['teacher', 'parent'].includes(me.role)) return;
+  if (!document.getElementById('panel-messages')) return;
+  // Ask once, on the first interaction, so background tabs can show system notifications.
+  if ('Notification' in window && Notification.permission === 'default') {
+    document.addEventListener('click', () => {
+      try { Notification.requestPermission(); } catch { /* ignore */ }
+    }, { once: true });
+  }
+  checkForNewMessages();
+  window.setInterval(checkForNewMessages, MESSAGE_POPUP_POLL_MS);
 }
 
 function setButtonLoading(button, isLoading, label = 'Saving') {
@@ -649,17 +859,18 @@ function renderEventStatusList(events, container) {
     const statusLabels = { draft: 'Draft', pending: 'Pending approval', rejected: 'Rejected', published: 'Published' };
     const evStatus = computeEventStatus(event);
     const sync = googleSyncBadge(event);
-    return `<div class="event-status-row list-row"><div><strong>${escapeDashboardHtml(event.title)}</strong><p>${fmtDate(event.date)}${event.time ? ` · ${escapeDashboardHtml(event.time)}` : ''}${event.venue ? ` · ${escapeDashboardHtml(event.venue)}` : ''}</p></div><span class="badge status-badge-${status}">${statusLabels[status] || 'Published'}</span><span class="status-badge ${evStatus}">${statusLabel(evStatus)}</span>${sync}</div>`;
+    return `<div class="event-status-row list-row"><div><strong>${escapeDashboardHtml(event.title)}</strong><p>${fmtDate(event.date)}${event.time ? ` · ${escapeDashboardHtml(event.time)}` : ''}${event.venue ? ` · ${escapeDashboardHtml(event.venue)}` : ''}</p></div>${event.googleImported ? '<span class="badge">Google Calendar</span>' : `<span class="badge status-badge-${status}">${statusLabels[status] || 'Published'}</span>`}<span class="status-badge ${evStatus}">${statusLabel(evStatus)}</span>${sync}</div>`;
   }).join('') : '<div class="notification-empty">No events scheduled yet.</div>';
 }
 
 // ==========================================================================
-// MAP VENUE PICKER (Leaflet + OpenStreetMap; no API key or billing needed)
+// MAP VENUE PICKER (Leaflet + configurable map tiles)
 // ==========================================================================
 // Initial viewport when no venue is pinned yet (the Philippines); no marker is placed.
 const DEFAULT_VENUE_MAP_VIEW = { center: [12.8797, 121.774], zoom: 5 };
 const LEAFLET_BASE_URL = 'https://unpkg.com/leaflet@1.9.4/dist';
 const NOMINATIM_URL = 'https://nominatim.openstreetmap.org';
+const OPENSTREETMAP_TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 let leafletLoader = null;
 let nominatimQueue = Promise.resolve();
 let lastNominatimRequest = 0;
@@ -936,10 +1147,23 @@ function createVenuePicker({ root, venueInput, initialLocation = null }) {
     });
     state.map.on('click focus', () => state.map.scrollWheelZoom.enable());
     state.map.on('mouseout blur', () => state.map.scrollWheelZoom.disable());
+    let mapTilerKey = '';
+    try {
+      const mapConfig = await api.get('/config/maps');
+      mapTilerKey = String(mapConfig.mapTilerApiKey || '').trim();
+    } catch (error) {
+      setStatus('Map provider settings are unavailable. Using OpenStreetMap tiles.', 'warning');
+    }
+    const tileUrl = mapTilerKey
+      ? `https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}.png?key=${encodeURIComponent(mapTilerKey)}`
+      : OPENSTREETMAP_TILE_URL;
+    const tileAttribution = mapTilerKey
+      ? '&copy; <a href="https://www.maptiler.com/copyright/" target="_blank" rel="noopener noreferrer">MapTiler</a> &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors'
+      : '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors';
     let tileWarningShown = false;
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    L.tileLayer(tileUrl, {
       maxZoom: 19,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors',
+      attribution: tileAttribution,
     }).on('tileerror', () => {
       if (tileWarningShown) return;
       tileWarningShown = true;
@@ -1349,11 +1573,11 @@ class EventsCalendar {
   }
 
   canEdit(ev) {
-    return this.canManage && (!this.canEditEventFn || this.canEditEventFn(ev));
+    return !ev.googleImported && this.canManage && (!this.canEditEventFn || this.canEditEventFn(ev));
   }
 
   canDelete(ev) {
-    return this.canManage && (!this.canDeleteEventFn || this.canDeleteEventFn(ev));
+    return !ev.googleImported && this.canManage && (!this.canDeleteEventFn || this.canDeleteEventFn(ev));
   }
 
   showEventDetails(ev) {
@@ -1517,6 +1741,14 @@ class EventsCalendar {
   }
 
   googleCalendarDetailHtml(ev, escapeValue) {
+    if (ev.googleImported) {
+      return `<div class="event-detail-item">
+        <div class="event-detail-label">Source</div>
+        <div class="event-detail-val">Imported from a connected Google Calendar</div>
+        ${ev.allDay ? '<div class="field-hint">All-day event</div>' : ''}
+        ${ev.googleEventLink ? `<div class="event-map-links"><a class="event-map-directions" href="${escapeValue(ev.googleEventLink)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i> Open in Google Calendar</a></div>` : ''}
+      </div>`;
+    }
     const sync = ev.googleCalendar;
     const syncBadge = googleSyncBadge(ev);
     const personalCalendar = ev.personalGoogleCalendar;
@@ -2326,10 +2558,41 @@ function initDashboardSync() {
   }, 60000);
 }
 
+// Overview cards/rows marked data-overview-panel open that sidebar section (all roles).
+// Clicks on real controls inside a card (buttons, links, inputs) keep their own behavior.
+function initOverviewNavigation() {
+  const overview = document.getElementById('panel-overview');
+  if (!overview) return;
+  const targetFrom = (event) => {
+    const target = event.target.closest('[data-overview-panel]');
+    if (!target) return null;
+    const control = event.target.closest('a, button, input, select, textarea, label, [data-open-notification]');
+    if (control && control !== target && target.contains(control)) return null;
+    return target;
+  };
+  const navigateFrom = (target) => {
+    document.querySelector(`.nav-item[data-panel="${target.dataset.overviewPanel}"]`)?.click();
+  };
+  overview.addEventListener('click', (event) => {
+    const target = targetFrom(event);
+    if (target) navigateFrom(target);
+  });
+  overview.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const target = targetFrom(event);
+    if (!target || event.target !== target) return;
+    event.preventDefault();
+    navigateFrom(target);
+  });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   initSidebarNav();
+  initOverviewNavigation();
   initLogout();
   initPersonalGoogleCalendarSettings();
+  initPersonalGoogleCalendarButton();
+  initMessagePopups();
   initSettingsProfile();
   setWhoName();
   initDashboardSync();
@@ -2463,33 +2726,36 @@ function progressPhotoGridHtml(entry) {
     </button>`).join('')}</div>`;
 }
 
-function progressEntryCardHtml(entry, { actionsHtml = '' } = {}) {
+// Compact report card in the dashboard stat-card style: icon, title, one meta line,
+// one-line preview and a single photo. The full report lives in the details view.
+function progressEntryCardHtml(entry, { actionsHtml = '', interactive = false } = {}) {
   const type = entry.entryType || 'activity';
   const current = isCurrentProgressPeriod(entry);
-  const field = (label, value) => (value ? `<p><strong>${label}:</strong> ${escapeDashboardHtml(value)}</p>` : '');
+  const icons = { activity: 'fa-shapes', weekly: 'fa-calendar-week', monthly: 'fa-calendar' };
   const title = entry.milestone || entry.activity || 'Progress record';
+  const preview = [entry.milestone ? entry.activity : '', entry.observations, entry.notes, entry.assessment, entry.evaluation]
+    .find((text) => text && String(text).trim()) || '';
+  const meta = [progressPeriodLabel(entry), entry.teacher?.name].filter(Boolean)
+    .map((part) => escapeDashboardHtml(part)).join(' · ');
+  const attachments = entry.attachments || [];
+  const thumb = attachments.length ? `
+    <span class="progress-entry-thumb">
+      <img data-protected-src="/progress/${escapeDashboardHtml(entry._id)}/attachments/${escapeDashboardHtml(attachments[0]._id)}" alt="" loading="lazy" />
+      ${attachments.length > 1 ? `<span>+${attachments.length - 1}</span>` : ''}
+    </span>` : '';
   return `
-    <article class="progress-entry progress-entry-${type} ${current ? 'is-current' : ''}">
-      <div class="progress-entry-heading">
-        <div>
-          <div class="progress-entry-tags">
-            <span class="progress-type-badge ${type}">${PROGRESS_TYPE_LABELS[type] || 'Activity'}</span>
-            ${current ? `<span class="progress-type-badge current">This ${type === 'weekly' ? 'week' : 'month'}</span>` : ''}
-            ${entry.learningArea ? `<span class="progress-category">${escapeDashboardHtml(entry.learningArea)}</span>` : ''}
-          </div>
+    <article class="progress-entry progress-entry-${type} ${current ? 'is-current' : ''} ${interactive ? 'progress-entry-interactive' : ''}" ${interactive ? `data-open-progress-details="${escapeDashboardHtml(entry._id)}" tabindex="0" aria-haspopup="dialog" aria-label="View full academic progress report: ${escapeDashboardHtml(title)}"` : ''}>
+      <span class="progress-entry-icon" aria-hidden="true"><i class="fa-solid ${icons[type] || icons.activity}"></i></span>
+      <div class="progress-entry-main">
+        <div class="progress-entry-title">
           <h4>${escapeDashboardHtml(title)}</h4>
-          <div class="progress-entry-meta">${escapeDashboardHtml(progressPeriodLabel(entry))}${entry.teacher?.name ? ` · ${escapeDashboardHtml(entry.teacher.name)}` : ''}${entry.className ? ` · ${escapeDashboardHtml(entry.className)}` : ''}</div>
+          <span class="badge progress-badge-${type}">${current ? `This ${type === 'weekly' ? 'week' : 'month'}` : escapeDashboardHtml(PROGRESS_TYPE_LABELS[type] || 'Activity')}</span>
         </div>
-        ${actionsHtml ? `<div class="progress-entry-actions">${actionsHtml}</div>` : ''}
+        <div class="progress-entry-meta">${meta}</div>
+        ${preview ? `<p class="progress-entry-preview">${escapeDashboardHtml(preview)}</p>` : ''}
       </div>
-      ${entry.milestone && entry.activity ? field('Description', entry.activity) : ''}
-      ${field('Observations', entry.observations)}
-      ${field('Assessment result', entry.assessment)}
-      ${field('Teacher evaluation', entry.evaluation)}
-      ${field('Strengths', entry.strengths)}
-      ${field('Needs support', entry.areasForImprovement)}
-      ${field('Overall development', entry.overallDevelopment)}
-      ${field('Progress notes', entry.notes)}
-      ${progressPhotoGridHtml(entry)}
+      ${thumb}
+      ${actionsHtml ? `<div class="progress-entry-actions">${actionsHtml}</div>` : ''}
+      ${interactive ? '<i class="fa-solid fa-chevron-right progress-entry-chevron" aria-hidden="true"></i>' : ''}
     </article>`;
 }

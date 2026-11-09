@@ -73,11 +73,11 @@ async function loadMyStudents() {
 async function loadOverview() {
   await Promise.all([loadMyStudents(), loadTeacherNotifications({ silent: true })]);
   document.getElementById('statRow').innerHTML = `
-    <div class="stat-card">
+    <div class="stat-card overview-clickable" data-overview-panel="students" role="button" tabindex="0" aria-label="View assigned students">
       <div class="stat-icon"><i class="fa-solid fa-user-graduate"></i></div>
       <div class="stat-content"><div class="num">${myStudents.length}</div><div class="label">Assigned Students</div></div>
     </div>
-    <div class="stat-card">
+    <div class="stat-card overview-clickable" data-overview-panel="students" role="button" tabindex="0" aria-label="View active students">
       <div class="stat-icon"><i class="fa-solid fa-user-check"></i></div>
       <div class="stat-content"><div class="num">${myStudents.filter((student) => student.status === 'active').length}</div><div class="label">Active Students</div></div>
     </div>
@@ -300,6 +300,7 @@ const attDateInput = document.getElementById('attDate');
 attDateInput.value = localDateValue();
 let generatedAttendanceReport = null;
 let attendanceReportStudentName = '';
+let attendanceReportPeriodLabel = '';
 attDateInput.addEventListener('change', () => {
   if (attendanceLoadedDate && attDateInput.value !== attendanceLoadedDate && !confirmDiscardAttendance('Change the date')) {
     attDateInput.value = attendanceLoadedDate;
@@ -330,6 +331,7 @@ function openAttendanceReport() {
   Modal.body.querySelector('#downloadAttendanceReport').addEventListener('click', downloadAttendanceReport);
   generatedAttendanceReport = null;
   attendanceReportStudentName = '';
+  attendanceReportPeriodLabel = '';
 }
 
 function previousDateValue(value) {
@@ -592,12 +594,6 @@ document.addEventListener('click', (event) => {
   }
 }, true);
 
-function csvField(value) {
-  let text = String(value == null ? '' : value);
-  if (/^[\t\r ]*[=+\-@]/.test(text)) text = `'${text}`;
-  return `"${text.replace(/"/g, '""')}"`;
-}
-
 async function generateAttendanceReport(event) {
   event.preventDefault();
   const modal = Modal.body;
@@ -611,6 +607,7 @@ async function generateAttendanceReport(event) {
   const results = modal.querySelector('#attendanceReportResults');
   downloadButton.disabled = true;
   generatedAttendanceReport = null;
+  attendanceReportPeriodLabel = '';
   if (!Number.isInteger(year) || year < 1900 || year > 9999
       || (selectedPeriod === 'month' && (!Number.isInteger(month) || month < 1 || month > 12))) {
     results.hidden = false;
@@ -663,6 +660,9 @@ async function generateAttendanceReport(event) {
         || left.studentName.localeCompare(right.studentName)
       ));
     attendanceReportStudentName = studentId === 'all' ? 'all-students' : selectedStudent.name;
+    attendanceReportPeriodLabel = selectedPeriod === 'year'
+      ? `Year ${year}`
+      : `${new Date(Date.UTC(year, month - 1, 1)).toLocaleString('en', { month: 'long', timeZone: 'UTC' })} ${year}`;
     const reportCounts = { present: 0, absent: 0, tardy: 0, excused: 0 };
     generatedAttendanceReport.forEach((record) => {
       const status = record.status === 'late' ? 'tardy' : record.status;
@@ -696,27 +696,142 @@ async function generateAttendanceReport(event) {
   }
 }
 
-function downloadAttendanceReport() {
+async function downloadAttendanceReport() {
   if (!generatedAttendanceReport || !generatedAttendanceReport.length) return;
-  const rows = [
-    ['Date', 'Student', 'Class', 'Status', 'Remarks'],
-    ...generatedAttendanceReport.map((record) => [
-      new Date(record.date).toLocaleDateString(),
-      record.studentName,
-      record.className,
-      attendanceStatusLabel(record.status),
-      record.remarks || '',
-    ]),
-  ];
-  const csv = `\uFEFF${rows.map((row) => row.map(csvField).join(',')).join('\r\n')}`;
-  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `attendance-${attendanceReportStudentName.trim().replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'student'}.csv`;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
+  const { jsPDF } = window.jspdf || {};
+  if (!jsPDF) {
+    showToast('PDF generation is unavailable. Refresh the page and try again.', 'error');
+    return;
+  }
+  const downloadButton = Modal.body.querySelector('#downloadAttendanceReport');
+  downloadButton.disabled = true;
+  try {
+    const logoResponse = await fetch('../img/logocollab.jpg');
+    if (!logoResponse.ok) throw new Error('The school logo could not be loaded.');
+    const logoBlob = await logoResponse.blob();
+    const logoDataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error('The school logo could not be prepared for the PDF.'));
+      reader.readAsDataURL(logoBlob);
+    });
+
+    const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const margin = 12;
+    const columns = [
+      { title: 'Date', width: 28 },
+      { title: 'Student', width: 57 },
+      { title: 'Class', width: 43 },
+      { title: 'Status', width: 30 },
+      { title: 'Remarks', width: pageWidth - (margin * 2) - 158 },
+    ];
+    const generatedAt = new Date().toLocaleString();
+    const drawHeader = () => {
+      pdf.setFillColor(39, 103, 73);
+      pdf.rect(0, 0, pageWidth, 4, 'F');
+      pdf.addImage(logoDataUrl, 'JPEG', margin, 10, 20, 20);
+      pdf.setTextColor(39, 103, 73);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(19);
+      pdf.text('Play-is-School', margin + 25, 17);
+      pdf.setTextColor(71, 85, 105);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(9);
+      pdf.text('Learning through Play', margin + 25, 23);
+      pdf.setTextColor(30, 41, 59);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(13);
+      pdf.text('Attendance Report', pageWidth - margin, 15, { align: 'right' });
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(9);
+      pdf.text(`Student: ${attendanceReportStudentName}`, pageWidth - margin, 21, { align: 'right' });
+      pdf.text(`Period: ${attendanceReportPeriodLabel}`, pageWidth - margin, 26, { align: 'right' });
+      pdf.setTextColor(100, 116, 139);
+      pdf.setFontSize(8);
+      pdf.text(`Generated ${generatedAt}  |  ${generatedAttendanceReport.length} attendance records`, margin, 36);
+      return 42;
+    };
+    const drawTableHeader = (y) => {
+      pdf.setFillColor(39, 103, 73);
+      pdf.rect(margin, y, pageWidth - margin * 2, 8, 'F');
+      pdf.setTextColor(255, 255, 255);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(8);
+      let x = margin;
+      columns.forEach((column) => {
+        pdf.text(column.title, x + 3, y + 5.3);
+        x += column.width;
+      });
+      pdf.setTextColor(30, 41, 59);
+      return y + 8;
+    };
+
+    let y = drawTableHeader(drawHeader());
+    const bottomLimit = pageHeight - 17;
+    const lineHeight = 4;
+    generatedAttendanceReport.forEach((record) => {
+      const values = [
+        new Date(record.date).toLocaleDateString(),
+        record.studentName,
+        record.className || '-',
+        attendanceStatusLabel(record.status),
+        record.remarks || '-',
+      ];
+      const lines = values.map((value, index) => pdf.splitTextToSize(
+        String(value),
+        columns[index].width - 6,
+      ));
+      const rowHeight = Math.max(9, ...lines.map((cellLines) => cellLines.length * lineHeight + 4));
+      if (y + rowHeight > bottomLimit) {
+        pdf.addPage();
+        y = drawTableHeader(drawHeader());
+      }
+
+      let x = margin;
+      pdf.setDrawColor(226, 232, 240);
+      pdf.setLineWidth(0.2);
+      columns.forEach((column, index) => {
+        pdf.rect(x, y, column.width, rowHeight);
+        pdf.setFont('helvetica', index === 3 ? 'bold' : 'normal');
+        pdf.setFontSize(8);
+        pdf.setTextColor(index === 3 && record.status === 'absent' ? 185 : 51, index === 3 && record.status === 'absent' ? 28 : 65, index === 3 && record.status === 'absent' ? 28 : 85);
+        pdf.text(lines[index], x + 3, y + 5, { lineHeightFactor: 1.15 });
+        x += column.width;
+      });
+      pdf.setTextColor(30, 41, 59);
+      y += rowHeight;
+    });
+
+    const pageCount = pdf.internal.getNumberOfPages();
+    for (let page = 1; page <= pageCount; page += 1) {
+      pdf.setPage(page);
+      pdf.setDrawColor(39, 103, 73);
+      pdf.setLineWidth(0.5);
+      pdf.line(margin, pageHeight - 12, pageWidth - margin, pageHeight - 12);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(8);
+      pdf.setTextColor(100, 116, 139);
+      pdf.text('Play-is-School  |  Official Attendance Record', margin, pageHeight - 7);
+      pdf.text(`Page ${page} of ${pageCount}`, pageWidth - margin, pageHeight - 7, { align: 'right' });
+    }
+
+    const studentFileName = attendanceReportStudentName
+      .trim()
+      .replace(/[^a-z0-9]+/gi, '-')
+      .replace(/^-|-$/g, '')
+      .toLowerCase() || 'student';
+    const periodFileName = attendanceReportPeriodLabel
+      .replace(/[^a-z0-9]+/gi, '-')
+      .replace(/^-|-$/g, '')
+      .toLowerCase();
+    pdf.save(`attendance-${studentFileName}-${periodFileName}.pdf`);
+  } catch (error) {
+    showToast(error.message || 'The attendance PDF could not be generated.', 'error');
+  } finally {
+    downloadButton.disabled = false;
+  }
 }
 
 function populateAttendanceReportStudents(select) {
@@ -736,8 +851,11 @@ const PROGRESS_PHOTOS_PER_UPLOAD = 6;
 const PROGRESS_PHOTOS_PER_ENTRY = 12;
 let editingProgressEntry = null;
 let progressEntriesForStudent = [];
-let pendingProgressPhotos = [];
+let selectedDrivePhotos = [];
 let removedProgressPhotoIds = new Set();
+let progressGoogleDriveConnected = false;
+let progressDriveAuthPopup = null;
+let progressDriveAuthPopupTimer = null;
 
 function progressEntryType() {
   return document.querySelector('input[name="pEntryType"]:checked')?.value || 'activity';
@@ -770,10 +888,6 @@ function updateProgressTypeFields() {
   }
 }
 
-function revokePendingPhotoPreviews() {
-  pendingProgressPhotos.forEach((item) => URL.revokeObjectURL(item.url));
-}
-
 function renderProgressPhotoPreview() {
   const preview = document.getElementById('pPhotoPreview');
   const existing = editingProgressEntry ? (editingProgressEntry.attachments || []) : [];
@@ -786,10 +900,10 @@ function renderProgressPhotoPreview() {
         ${removed ? '<span class="progress-photo-flag">Will be removed</span>' : '<span class="progress-photo-flag saved">Saved</span>'}
       </div>`;
     }),
-    ...pendingProgressPhotos.map((item, index) => `<div class="progress-photo">
-        <img src="${item.url}" alt="${escapeTeacherHtml(item.file.name)}" />
-        <button type="button" class="progress-photo-remove" data-remove-pending="${index}" aria-label="Remove ${escapeTeacherHtml(item.file.name)}"><i class="fa-solid fa-xmark"></i></button>
-        <span class="progress-photo-flag new">New</span>
+    ...selectedDrivePhotos.map((item, index) => `<div class="progress-photo progress-photo-drive">
+        <div class="progress-photo-drive-name"><i class="fa-brands fa-google-drive" aria-hidden="true"></i><span>${escapeTeacherHtml(item.name)}</span></div>
+        <button type="button" class="progress-photo-remove" data-remove-drive="${index}" aria-label="Remove ${escapeTeacherHtml(item.name)}"><i class="fa-solid fa-xmark"></i></button>
+        <span class="progress-photo-flag new">Google Drive</span>
       </div>`),
   ].join('');
   hydrateProtectedImages(preview);
@@ -799,9 +913,8 @@ function renderProgressPhotoPreview() {
     else removedProgressPhotoIds.add(id);
     renderProgressPhotoPreview();
   }));
-  preview.querySelectorAll('[data-remove-pending]').forEach((button) => button.addEventListener('click', () => {
-    const [removed] = pendingProgressPhotos.splice(Number(button.dataset.removePending), 1);
-    if (removed) URL.revokeObjectURL(removed.url);
+  preview.querySelectorAll('[data-remove-drive]').forEach((button) => button.addEventListener('click', () => {
+    selectedDrivePhotos.splice(Number(button.dataset.removeDrive), 1);
     renderProgressPhotoPreview();
   }));
   preview.querySelectorAll('.progress-photo img').forEach((image) => image.addEventListener('click', () => {
@@ -809,24 +922,179 @@ function renderProgressPhotoPreview() {
   }));
 }
 
-document.getElementById('pPhotos').addEventListener('change', (event) => {
+async function loadProgressGoogleDriveStatus() {
+  const button = document.getElementById('pChooseDrivePhotos');
+  const statusText = document.getElementById('pGoogleDriveStatus');
+  try {
+    const { status } = await api.get('/progress/google-drive/status');
+    progressGoogleDriveConnected = status.connected;
+    button.innerHTML = '<i class="fa-solid fa-arrow-up-from-bracket" aria-hidden="true"></i> Upload a file';
+    statusText.textContent = status.connected ? 'Google Drive ready.' : '';
+  } catch (error) {
+    progressGoogleDriveConnected = false;
+    statusText.textContent = error.message || 'Google Drive availability could not be checked.';
+  }
+}
+
+async function startProgressGoogleDriveConnection(button) {
+  const popup = window.open('about:blank', 'playSchoolGoogleDrive', 'popup,width=600,height=700');
+  if (!popup) {
+    showToast('Allow the Google Drive popup to continue.', 'error');
+    return;
+  }
+  progressDriveAuthPopup = popup;
+  popup.document.write('<!doctype html><title>Google Drive</title><p>Opening Google authorization…</p>');
+  setButtonLoading(button, true, 'Connecting');
+  try {
+    const { authorizationUrl } = await api.post('/progress/google-drive/connect', {});
+    if (popup.closed) {
+      setButtonLoading(button, false);
+      progressDriveAuthPopup = null;
+      return;
+    }
+    popup.location.assign(authorizationUrl);
+    progressDriveAuthPopupTimer = window.setInterval(() => {
+      if (!progressDriveAuthPopup || !progressDriveAuthPopup.closed) return;
+      window.clearInterval(progressDriveAuthPopupTimer);
+      progressDriveAuthPopupTimer = null;
+      progressDriveAuthPopup = null;
+      window.focus();
+      setButtonLoading(button, false);
+      loadProgressGoogleDriveStatus().then(() => {
+        if (progressGoogleDriveConnected) {
+          showToast('Google Drive is ready. Choose the photos for this progress record.', 'success');
+          return chooseProgressPhotosFromDrive(button);
+        }
+      }).catch((error) => {
+        showToast(error.message || 'Could not check Google Drive authorization.', 'error');
+      });
+    }, 500);
+  } catch (error) {
+    popup.close();
+    progressDriveAuthPopup = null;
+    showToast(error.message || 'Could not connect Google Drive.', 'error');
+    setButtonLoading(button, false);
+  }
+}
+
+window.addEventListener('message', async (event) => {
+  if (event.origin !== new URL(API_BASE).origin
+    || event.source !== progressDriveAuthPopup
+    || !event.data
+    || event.data.source !== 'play-is-school'
+    || event.data.type !== 'google-drive-oauth') return;
+  if (progressDriveAuthPopupTimer) window.clearInterval(progressDriveAuthPopupTimer);
+  progressDriveAuthPopupTimer = null;
+  progressDriveAuthPopup = null;
+  window.focus();
+  const button = document.getElementById('pChooseDrivePhotos');
+  setButtonLoading(button, false);
+  if (event.data.result === 'connected') {
+    await loadProgressGoogleDriveStatus();
+    showToast('Google Drive is ready. Choose the photos for this progress record.', 'success');
+    await chooseProgressPhotosFromDrive(button);
+    return;
+  }
+  const notices = {
+    cancelled: 'Google Drive authorization was cancelled.',
+    'missing-scope': 'Google Drive file access was not granted.',
+    forbidden: 'Only teachers can use Google Drive photos for academic progress.',
+    failed: 'Could not authorize Google Drive.',
+  };
+  showToast(notices[event.data.result] || notices.failed, event.data.result === 'cancelled' ? 'info' : 'error');
+});
+
+function loadGooglePickerApi() {
+  if (window.google?.picker) return Promise.resolve();
+  if (window.googlePickerApiPromise) return window.googlePickerApiPromise;
+  window.googlePickerApiPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://apis.google.com/js/api.js';
+    script.async = true;
+    script.onload = () => {
+      if (!window.gapi) {
+        reject(new Error('Google Picker could not be loaded.'));
+        return;
+      }
+      window.gapi.load('picker', {
+        callback: resolve,
+        onerror: () => reject(new Error('Google Picker could not be loaded.')),
+        timeout: 10000,
+        ontimeout: () => reject(new Error('Google Picker took too long to load.')),
+      }).catch((error) => {
+        window.googlePickerApiPromise = null;
+        throw error;
+      });
+    };
+    script.onerror = () => reject(new Error('Google Picker could not be loaded.'));
+    document.head.appendChild(script);
+  });
+  return window.googlePickerApiPromise;
+}
+
+async function chooseProgressPhotosFromDrive(button) {
+  if (!progressGoogleDriveConnected) return startProgressGoogleDriveConnection(button);
   const message = document.getElementById('progressFormMessage');
-  message.textContent = '';
-  const keptExisting = editingProgressEntry
+  const kept = editingProgressEntry
     ? (editingProgressEntry.attachments || []).filter((item) => !removedProgressPhotoIds.has(item._id)).length
     : 0;
-  const problems = [];
-  Array.from(event.target.files || []).forEach((file) => {
-    if (!PROGRESS_PHOTO_TYPES.includes(file.type)) problems.push(`${file.name} is not a JPG, PNG or WEBP image.`);
-    else if (file.size > PROGRESS_PHOTO_MAX_BYTES) problems.push(`${file.name} is larger than 5 MB.`);
-    else if (pendingProgressPhotos.length >= PROGRESS_PHOTOS_PER_UPLOAD) problems.push(`Add up to ${PROGRESS_PHOTOS_PER_UPLOAD} new photos per save.`);
-    else if (keptExisting + pendingProgressPhotos.length >= PROGRESS_PHOTOS_PER_ENTRY) problems.push(`A record can have at most ${PROGRESS_PHOTOS_PER_ENTRY} photos.`);
-    else pendingProgressPhotos.push({ file, url: URL.createObjectURL(file) });
-  });
-  event.target.value = '';
-  if (problems.length) showMsg(message, [...new Set(problems)].join(' '));
-  renderProgressPhotoPreview();
-});
+  const selectedCount = selectedDrivePhotos.length;
+  const availableSlots = Math.min(
+    PROGRESS_PHOTOS_PER_UPLOAD - selectedCount,
+    PROGRESS_PHOTOS_PER_ENTRY - kept - selectedCount,
+  );
+  if (availableSlots <= 0) {
+    showMsg(message, 'This record can include up to 6 new photos per save and 12 photos total.');
+    return;
+  }
+  try {
+    const { apiKey, appId, accessToken } = await api.get('/progress/google-drive/picker-config');
+    await loadGooglePickerApi();
+    const imageTypes = PROGRESS_PHOTO_TYPES.join(',');
+    const driveView = new window.google.picker.DocsView(window.google.picker.ViewId.DOCS)
+      .setMimeTypes(imageTypes)
+      .setIncludeFolders(false);
+    const uploadView = new window.google.picker.DocsUploadView();
+    const picker = new window.google.picker.PickerBuilder()
+      .setTitle('Insert files using Google Drive')
+      .setDeveloperKey(apiKey)
+      .setAppId(appId)
+      .setOAuthToken(accessToken)
+      .setMaxItems(availableSlots)
+      .setSelectableMimeTypes(imageTypes)
+      .enableFeature(window.google.picker.Feature.MULTISELECT_ENABLED)
+      .addView(driveView)
+      .addView(uploadView)
+      .setCallback((data) => {
+        if (data.action !== window.google.picker.Action.PICKED) return;
+        const files = data.docs || [];
+        const supported = files.filter((file) => PROGRESS_PHOTO_TYPES.includes(file.mimeType)
+          && (!file.sizeBytes || file.sizeBytes <= PROGRESS_PHOTO_MAX_BYTES));
+        if (supported.length !== files.length) {
+          showMsg(message, 'Only JPG, PNG or WEBP photos up to 5 MB can be added.');
+        }
+        const newPhotos = supported.filter((file) => !selectedDrivePhotos.some((selected) => selected.id === file.id));
+        if (newPhotos.length < supported.length) showMsg(message, 'Some selected photos were already added and were not duplicated.');
+        selectedDrivePhotos.push(...newPhotos.map((file) => ({
+          id: file.id,
+          name: file.name,
+          mimeType: file.mimeType,
+          size: file.sizeBytes || 0,
+        })));
+        renderProgressPhotoPreview();
+      })
+      .build();
+    picker.setVisible(true);
+  } catch (error) {
+    if (/authorize Google Drive|needs authorization/i.test(error.message || '')) {
+      progressGoogleDriveConnected = false;
+      return startProgressGoogleDriveConnection(button);
+    }
+    showToast(error.message || 'Could not open the Google Drive picker.', 'error');
+  }
+}
+
+document.getElementById('pChooseDrivePhotos').addEventListener('click', (event) => chooseProgressPhotosFromDrive(event.currentTarget));
 
 document.querySelectorAll('input[name="pEntryType"]').forEach((radio) => radio.addEventListener('change', updateProgressTypeFields));
 document.getElementById('pDate').addEventListener('change', updateProgressTypeFields);
@@ -859,8 +1127,7 @@ document.addEventListener('keydown', (event) => { if (event.key === 'Escape') cl
 
 function resetProgressEdit() {
   editingProgressEntry = null;
-  revokePendingPhotoPreviews();
-  pendingProgressPhotos = [];
+  selectedDrivePhotos = [];
   removedProgressPhotoIds = new Set();
   document.getElementById('progressForm').reset();
   document.getElementById('pDate').value = localDateValue();
@@ -911,7 +1178,22 @@ function renderProgressStudentOptions() {
 }
 
 async function loadProgressPanel() {
-  await loadMyStudents();
+  await Promise.all([loadMyStudents(), loadProgressGoogleDriveStatus()]);
+  const params = new URLSearchParams(window.location.search);
+  const driveResult = params.get('googleDrive');
+  const openDrivePickerAfterRedirect = driveResult === 'connected' && progressGoogleDriveConnected;
+  if (driveResult) {
+    const notices = {
+      cancelled: ['Google Drive connection was cancelled.', 'info'],
+      'missing-scope': ['Google Drive read permission was not granted.', 'error'],
+      failed: ['Could not connect Google Drive.', 'error'],
+      forbidden: ['Only teachers can connect Google Drive for academic progress.', 'error'],
+    };
+    if (notices[driveResult]) showToast(notices[driveResult][0], notices[driveResult][1]);
+    params.delete('googleDrive');
+    const query = params.toString();
+    window.history.replaceState({}, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`);
+  }
   const classSelect = document.getElementById('progClassSelect');
   const previousClass = classSelect.value;
   // Teachers see only the classes of students assigned to them.
@@ -922,6 +1204,7 @@ async function loadProgressPanel() {
   if (!editingProgressEntry && !document.getElementById('pDate').value) resetProgressEdit();
   if (activeProgressStudents().length) {
     await renderProgressList();
+    if (openDrivePickerAfterRedirect) await chooseProgressPhotosFromDrive(document.getElementById('pChooseDrivePhotos'));
   } else {
     document.getElementById('progressStudentHeader').innerHTML = '';
     document.getElementById('progressList').innerHTML = '<div class="empty-state"><i class="fa-solid fa-chart-simple"></i><p>No students are assigned to you.</p></div>';
@@ -963,7 +1246,7 @@ async function renderProgressList() {
 }
 
 function confirmDiscardProgressEdit() {
-  if (!editingProgressEntry && !pendingProgressPhotos.length) return true;
+  if (!editingProgressEntry && !selectedDrivePhotos.length) return true;
   return confirm('Discard the record you are editing?');
 }
 
@@ -1018,10 +1301,10 @@ document.getElementById('progressForm').addEventListener('submit', async (e) => 
   ['LearningArea', 'Milestone', 'Activity', 'Observations', 'Notes', 'Assessment', 'Evaluation', 'Strengths', 'AreasForImprovement', 'OverallDevelopment'].forEach((name) => {
     form.append(name[0].toLowerCase() + name.slice(1), document.getElementById(`p${name}`).value.trim());
   });
-  pendingProgressPhotos.forEach((item) => form.append('photos', item.file, item.file.name));
+  form.append('driveFileIds', JSON.stringify(selectedDrivePhotos.map((photo) => photo.id)));
 
   const button = document.getElementById('progressSaveButton');
-  setButtonLoading(button, true, pendingProgressPhotos.length ? 'Uploading' : 'Saving');
+  setButtonLoading(button, true, selectedDrivePhotos.length ? 'Uploading' : 'Saving');
   try {
     if (editingProgressEntry) {
       form.append('removeAttachments', JSON.stringify([...removedProgressPhotoIds]));
@@ -1087,6 +1370,19 @@ async function loadInbox() {
   } catch (err) {
     box.innerHTML = `<div class="messenger-list-empty">${escapeTeacherHtml(err.message || 'Could not load conversations.')}</div>`;
   }
+}
+
+// Hooks for the shared new-message popup (dashboard-common.js).
+function messagePopupIsThreadOpen(thread) {
+  if (!activeMessageThread || document.getElementById('chatConversationView')?.hidden) return false;
+  return thread.type === 'group'
+    ? activeMessageThread.type === 'group' && activeMessageThread.groupId === String(thread.id)
+    : activeMessageThread.type === 'direct' && activeMessageThread.userId === String(thread.with.id);
+}
+
+async function messagePopupOpenThread(thread) {
+  if (thread.type === 'group') await openGroupThread(thread.id);
+  else await openDirectThread(thread.with.id, thread.with.name, thread.with.role);
 }
 
 function showMessengerView(viewId) {

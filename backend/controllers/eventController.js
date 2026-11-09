@@ -8,6 +8,7 @@ const logActivity = require('../utils/logActivity');
 const { eventMapsUrl } = require('../utils/eventMaps');
 const {
   addToGoogleCalendarUrl,
+  getImportedGoogleCalendarEvents,
   getPersonalEventStates,
   queueEventRemoval,
   queueEventSync,
@@ -241,6 +242,10 @@ exports.listEvents = async (req, res) => {
     }
     return value;
   });
+  const importedGoogleEvents = await getImportedGoogleCalendarEvents();
+  events.push(...importedGoogleEvents);
+  events.sort((left, right) => new Date(left.date) - new Date(right.date)
+    || String(left.time || '').localeCompare(String(right.time || '')));
   res.json({ events });
 };
 

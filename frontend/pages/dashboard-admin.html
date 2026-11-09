@@ -38,7 +38,14 @@
     <button class="nav-item" data-panel="logs"><i class="fa-solid fa-clock-rotate-left"></i> Activity Logs</button>
     <div class="sidebar-actions">
       <button class="nav-item logout" id="logoutBtn"><i class="fa-solid fa-right-from-bracket"></i> Log out</button>
-      <button class="nav-item settings-button" type="button" data-panel="settings" aria-label="Settings" title="Settings"><i class="fa-solid fa-gear"></i></button>
+      <div class="settings-menu">
+        <button class="nav-item settings-button" type="button" data-panel="settings" aria-label="Settings" title="Settings"><i class="fa-solid fa-gear"></i></button>
+        <div class="settings-submenu" aria-label="Settings sections">
+          <button class="settings-subnav active" type="button" data-settings-section="profile"><i class="fa-solid fa-user"></i> Profile</button>
+          <button class="settings-subnav" type="button" data-settings-section="integrations"><i class="fa-solid fa-plug"></i> Integrations</button>
+          <button class="settings-subnav" type="button" data-settings-section="calendar"><i class="fa-regular fa-calendar"></i> Google Calendar</button>
+        </div>
+      </div>
     </div>
   </aside>
 
@@ -405,13 +412,14 @@
     </section>
 
     <section class="panel" id="panel-settings">
-      <div class="toolbar">
+      <div class="settings-section active" id="settings-section-profile">
+        <div class="toolbar">
         <div>
           <h1 style="margin:0;">Personal Profile</h1>
           <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Update your profile and sign-in details.</p>
         </div>
-      </div>
-      <div class="card profile-settings-card">
+        </div>
+        <div class="card profile-settings-card">
         <div id="profileFormMessage" class="form-msg" aria-live="polite"></div>
         <form id="profileForm" enctype="multipart/form-data">
           <section class="profile-photo-editor" aria-label="Profile photo">
@@ -444,23 +452,16 @@
           </div>
           <div class="profile-form-footer"><button class="btn btn-primary" type="submit"><i class="fa-solid fa-floppy-disk"></i> Save Changes</button></div>
         </form>
-      </div>
-      <div class="card auth-security-settings-card">
-        <div class="profile-section-heading">
-          <span>INTEGRATION</span>
-          <h2>Personal Google Calendar</h2>
-          <p>Connect your Google account to add selected school events to your calendar. Events are never added automatically.</p>
         </div>
-        <div id="personalGoogleCalendarMessage" class="form-msg" role="status" aria-live="polite"></div>
-        <p id="personalGoogleCalendarAccount" class="field-hint"></p>
-        <div class="profile-form-footer">
-          <button type="button" class="btn btn-primary" id="personalGoogleCalendarConnect">Connect Google Calendar</button>
-          <button type="button" class="btn btn-secondary" id="personalGoogleCalendarSync" hidden>Retry selected event updates</button>
-          <button type="button" class="btn btn-danger" id="personalGoogleCalendarDisconnect" hidden>Disconnect</button>
-        </div>
-        <p class="field-hint">Disconnecting stops future updates. Events already added to your calendar remain there.</p>
       </div>
-      <div class="card auth-security-settings-card">
+      <div class="settings-section" id="settings-section-integrations">
+        <div class="toolbar">
+          <div>
+            <h1 style="margin:0;">Integrations</h1>
+            <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Manage Google sign-in and CAPTCHA integrations.</p>
+          </div>
+        </div>
+        <div class="card auth-security-settings-card">
         <div class="profile-section-heading">
           <span>SECURITY</span>
           <h2>Authentication &amp; Security Settings</h2>
@@ -472,60 +473,89 @@
             <span><strong>Google Sign-In</strong><small>Allow users to authenticate with their Google accounts.</small></span>
             <span class="settings-switch"><input id="googleAuthEnabled" type="checkbox" /><span aria-hidden="true"></span></span>
           </label>
-          <button class="auth-security-option auth-security-trigger" id="openGoogleOAuthClientSettings" type="button" aria-haspopup="dialog" aria-controls="googleOAuthClientDialog">
-            <span><strong>Custom Google Client</strong><small>Manage custom Google sign-in credentials.</small></span>
-            <span class="oauth-trigger-label">Manage <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></span>
+          <button class="auth-security-option auth-security-trigger" id="openGoogleOAuthClientSettings" type="button" aria-haspopup="dialog">
+            <span><strong>Google Sign-In Configuration</strong></span><span class="oauth-trigger-label">Manage</span>
           </button>
           <label class="auth-security-option" for="captchaEnabled">
             <span><strong>CAPTCHA Verification</strong><small>Require a completed CAPTCHA before Google sign-in.</small></span>
             <span class="settings-switch"><input id="captchaEnabled" type="checkbox" /><span aria-hidden="true"></span></span>
           </label>
+          <button class="auth-security-option auth-security-trigger" id="openRecaptchaClientSettings" type="button" aria-haspopup="dialog">
+            <span><strong>reCAPTCHA Configuration</strong></span><span class="oauth-trigger-label">Manage</span>
+          </button>
         </div>
         <p class="auth-security-notice"><i class="fa-solid fa-shield-halved"></i> These settings affect Google authentication only. Password login is unchanged.</p>
         <div class="profile-form-footer"><button class="btn btn-primary" type="button" id="saveAuthSecuritySettings"><i class="fa-solid fa-floppy-disk"></i> Save security settings</button></div>
-      </div>
-      <dialog id="googleOAuthClientDialog" class="oauth-dialog" aria-labelledby="googleOAuthDialogTitle">
-        <div class="oauth-dialog-header">
-          <h2 id="googleOAuthDialogTitle">Custom Google Client</h2>
-          <button type="button" class="btn btn-ghost btn-sm" id="closeGoogleOAuthClientDialog" aria-label="Close custom Google client settings">
-            <i class="fa-solid fa-xmark" aria-hidden="true"></i> Close
-          </button>
         </div>
-        <div id="googleOAuthClientSettings" class="card auth-security-settings-card google-oauth-client-card">
+      </div>
+      <dialog id="googleOAuthClientDialog" class="credential-manager" aria-labelledby="googleOAuthDialogTitle">
+        <div class="credential-manager-header"><h2 id="googleOAuthDialogTitle">Custom Google Sign-In</h2><button type="button" class="btn btn-secondary btn-sm" id="closeGoogleOAuthClientDialog">Close</button></div>
+        <form id="googleOAuthClientForm" class="credential-manager-form" autocomplete="off">
+          <label for="googleOAuthClientId">Google Client ID</label>
+          <input id="googleOAuthClientId" maxlength="256" required autocomplete="off" spellcheck="false" data-lpignore="true" data-1p-ignore />
+          <label for="googleOAuthClientSecret">Google Client Secret</label>
+          <input id="googleOAuthClientSecret" type="text" class="masked-secret" maxlength="2048" autocomplete="off" spellcheck="false" data-lpignore="true" data-1p-ignore />
+          <label for="googleOAuthCallbackUrl">Google Callback URL</label>
+          <input id="googleOAuthCallbackUrl" type="url" maxlength="2048" required />
+          <button type="submit" class="btn btn-primary" id="saveGoogleOAuthClient">Save custom configuration</button>
+        </form>
+        <p id="googleOAuthClientMessage" class="form-msg" aria-live="polite"></p>
+      </dialog>
+      <dialog id="recaptchaClientDialog" class="credential-manager" aria-labelledby="recaptchaDialogTitle">
+        <div class="credential-manager-header"><h2 id="recaptchaDialogTitle">Custom reCAPTCHA</h2><button type="button" class="btn btn-secondary btn-sm" id="closeRecaptchaClientDialog">Close</button></div>
+        <form id="recaptchaClientForm" class="credential-manager-form" autocomplete="off">
+          <label for="recaptchaSiteKey">reCAPTCHA site key</label>
+          <input id="recaptchaSiteKey" maxlength="256" required autocomplete="off" spellcheck="false" data-lpignore="true" data-1p-ignore />
+          <label for="recaptchaSecretKey">reCAPTCHA secret key</label>
+          <input id="recaptchaSecretKey" type="text" class="masked-secret" maxlength="2048" autocomplete="off" spellcheck="false" data-lpignore="true" data-1p-ignore />
+          <label for="recaptchaAllowedHostnames">Allowed hostnames</label>
+          <input id="recaptchaAllowedHostnames" placeholder="localhost, example.com" required />
+          <button type="submit" class="btn btn-primary" id="saveRecaptchaClient">Save custom configuration</button>
+        </form>
+        <p id="recaptchaClientMessage" class="form-msg" aria-live="polite"></p>
+      </dialog>
+      <dialog id="integrationOtpDialog" class="credential-manager integration-otp-dialog" aria-labelledby="integrationOtpTitle">
+        <div class="credential-manager-header">
+          <h2 id="integrationOtpTitle">Email verification</h2>
+        </div>
+        <form id="integrationOtpForm" class="credential-manager-form">
+          <p id="integrationOtpInstructions">Enter the six-digit code sent to the configured personal email address.</p>
+          <label id="integrationOtpLabel" for="integrationOtpInput">Verification code</label>
+          <input id="integrationOtpInput" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required />
+          <div class="credential-manager-actions">
+            <button type="button" class="btn btn-secondary" id="cancelIntegrationOtp">Cancel</button>
+            <button type="submit" class="btn btn-primary" id="verifyIntegrationOtp">Verify code</button>
+          </div>
+        </form>
+        <p id="integrationOtpMessage" class="form-msg" role="status" aria-live="polite"></p>
+      </dialog>
+      <div class="settings-section" id="settings-section-calendar">
+        <div class="toolbar">
+          <div>
+            <h1 style="margin:0;">Google Calendar</h1>
+            <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Connect your own Google Calendar to the school calendar.</p>
+          </div>
+        </div>
+        <div class="card auth-security-settings-card">
           <div class="profile-section-heading">
             <span>INTEGRATION</span>
-            <h2>Custom credentials</h2>
-            <p>The original configuration stays unchanged. Secret fields are never filled with saved values.</p>
+            <h2>Personal Google Calendar</h2>
+            <p>Connect your Google account to add selected school events to your calendar. Events are never added automatically.</p>
           </div>
-          <details class="oauth-credential-section" open>
-            <summary>
-              <span>Google sign-in</span>
-              <span class="oauth-original-status" id="defaultGoogleOAuthStatus">Original configuration · Close</span>
-            </summary>
-            <div class="oauth-credential-body">
-              <label for="defaultGoogleOAuthClientId">Google client ID</label>
-              <input id="defaultGoogleOAuthClientId" readonly />
-              <p class="oauth-credential-hint">Use a Web application client ID. Configure the authorized redirect URI in Google Cloud.</p>
-              <button type="button" class="btn oauth-save-button" id="activateDefaultGoogleOAuthClient">Use default configuration</button>
-              <p id="defaultGoogleOAuthMessage" class="oauth-credential-message" role="status" aria-live="polite"></p>
-            </div>
-          </details>
-          <div id="googleOAuthClientMessage" class="form-msg" aria-live="polite"></div>
-          <form id="googleOAuthClientForm" class="google-oauth-client-form oauth-credential-body">
-            <h3 id="googleOAuthFormTitle">Add custom Google client</h3>
-            <div class="grid-2">
-              <div class="field"><label for="googleOAuthClientLabel">Client name</label><input id="googleOAuthClientLabel" maxlength="80" required /></div>
-              <div class="field"><label for="googleOAuthClientId">Google Client ID</label><input id="googleOAuthClientId" maxlength="256" autocomplete="off" placeholder="...apps.googleusercontent.com" required /></div>
-              <div class="field"><label for="googleOAuthClientSecret">Google Client Secret</label><input id="googleOAuthClientSecret" type="password" maxlength="2048" autocomplete="new-password" required /></div>
-            </div>
-            <div class="profile-form-footer">
-              <button class="btn btn-primary" type="submit" id="saveGoogleOAuthClient">Add client</button>
-              <button class="btn btn-secondary" type="button" id="cancelGoogleOAuthClientEdit" hidden>Cancel edit</button>
-            </div>
-          </form>
-          <div id="googleOAuthClientsList" class="oauth-client-list" aria-live="polite"></div>
+          <div id="personalGoogleCalendarMessage" class="form-msg" role="status" aria-live="polite"></div>
+          <p id="personalGoogleCalendarAccount" class="field-hint"></p>
+          <label class="auth-security-option" for="personalGoogleCalendarShareConsent">
+            <span><strong>Share my calendar with the school</strong><small>Events from your Google Calendar will be visible to school users on the shared school calendar.</small></span>
+            <span class="settings-switch"><input id="personalGoogleCalendarShareConsent" type="checkbox" /><span aria-hidden="true"></span></span>
+          </label>
+          <div class="profile-form-footer">
+            <button type="button" class="btn btn-primary" id="personalGoogleCalendarConnect" disabled>Connect Google Calendar</button>
+            <button type="button" class="btn btn-secondary" id="personalGoogleCalendarSync" hidden>Retry selected event updates</button>
+            <button type="button" class="btn btn-danger" id="personalGoogleCalendarDisconnect" hidden>Disconnect</button>
+          </div>
+          <p class="field-hint">Disconnecting stops future updates. Events already added to your calendar remain there.</p>
         </div>
-      </dialog>
+      </div>
     </section>
 
   </main>

@@ -38,7 +38,13 @@
     <button class="nav-item" data-panel="alerts"><i class="fa-solid fa-triangle-exclamation"></i> Emergency alert</button>
     <div class="sidebar-actions">
       <button class="nav-item logout" id="logoutBtn"><i class="fa-solid fa-right-from-bracket"></i> Log out</button>
-      <button class="nav-item settings-button" type="button" data-panel="settings" aria-label="Settings" title="Settings"><i class="fa-solid fa-gear"></i></button>
+      <div class="settings-menu">
+        <button class="nav-item settings-button" type="button" data-panel="settings" aria-label="Settings" title="Settings"><i class="fa-solid fa-gear"></i></button>
+        <div class="settings-submenu" aria-label="Settings sections">
+          <button class="settings-subnav active" type="button" data-settings-section="profile"><i class="fa-solid fa-user"></i> Profile</button>
+          <button class="settings-subnav" type="button" data-settings-section="calendar"><i class="fa-regular fa-calendar"></i> Google Calendar</button>
+        </div>
+      </div>
     </div>
   </aside>
 
@@ -50,7 +56,7 @@
         <p style="margin:0;">Here is your class roster and daily monitoring status.</p>
       </div>
       <div class="stat-row" id="statRow"></div>
-      <div class="card">
+      <div class="card overview-clickable" data-overview-panel="attendance" role="button" tabindex="0" aria-label="Open attendance">
         <div style="display:flex; align-items:center; gap:8px; margin-bottom:16px;">
           <i class="fa-solid fa-calendar-check" style="color:var(--primary); font-size:18px;"></i>
           <h3 style="margin:0;">Today's Attendance Roster</h3>
@@ -183,7 +189,7 @@
             <div id="attendanceReportResults" class="attendance-report-results" hidden>
               <div class="attendance-report-result-heading">
                 <div id="attendanceReportSummary" class="attendance-report-summary" aria-live="polite"></div>
-                <button class="btn btn-secondary" id="downloadAttendanceReport" type="button" disabled><i class="fa-solid fa-download" aria-hidden="true"></i> Download CSV</button>
+                <button class="btn btn-secondary" id="downloadAttendanceReport" type="button" disabled><i class="fa-solid fa-download" aria-hidden="true"></i> Download PDF</button>
               </div>
               <div class="table-responsive attendance-table-wrap">
                 <table class="attendance-table attendance-report-table">
@@ -252,10 +258,20 @@
             <button class="btn btn-ghost btn-sm" id="openAssessmentDetails" type="button" aria-haspopup="dialog" aria-controls="assessmentDetailsBackdrop"><i class="fa-solid fa-clipboard-check"></i> Assessment details (optional)</button>
             <span id="assessmentDetailsStatus" class="progress-more-status"></span>
           </div>
-          <div class="field">
-            <label for="pPhotos">Photos</label>
-            <input id="pPhotos" type="file" accept="image/jpeg,image/png,image/webp" multiple />
-            <div class="field-hint">JPG, PNG or WEBP, up to 5 MB each. Add up to 6 at a time, 12 per record. Only staff can see photos.</div>
+          <div class="field progress-photo-field">
+            <label>Photos</label>
+            <div class="progress-photo-upload">
+              <span class="progress-photo-upload-icon" aria-hidden="true"><i class="fa-regular fa-images"></i></span>
+              <div class="progress-photo-upload-copy">
+                <strong>Add photos</strong>
+                <span>Choose images from your device or Google Drive.</span>
+              </div>
+              <button class="btn btn-secondary progress-photo-upload-button" id="pChooseDrivePhotos" type="button"><i class="fa-solid fa-arrow-up-from-bracket" aria-hidden="true"></i> Upload a file</button>
+            </div>
+            <div class="progress-photo-upload-meta">
+              <span class="field-hint">JPG, PNG or WEBP · 5 MB max · Up to 6 new photos</span>
+              <span id="pGoogleDriveStatus" class="progress-photo-drive-status" aria-live="polite"></span>
+            </div>
             <div id="pPhotoPreview" class="progress-photo-grid editable" aria-live="polite"></div>
           </div>
           <div id="progressFormMessage" class="form-msg" aria-live="polite"></div>
@@ -346,7 +362,10 @@
           <h1 style="margin:0;">Events &amp; Notices Calendar</h1>
           <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">View the school calendar and publish notices for parents.</p>
         </div>
-        <button class="btn btn-primary btn-sm" id="addEventBtn"><i class="fa-solid fa-bullhorn"></i> Send Notice / Event</button>
+        <div class="panel-header-actions">
+          <button type="button" class="gcal-status-btn" id="personalGoogleCalendarStatusBtn" hidden></button>
+          <button class="btn btn-primary btn-sm" id="addEventBtn"><i class="fa-solid fa-bullhorn"></i> Send Notice / Event</button>
+        </div>
       </div>
       <div id="eventEmailSummary" class="form-msg" aria-live="polite"></div>
       <div id="teacherEventsCalendarContainer"></div>
@@ -434,6 +453,7 @@
     </section>
 
     <section class="panel" id="panel-settings">
+      <div class="settings-section active" id="settings-section-profile">
       <div class="toolbar">
         <div>
           <h1 style="margin:0;">Personal Profile</h1>
@@ -474,20 +494,33 @@
           <div class="profile-form-footer"><button class="btn btn-primary" type="submit"><i class="fa-solid fa-floppy-disk"></i> Save Changes</button></div>
         </form>
       </div>
-      <div class="card auth-security-settings-card">
-        <div class="profile-section-heading">
-          <span>INTEGRATION</span>
-          <h2>Personal Google Calendar</h2>
-          <p>Connect your Google account to add selected school events to your calendar. Events are never added automatically.</p>
+      </div>
+      <div class="settings-section" id="settings-section-calendar">
+        <div class="toolbar">
+          <div>
+            <h1 style="margin:0;">Google Calendar</h1>
+            <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Connect your own Google Calendar to the school calendar.</p>
+          </div>
         </div>
-        <div id="personalGoogleCalendarMessage" class="form-msg" role="status" aria-live="polite"></div>
-        <p id="personalGoogleCalendarAccount" class="field-hint"></p>
-        <div class="profile-form-footer">
-          <button type="button" class="btn btn-primary" id="personalGoogleCalendarConnect">Connect Google Calendar</button>
-          <button type="button" class="btn btn-secondary" id="personalGoogleCalendarSync" hidden>Retry selected event updates</button>
-          <button type="button" class="btn btn-danger" id="personalGoogleCalendarDisconnect" hidden>Disconnect</button>
+        <div class="card auth-security-settings-card">
+          <div class="profile-section-heading">
+            <span>INTEGRATION</span>
+            <h2>Personal Google Calendar</h2>
+            <p>Connect your Google account to add selected school events to your calendar. Events are never added automatically.</p>
+          </div>
+          <div id="personalGoogleCalendarMessage" class="form-msg" role="status" aria-live="polite"></div>
+          <p id="personalGoogleCalendarAccount" class="field-hint"></p>
+          <label class="auth-security-option" for="personalGoogleCalendarShareConsent">
+            <span><strong>Share my calendar with the school</strong><small>Events from your Google Calendar will be visible to school users on the shared school calendar.</small></span>
+            <span class="settings-switch"><input id="personalGoogleCalendarShareConsent" type="checkbox" /><span aria-hidden="true"></span></span>
+          </label>
+          <div class="profile-form-footer">
+            <button type="button" class="btn btn-primary" id="personalGoogleCalendarConnect" disabled>Connect Google Calendar</button>
+            <button type="button" class="btn btn-secondary" id="personalGoogleCalendarSync" hidden>Retry selected event updates</button>
+            <button type="button" class="btn btn-danger" id="personalGoogleCalendarDisconnect" hidden>Disconnect</button>
+          </div>
+          <p class="field-hint">Disconnecting stops future updates. Events already added to your calendar remain there.</p>
         </div>
-        <p class="field-hint">Disconnecting stops future updates. Events already added to your calendar remain there.</p>
       </div>
     </section>
 
@@ -516,6 +549,7 @@
 
 <script src="../js/api.js"></script>
 <script src="../js/dashboard-common.js"></script>
+<script src="../node_modules/jspdf/dist/jspdf.umd.min.js"></script>
 <script src="../js/teacher.js"></script>
 <script src="../js/enrollment.js"></script>
 </body>

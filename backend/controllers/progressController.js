@@ -3,9 +3,11 @@ const path = require('path');
 const mongoose = require('mongoose');
 const AcademicProgress = require('../models/AcademicProgress');
 const Student = require('../models/Student');
+const Notification = require('../models/Notification');
 const logActivity = require('../utils/logActivity');
 const { escapeRegex } = require('../utils/classAssignment');
 const { removeUploadedFiles, progressPhotoDirectory, MAX_PHOTOS_PER_ENTRY } = require('../middleware/progressUpload');
+const googleDrive = require('../services/googleDrive');
 
 const TEXT_LIMITS = {
   milestone: 200,
@@ -113,6 +115,18 @@ function parseRemovals(value) {
   return ids.map(String);
 }
 
+function parseDriveFileIds(value) {
+  if (value === undefined || value === '') return [];
+  let ids = value;
+  if (typeof value === 'string') {
+    try { ids = JSON.parse(value); } catch (err) { return null; }
+  }
+  if (!Array.isArray(ids) || ids.length > 6
+    || ids.some((id) => typeof id !== 'string' || !/^[A-Za-z0-9_-]+$/.test(id))
+    || new Set(ids).size !== ids.length) return null;
+  return ids;
+}
+
 async function deleteStoredPhotos(attachments) {
   await Promise.all(attachments.map((attachment) => fs.promises.unlink(path.join(progressPhotoDirectory, path.basename(attachment.filename)))
     .catch((err) => { if (err.code !== 'ENOENT') console.error('[progress] Could not delete photo:', err.message); })));
@@ -125,6 +139,11 @@ function savedEntry(id) {
 // POST /api/progress   (teacher; multipart form with optional "photos")
 exports.addProgress = async (req, res) => {
   try {
+    const driveFileIds = parseDriveFileIds(req.body.driveFileIds);
+    if (driveFileIds === null || driveFileIds.length + (req.files || []).length > 6) {
+      await removeUploadedFiles(req.files);
+      return res.status(400).json({ message: 'Choose up to 6 local or Google Drive photos per save.' });
+    }
     const studentId = req.body.student;
     if (!mongoose.isObjectIdOrHexString(studentId)) {
       await removeUploadedFiles(req.files);
@@ -145,6 +164,9 @@ exports.addProgress = async (req, res) => {
       await removeUploadedFiles(req.files);
       return res.status(409).json({ message: `${assignedStudent.name} already has a ${TYPE_LABELS[values.entryType]} called "${duplicate.milestone}" for this period. Edit that one instead.` });
     }
+    if (driveFileIds.length) {
+      req.files = [...(req.files || []), ...await googleDrive.importPhotos(req.user._id, driveFileIds)];
+    }
     const entry = await AcademicProgress.create({
       ...values,
       student: assignedStudent._id,
@@ -152,11 +174,27 @@ exports.addProgress = async (req, res) => {
       className: assignedStudent.className || '',
       attachments: attachmentsFrom(req.files, req.user._id),
     });
+    if (assignedStudent.parent) {
+      try {
+        await Notification.create({
+          parent: assignedStudent.parent,
+          type: 'academic-progress',
+          student: assignedStudent._id,
+          academicProgress: entry._id,
+          title: `New academic progress for ${assignedStudent.name}`,
+          message: `Your child's teacher added a ${values.entryType === 'activity' ? 'progress' : `${values.entryType} milestone`} record.`,
+        });
+      } catch (notificationError) {
+        await AcademicProgress.deleteOne({ _id: entry._id });
+        await removeUploadedFiles(req.files);
+        throw notificationError;
+      }
+    }
     await logActivity(req.user._id, 'progress-added', `${assignedStudent.name} (${values.entryType})`);
     res.status(201).json({ progress: await savedEntry(entry._id) });
   } catch (err) {
     await removeUploadedFiles(req.files);
-    const status = err.name === 'ValidationError' || err.name === 'CastError' ? 400 : 500;
+    const status = err.name === 'ValidationError' || err.name === 'CastError' || err instanceof googleDrive.GoogleDriveError ? 400 : 500;
     if (status === 500) console.error('[progress] Create failed:', err.message);
     res.status(status).json({ message: status === 400 ? err.message : 'Could not save progress entry.' });
   }
@@ -174,11 +212,7 @@ exports.getStudentProgress = async (req, res) => {
     const entries = await AcademicProgress.find({ student: req.params.studentId })
       .populate('teacher', 'name')
       .sort({ date: -1, createdAt: -1 });
-    // Photos are visible to staff only.
-    const progress = req.user.role === 'parent'
-      ? entries.map((entry) => { const value = entry.toJSON(); delete value.attachments; return value; })
-      : entries;
-    res.json({ progress });
+    res.json({ progress: entries });
   } catch (err) {
     console.error('[progress] Load failed:', err.message);
     res.status(500).json({ message: 'Could not load progress records.' });
@@ -204,9 +238,10 @@ exports.updateProgress = async (req, res) => {
     }
     const { values, error } = readEntry(req.body, existingEntry);
     const removals = parseRemovals(req.body.removeAttachments);
-    if (error || removals === null) {
+    const driveFileIds = parseDriveFileIds(req.body.driveFileIds);
+    if (error || removals === null || driveFileIds === null || driveFileIds.length + (req.files || []).length > 6) {
       await removeUploadedFiles(req.files);
-      return res.status(400).json({ message: error || 'Invalid list of photos to remove.' });
+      return res.status(400).json({ message: error || (removals === null ? 'Invalid list of photos to remove.' : 'Choose up to 6 local or Google Drive photos per save.') });
     }
     const merged = { ...existingEntry.toObject(), ...values };
     const duplicate = await findDuplicate(existingEntry.student, merged, existingEntry._id);
@@ -216,9 +251,12 @@ exports.updateProgress = async (req, res) => {
     }
     const removed = existingEntry.attachments.filter((attachment) => removals.includes(String(attachment._id)));
     const kept = existingEntry.attachments.filter((attachment) => !removals.includes(String(attachment._id)));
-    if (kept.length + (req.files || []).length > MAX_PHOTOS_PER_ENTRY) {
+    if (kept.length + (req.files || []).length + driveFileIds.length > MAX_PHOTOS_PER_ENTRY) {
       await removeUploadedFiles(req.files);
       return res.status(400).json({ message: `An entry can have at most ${MAX_PHOTOS_PER_ENTRY} photos. Remove some before adding more.` });
+    }
+    if (driveFileIds.length) {
+      req.files = [...(req.files || []), ...await googleDrive.importPhotos(req.user._id, driveFileIds)];
     }
     existingEntry.set(values);
     existingEntry.attachments = [...kept, ...attachmentsFrom(req.files, req.user._id)];
@@ -228,13 +266,13 @@ exports.updateProgress = async (req, res) => {
     res.json({ progress: await savedEntry(existingEntry._id) });
   } catch (err) {
     await removeUploadedFiles(req.files);
-    const status = err.name === 'ValidationError' || err.name === 'CastError' ? 400 : 500;
+    const status = err.name === 'ValidationError' || err.name === 'CastError' || err instanceof googleDrive.GoogleDriveError ? 400 : 500;
     if (status === 500) console.error('[progress] Update failed:', err.message);
     res.status(status).json({ message: status === 400 ? err.message : 'Could not update progress entry.' });
   }
 };
 
-// GET /api/progress/:id/attachments/:attachmentId   (admin, or the student's teacher)
+// GET /api/progress/:id/attachments/:attachmentId (admin, assigned teacher or the student's parent)
 exports.getAttachment = async (req, res) => {
   try {
     const { id, attachmentId } = req.params;
@@ -243,6 +281,9 @@ exports.getAttachment = async (req, res) => {
     const attachment = entry && entry.attachments.id(attachmentId);
     if (!attachment) return res.status(404).json({ message: 'Photo not found.' });
     if (req.user.role === 'teacher' && !(await Student.exists({ _id: entry.student, teacher: req.user._id }))) {
+      return res.status(403).json({ message: 'Not authorized to view this photo.' });
+    }
+    if (req.user.role === 'parent' && !(await Student.exists({ _id: entry.student, parent: req.user._id }))) {
       return res.status(403).json({ message: 'Not authorized to view this photo.' });
     }
     res.set({
@@ -257,6 +298,36 @@ exports.getAttachment = async (req, res) => {
   } catch (err) {
     console.error('[progress] Photo load failed:', err.message);
     res.status(500).json({ message: 'Could not load photo.' });
+  }
+};
+
+exports.googleDriveStatus = async (req, res) => {
+  try {
+    res.json({ status: await googleDrive.getStatus(req.user._id) });
+  } catch (err) {
+    console.error('[progress] Google Drive status failed:', err.message);
+    res.status(500).json({ message: 'Could not load Google Drive status.' });
+  }
+};
+
+exports.connectGoogleDrive = async (req, res) => {
+  try {
+    res.json({ authorizationUrl: await googleDrive.createAuthorizationUrl(req.user._id) });
+  } catch (err) {
+    const status = err instanceof googleDrive.GoogleDriveError ? 400 : 500;
+    if (status === 500) console.error('[progress] Could not start Google Drive connection:', err.message);
+    res.status(status).json({ message: err.message || 'Could not start Google Drive connection.' });
+  }
+};
+
+exports.googleDrivePickerConfig = async (req, res) => {
+  try {
+    res.set('Cache-Control', 'private, no-store');
+    res.json(await googleDrive.getPickerConfig(req.user._id));
+  } catch (err) {
+    const status = err instanceof googleDrive.GoogleDriveError ? 409 : 500;
+    if (status === 500) console.error('[progress] Google Drive picker setup failed:', err.message);
+    res.status(status).json({ message: err.message || 'Could not open the Google Drive picker.' });
   }
 };
 
@@ -283,4 +354,4 @@ exports.reviewProgress = async (req, res) => {
   res.json({ progress: entry });
 };
 
-module.exports._test = { periodFor, readEntry, parseRemovals };
+module.exports._test = { periodFor, readEntry, parseRemovals, parseDriveFileIds };

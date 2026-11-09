@@ -4,6 +4,7 @@ const googleOAuthClientSchema = new mongoose.Schema(
   {
     label: { type: String, required: true, trim: true, maxlength: 80 },
     clientId: { type: String, required: true, trim: true, maxlength: 256 },
+    callbackUrl: { type: String, required: true, trim: true, maxlength: 2048 },
     normalizedClientId: { type: String, required: true, unique: true },
     encryptedClientSecret: { type: String, required: true, select: false },
   },

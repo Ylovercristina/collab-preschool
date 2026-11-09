@@ -14,12 +14,18 @@ const app = express();
 app.use(cors({
   origin: (origin, callback) => callback(null, true),
   credentials: true,
+  exposedHeaders: ['X-Integration-Access-Refresh'],
 }));
 app.use(express.json());
 app.use(morgan('dev'));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', name: 'Play-is-School API' }));
+app.get('/api/config/maps', (req, res) => {
+  res.set('Cache-Control', 'no-store').json({
+    mapTilerApiKey: String(process.env.MAPTILER_API_KEY || '').trim(),
+  });
+});
 
 app.use('/api/auth', authRoutes);
 app.use('/api/users', require('./routes/userRoutes'));
@@ -32,6 +38,7 @@ app.use('/api/progress', require('./routes/progressRoutes'));
 app.use('/api/fees', require('./routes/feeRoutes'));
 app.use('/api/events', require('./routes/eventRoutes'));
 app.use('/api/calendar', require('./routes/calendarRoutes'));
+app.use('/api/drive', require('./routes/driveRoutes'));
 app.use('/api/messages', require('./routes/messageRoutes'));
 app.use('/api/notifications', require('./routes/notificationRoutes'));
 app.use('/api/alerts', require('./routes/alertRoutes'));

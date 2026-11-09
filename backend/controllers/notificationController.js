@@ -7,12 +7,16 @@ exports.listMyNotifications = async (req, res) => {
     .populate('event')
     .populate('alert')
     .populate('student', 'name')
+    .populate({ path: 'academicProgress', populate: [{ path: 'student', select: 'name parent' }, { path: 'teacher', select: 'name' }] })
     .populate('fee', 'description amount dueDate')
     .populate('payment', 'receiptNumber receiptState')
     .sort({ priority: -1, createdAt: -1 })
     .limit(50);
+  const visibleNotifications = notifications.filter((notification) => notification.type !== 'academic-progress'
+    || (notification.academicProgress && notification.academicProgress.student
+      && String(notification.academicProgress.student.parent) === String(req.user._id)));
   const unreadCount = await Notification.countDocuments({ parent: req.user._id, readAt: null });
-  res.json({ notifications, unreadCount });
+  res.json({ notifications: visibleNotifications, unreadCount });
 };
 
 // PATCH /api/notifications/:id/read

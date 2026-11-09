@@ -141,11 +141,11 @@ function relativeNotificationTime(date) {
 }
 
 function notificationTypeLabel(type) {
-  return { attendance: 'Attendance', emergency: 'Emergency', event: 'Event', fee: 'Fee' }[type] || 'Update';
+  return { attendance: 'Attendance', emergency: 'Emergency', event: 'Event', fee: 'Fee', 'academic-progress': 'Academic Progress' }[type] || 'Update';
 }
 
 function notificationTypeIcon(type) {
-  return { attendance: 'fa-user-clock', emergency: 'fa-triangle-exclamation', event: 'fa-calendar-days', fee: 'fa-receipt' }[type] || 'fa-bell';
+  return { attendance: 'fa-user-clock', emergency: 'fa-triangle-exclamation', event: 'fa-calendar-days', fee: 'fa-receipt', 'academic-progress': 'fa-chart-line' }[type] || 'fa-bell';
 }
 
 async function loadPaymentNotifications({ silent = false } = {}) {
@@ -247,7 +247,9 @@ async function loadPaymentNotifications({ silent = false } = {}) {
       </div>
     `;
   };
-  renderList(document.getElementById('paymentNotifications'), true);
+  const compactContainer = document.getElementById('paymentNotifications');
+  renderList(compactContainer, true);
+  if (compactContainer) bindFullNotificationControls(compactContainer, notifications, renderList);
   renderList(document.getElementById('parentNotificationsList'));
   document.querySelectorAll('[data-open-notifications-panel]').forEach((button) => button.addEventListener('click', () => {
     document.querySelector('.nav-item[data-panel="notifications"]')?.click();
@@ -287,6 +289,7 @@ function bindFullNotificationControls(container, notifications, renderList) {
     if (!notification.readAt) await api.patch(`/notifications/${notification._id}/read`, {});
     const event = notification.event;
     const alert = notification.alert;
+    const progress = notification.academicProgress;
     const details = event ? `
       <p>${escapeParentMessage(event.description || notification.message)}</p>
       <p><strong>Date:</strong> ${fmtDate(event.date)}<br><strong>Time:</strong> ${escapeParentMessage(event.time || '—')}<br><strong>Venue:</strong> ${escapeParentMessage(event.venue || '—')}${eventMapsUrl(event) ? ` · <a href="${escapeParentMessage(eventMapsUrl(event))}" target="_blank" rel="noopener noreferrer">View on Google Maps</a>` : ''}</p>
@@ -295,7 +298,8 @@ function bindFullNotificationControls(container, notifications, renderList) {
       ${alert.safetyInstructions ? `<p><strong>Safety instructions:</strong> ${escapeParentMessage(alert.safetyInstructions)}</p>` : ''}
       <p><strong>Severity:</strong> ${escapeParentMessage(alert.severity || 'high')}<br><strong>Status:</strong> ${escapeParentMessage(alert.status || 'active')}</p>
     ` : `<p>${escapeParentMessage(notification.message)}</p>`;
-    Modal.open(`<h3>${escapeParentMessage(notification.title)}</h3>${details}`);
+    if (progress) openParentProgressDetails(progress, notification.title);
+    else Modal.open(`<h3>${escapeParentMessage(notification.title)}</h3>${details}`);
     await loadPaymentNotifications({ silent: true });
   }));
   container.querySelectorAll('[data-view-notification-receipt]').forEach((button) => button.addEventListener('click', () => {
@@ -315,21 +319,112 @@ window.setInterval(async () => {
 }, 30000);
 
 // ---------- Progress ----------
+function parentProgressDetailsHtml(entry) {
+  const student = typeof entry.student === 'object' ? entry.student : null;
+  const child = myChildren.find((item) => item._id === String(entry.student?._id || entry.student || activeChildId));
+  const type = entry.entryType || 'activity';
+  const icons = { activity: 'fa-shapes', weekly: 'fa-calendar-week', monthly: 'fa-calendar' };
+  const title = entry.milestone || entry.activity || 'Academic progress report';
+  const meta = [progressPeriodLabel(entry), entry.teacher?.name, entry.className].filter(Boolean)
+    .map((part) => escapeParentMessage(part)).join(' · ');
+  const section = (label, value) => (value ? `
+    <section class="progress-report-section">
+      <h4>${label}</h4>
+      <p>${escapeParentMessage(value)}</p>
+    </section>` : '');
+  const sections = [
+    entry.milestone ? section('Description', entry.activity) : '',
+    section('Teacher observations', entry.observations),
+    section('Strengths', entry.strengths),
+    section('Assessment', entry.assessment),
+    section('Teacher evaluation', entry.evaluation),
+    section('Areas for improvement', entry.areasForImprovement),
+    section('Overall development', entry.overallDevelopment),
+    section('Notes', entry.notes),
+  ].join('');
+  const attachments = entry.attachments || [];
+  const photos = attachments.length ? `
+    <section class="progress-report-photos" aria-label="Report photos">
+      <h4>Photos <span>${attachments.length}</span></h4>
+      <div class="progress-report-photo-grid">${attachments.map((attachment) => `
+        <div class="progress-report-photo">
+          <button type="button" class="progress-report-photo-preview" data-photo-open aria-label="Preview ${escapeParentMessage(attachment.originalName)}">
+            <img data-protected-src="/progress/${escapeParentMessage(entry._id)}/attachments/${escapeParentMessage(attachment._id)}" alt="${escapeParentMessage(attachment.originalName)}" loading="lazy" />
+          </button>
+          <button type="button" class="progress-report-photo-download" data-download-progress-photo data-entry-id="${escapeParentMessage(entry._id)}" data-attachment-id="${escapeParentMessage(attachment._id)}" data-filename="${escapeParentMessage(attachment.originalName)}" aria-label="Download ${escapeParentMessage(attachment.originalName)}" title="Download">
+            <i class="fa-solid fa-download" aria-hidden="true"></i>
+          </button>
+        </div>`).join('')}</div>
+    </section>` : '';
+  return `
+    <header class="progress-report-header">
+      <span class="progress-entry-icon" aria-hidden="true"><i class="fa-solid ${icons[type] || icons.activity}"></i></span>
+      <div class="progress-report-heading">
+        <div class="progress-report-title">
+          <h3>${escapeParentMessage(title)}</h3>
+          <span class="badge progress-badge-${escapeParentMessage(type)}">${escapeParentMessage(PROGRESS_TYPE_LABELS[type] || 'Activity')}</span>
+        </div>
+        <p>${meta}<span class="progress-report-updated"> · Updated ${escapeParentMessage(fmtDate(entry.updatedAt || entry.createdAt || entry.date))}</span></p>
+      </div>
+    </header>
+    ${entry.learningArea || student?.name || child?.name ? `
+      <div class="progress-report-chips">
+        ${student?.name || child?.name ? `<span><i class="fa-solid fa-child" aria-hidden="true"></i> ${escapeParentMessage(student?.name || child?.name)}</span>` : ''}
+        ${entry.learningArea ? `<span><i class="fa-solid fa-book-open" aria-hidden="true"></i> ${escapeParentMessage(entry.learningArea)}</span>` : ''}
+      </div>` : ''}
+    <div class="progress-report-body${photos ? ' has-photos' : ''}">
+      ${sections ? `<div class="progress-report-notes">${sections}</div>` : '<p class="progress-report-empty">No written notes were added to this report.</p>'}
+      ${photos}
+    </div>
+  `;
+}
+
+function openParentProgressDetails(entry) {
+  Modal.open(`<div class="parent-progress-detail progress-report">${parentProgressDetailsHtml(entry)}</div>`, true);
+  hydrateProtectedImages(Modal.body);
+  Modal.body.querySelectorAll('[data-download-progress-photo]').forEach((button) => button.addEventListener('click', async () => {
+    const downloadButton = button;
+    downloadButton.disabled = true;
+    try {
+      const path = `/progress/${encodeURIComponent(downloadButton.dataset.entryId)}/attachments/${encodeURIComponent(downloadButton.dataset.attachmentId)}`;
+      const imageUrl = await fetchProtectedImage(path);
+      const link = document.createElement('a');
+      link.href = imageUrl;
+      link.download = downloadButton.dataset.filename || 'progress-photo';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (error) {
+      showToast(error.message || 'Could not download this photo.', 'error');
+    } finally {
+      downloadButton.disabled = false;
+    }
+  }));
+}
+
 async function renderProgress() {
   if (!activeChildId) return;
   const { progress } = await api.get(`/progress/student/${activeChildId}`);
-  document.getElementById('progressList').innerHTML = progress.length ? progress.map((p) => `
-    <div class="card" style="margin-bottom:14px;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-        <span style="color:var(--primary); font-weight:700;"><i class="fa-regular fa-calendar"></i> ${fmtDate(p.date)}</span>
-        <span style="font-size:13px; color:var(--ink-muted);"><i class="fa-solid fa-chalkboard-user"></i> ${p.teacher ? p.teacher.name : 'Teacher'}</span>
-      </div>
-      ${p.milestone ? `<p style="margin-bottom:4px;"><strong>Milestone:</strong> ${p.milestone}</p>` : ''}
-      ${p.activity ? `<p style="margin-bottom:4px;"><strong>Activity:</strong> ${p.activity}</p>` : ''}
-      ${p.assessment ? `<p style="margin-bottom:4px;"><strong>Assessment:</strong> ${p.assessment}</p>` : ''}
-      ${p.notes ? `<p style="margin:0; color:var(--ink-soft); font-style:italic;">Notes: ${p.notes}</p>` : ''}
-    </div>
-  `).join('') : '<div class="empty-state"><i class="fa-solid fa-chart-line"></i><p>No academic progress entries recorded yet.</p></div>';
+  const list = document.getElementById('progressList');
+  list.innerHTML = progress.length
+    ? progress.map((entry) => progressEntryCardHtml(entry, { interactive: true })).join('')
+    : '<div class="empty-state"><i class="fa-solid fa-chart-line"></i><p>No academic progress entries recorded yet.</p></div>';
+  hydrateProtectedImages(list);
+  list.querySelectorAll('[data-open-progress-details]').forEach((card) => {
+    const open = () => {
+      const entry = progress.find((item) => item._id === card.dataset.openProgressDetails);
+      if (entry) openParentProgressDetails(entry);
+    };
+    card.addEventListener('click', (event) => {
+      if (event.target.closest('button, a')) return;
+      open();
+    });
+    card.addEventListener('keydown', (event) => {
+      if (event.target !== card || !['Enter', ' '].includes(event.key)) return;
+      event.preventDefault();
+      open();
+    });
+  });
 }
 
 // ---------- Attendance ----------
@@ -465,6 +560,26 @@ document.getElementById('renameParentGroupBtn').addEventListener('click', () => 
     }
   });
 });
+
+// Hooks for the shared new-message popup (dashboard-common.js).
+function messagePopupIsThreadOpen(thread) {
+  if (thread.type === 'group') return activeParentGroupId === String(thread.id);
+  return !activeParentGroupId && String(activeTeacherId) === String(thread.with.id);
+}
+
+// Select the chat before the Messages panel loads, so it opens the right conversation.
+function messagePopupSelectThread(thread) {
+  if (thread.type === 'group') {
+    activeParentGroupId = String(thread.id);
+    return;
+  }
+  activeParentGroupId = null;
+  const child = myChildren.find((c) => c.teacher && String(c.teacher._id || c.teacher) === String(thread.with.id));
+  if (child) {
+    activeChildId = child._id;
+    activeTeacherId = child.teacher._id || child.teacher;
+  }
+}
 
 async function loadParentMessages() {
   const groupInbox = document.getElementById('parentGroupInbox');

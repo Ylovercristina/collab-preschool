@@ -6,9 +6,9 @@ const { OAuth2Client } = require('google-auth-library');
 const User = require('../models/User');
 const AuthSettings = require('../models/AuthSettings');
 const GoogleOAuthClient = require('../models/GoogleOAuthClient');
-const CalendarIntegration = require('../models/CalendarIntegration');
-const PersonalGoogleCalendarConnection = require('../models/PersonalGoogleCalendarConnection');
+const RecaptchaClient = require('../models/RecaptchaClient');
 const googleOAuthClients = require('../services/googleOAuthClients');
+const recaptchaClients = require('../services/recaptchaClients');
 const logActivity = require('../utils/logActivity');
 const { sendEmail, verifyEmailTransport, emailTransportError } = require('../services/emailService');
 
@@ -23,11 +23,20 @@ const GOOGLE_CAPTCHA_COOKIE = 'play_google_captcha';
 const GOOGLE_STATE_TTL_MS = 10 * 60 * 1000;
 const GOOGLE_HANDOFF_TTL_MS = 2 * 60 * 1000;
 const GOOGLE_CAPTCHA_TTL_MS = 10 * 60 * 1000;
+const INTEGRATION_OTP_TTL_MS = 5 * 60 * 1000;
+const INTEGRATION_OTP_COOLDOWN_MS = 60 * 1000;
+const INTEGRATION_OTP_MAX_ATTEMPTS = 5;
+const INTEGRATION_OTP_LOCK_MS = 15 * 60 * 1000;
+const INTEGRATION_ACCESS_TTL = '30m';
+const INTEGRATION_PIN_CHALLENGE_TTL = '2m';
+const INTEGRATION_SAVE_TTL = '5m';
+const INTEGRATION_OTP_FIELDS = '+integrationOtpHash +integrationOtpExpires +integrationOtpAttempts +integrationOtpSentAt +integrationOtpPurpose +integrationOtpLockedUntil +integrationPinChallengeHash +integrationPinChallengeExpires +integrationPinAttempts +integrationPinLockedUntil +integrationSaveGrantHash +integrationSaveGrantExpires';
+const INVALID_INTEGRATION_OTP_MESSAGE = 'The code is incorrect, expired, or no longer valid. Request a new code.';
 const DEFAULT_AUTH_SETTINGS = {
   googleAuthEnabled: true,
   captchaEnabled: true,
-  customGoogleClientEnabled: false,
   activeGoogleOAuthClientId: googleOAuthClients.DEFAULT_CLIENT_ID,
+  activeRecaptchaClientId: recaptchaClients.DEFAULT_CLIENT_ID,
 };
 function logResetDebug(...args) {
   if (process.env.NODE_ENV !== 'production') console.log(...args);
@@ -141,25 +150,32 @@ function resendCooldownSeconds(user) {
 }
 
 function activeGoogleOAuthClientId(settings) {
-  if (settings.activeGoogleOAuthClientId) return settings.activeGoogleOAuthClientId;
-  return settings.customGoogleClientEnabled === true
-    ? googleOAuthClients.ENV_CUSTOM_CLIENT_ID
-    : googleOAuthClients.DEFAULT_CLIENT_ID;
+  return settings.activeGoogleOAuthClientId
+    || (settings.customGoogleClientEnabled ? googleOAuthClients.ENV_CUSTOM_CLIENT_ID : googleOAuthClients.DEFAULT_CLIENT_ID);
 }
 
-async function createGoogleOAuthClient(selectionId, settings = {}) {
+function activeRecaptchaClientId(settings) {
+  return settings.activeRecaptchaClientId || recaptchaClients.DEFAULT_CLIENT_ID;
+}
+
+async function createGoogleOAuthClient(selectionId, settings) {
   const credentials = await googleOAuthClients.resolveClient(selectionId, settings);
-  const callbackUrl = String(process.env.GOOGLE_CALLBACK_URL || '').trim();
+  const callbackUrl = credentials.callbackUrl || String(process.env.GOOGLE_CALLBACK_URL || '').trim();
   if (!callbackUrl) throw new Error('GOOGLE_CALLBACK_URL is not configured.');
   return new OAuth2Client(credentials.clientId, credentials.clientSecret, callbackUrl);
 }
 
-function recaptchaSiteKey() {
-  return String(process.env.RECAPTCHA_SITE_KEY || '').trim();
-}
-
-function recaptchaSecretKey() {
-  return String(process.env.RECAPTCHA_SECRET_KEY || '').trim();
+// Used when starting Google sign-in: falls back to the .env clients if the selected one is
+// rejected by Google. The chosen selection ID travels in the OAuth state so the callback
+// exchanges the code with the same client.
+async function selectGoogleOAuthClient(settings) {
+  const credentials = await googleOAuthClients.resolveUsableClient(activeGoogleOAuthClientId(settings), settings);
+  const callbackUrl = credentials.callbackUrl || String(process.env.GOOGLE_CALLBACK_URL || '').trim();
+  if (!callbackUrl) throw new Error('GOOGLE_CALLBACK_URL is not configured.');
+  return {
+    clientSelectionId: credentials.selectionId,
+    googleClient: new OAuth2Client(credentials.clientId, credentials.clientSecret, callbackUrl),
+  };
 }
 
 async function loadAuthSettings() {
@@ -170,14 +186,13 @@ async function loadAuthSettings() {
   );
 }
 
-function authSettingsPayload(settings) {
-  const activeClientId = activeGoogleOAuthClientId(settings);
+async function authSettingsPayload(settings) {
   return {
     googleAuthEnabled: settings.googleAuthEnabled === true,
     captchaEnabled: settings.captchaEnabled === true,
-    customGoogleClientEnabled: activeClientId !== googleOAuthClients.DEFAULT_CLIENT_ID,
-    activeGoogleOAuthClientId: activeClientId,
-    captchaConfigured: Boolean(recaptchaSiteKey() && recaptchaSecretKey()),
+    activeGoogleOAuthClientId: activeGoogleOAuthClientId(settings),
+    activeRecaptchaClientId: activeRecaptchaClientId(settings),
+    captchaConfigured: await recaptchaClients.isConfigured(activeRecaptchaClientId(settings)),
   };
 }
 
@@ -212,12 +227,11 @@ function setCaptchaGateCookie(res, value, clear = false) {
   res.append('Set-Cookie', cookieParts.join('; '));
 }
 
-async function verifyRecaptchaToken(token, remoteIp) {
-  const secret = recaptchaSecretKey();
-  if (!secret) return { ok: false, reason: 'configuration' };
+async function verifyRecaptchaToken(token, remoteIp, selectionId) {
   if (typeof token !== 'string' || !token.trim()) return { ok: false, reason: 'missing' };
 
-  const params = new URLSearchParams({ secret, response: token.trim() });
+  const credentials = await recaptchaClients.resolveClient(selectionId);
+  const params = new URLSearchParams({ secret: credentials.secretKey, response: token.trim() });
   if (remoteIp) params.set('remoteip', remoteIp);
   try {
     const response = await fetch('https://www.google.com/recaptcha/api/siteverify', {
@@ -227,7 +241,11 @@ async function verifyRecaptchaToken(token, remoteIp) {
     });
     if (!response.ok) return { ok: false, reason: 'verification' };
     const result = await response.json();
-    return result.success ? { ok: true } : { ok: false, reason: 'invalid' };
+    const hostnameAllowed = !credentials.allowedHostnames.length
+      || credentials.allowedHostnames.includes(String(result.hostname || '').toLowerCase());
+    return result.success && hostnameAllowed
+      ? { ok: true }
+      : { ok: false, reason: 'invalid' };
   } catch (err) {
     console.error('[CAPTCHA verification error]:', err.message);
     return { ok: false, reason: 'verification' };
@@ -576,124 +594,459 @@ exports.resetPassword = async (req, res) => {
 exports.getAuthSettings = async (req, res) => {
   try {
     const settings = await loadAuthSettings();
-    res.json({ settings: authSettingsPayload(settings) });
+    res.json({ settings: await authSettingsPayload(settings) });
   } catch (err) {
+    console.error('[auth] Could not load authentication settings:', err.message);
     res.status(503).json({ message: 'Authentication settings are temporarily unavailable.' });
   }
 };
 
-exports.listGoogleOAuthClients = async (req, res) => {
+function integrationOtpEmail() {
+  return String(process.env.super_user_email || process.env.SUPER_USER_EMAIL || process.env.SU_EMAIL || '').trim().toLowerCase();
+}
+
+function clearIntegrationOtp(user) {
+  user.integrationOtpHash = undefined;
+  user.integrationOtpExpires = undefined;
+  user.integrationOtpPurpose = undefined;
+}
+
+exports.requestIntegrationOtp = async (req, res) => {
+  const purpose = req.body?.purpose;
+  if (!['access', 'save'].includes(purpose)) {
+    return res.status(400).json({ message: 'Choose a valid integration verification action.' });
+  }
+  const email = integrationOtpEmail();
+  if (!isValidEmail(email)) {
+    return res.status(503).json({ message: 'The integration verification email is not configured.' });
+  }
+
   try {
-    const settings = await AuthSettings.findOne({ key: 'global' }) || DEFAULT_AUTH_SETTINGS;
-    const catalog = await googleOAuthClients.listClients(settings);
-    const options = catalog.options.map((client) => ({
-      ...client,
-      selected: client.id === activeGoogleOAuthClientId(settings),
-    }));
-    res.json({
-      options,
-      clients: catalog.clients,
-      activeGoogleOAuthClientId: activeGoogleOAuthClientId(settings),
+    const user = await User.findById(req.user._id).select(INTEGRATION_OTP_FIELDS);
+    if (!user) return res.status(401).json({ message: 'Account no longer exists.' });
+    const now = new Date();
+    if (user.integrationOtpLockedUntil && user.integrationOtpLockedUntil.getTime() > now.getTime()) {
+      return res.status(429).json({ message: 'Too many incorrect codes. Please try again later.' });
+    }
+    if (purpose === 'access' && user.integrationPinLockedUntil && user.integrationPinLockedUntil.getTime() > now.getTime()) {
+      return res.status(429).json({ message: 'Too many incorrect PIN attempts. Please try again later.' });
+    }
+    if (user.integrationOtpSentAt) {
+      const resendAfter = Math.ceil((user.integrationOtpSentAt.getTime() + INTEGRATION_OTP_COOLDOWN_MS - now.getTime()) / 1000);
+      if (resendAfter > 0) return res.status(429).json({ message: `Wait ${resendAfter} seconds before requesting another code.` });
+    }
+
+    const otp = crypto.randomInt(100000, 1000000).toString();
+    user.integrationOtpHash = await bcrypt.hash(otp, 10);
+    user.integrationOtpExpires = new Date(now.getTime() + INTEGRATION_OTP_TTL_MS);
+    user.integrationOtpAttempts = 0;
+    user.integrationOtpSentAt = now;
+    user.integrationOtpPurpose = purpose;
+    user.integrationPinChallengeHash = undefined;
+    user.integrationPinChallengeExpires = undefined;
+    user.integrationPinAttempts = 0;
+    await user.save();
+
+    const result = await sendEmail({
+      to: email,
+      subject: 'Your Play-is-School integration verification code',
+      text: `Your verification code is ${otp}. It expires in 5 minutes and can only be used once. If you did not request this, you can ignore this email.`,
+      html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1f2937;line-height:1.5"><h2 style="color:#287a62">Play-is-School</h2><p>Use this code to verify ${purpose === 'save' ? 'your settings change' : 'access to integration settings'}:</p><p style="font-size:30px;font-weight:700;letter-spacing:6px;margin:20px 0;color:#174f42">${otp}</p><p>This code expires in <strong>5 minutes</strong> and can only be used once.</p><p style="font-size:13px;color:#64748b">Never share this code. If you did not request it, ignore this email.</p></div>`,
+    });
+    if (!result.success) throw new Error(result.error || 'Email delivery failed.');
+
+    res.set('Cache-Control', 'no-store').json({ message: 'A verification code has been sent to the configured email address.', expiresInSeconds: 300 });
+  } catch (err) {
+    try {
+      await User.updateOne({ _id: req.user._id }, {
+        $unset: { integrationOtpHash: 1, integrationOtpExpires: 1, integrationOtpPurpose: 1 },
+        $set: { integrationOtpSentAt: null, integrationOtpAttempts: 0 },
+      });
+    } catch (clearError) {
+      console.error('[auth] Could not clear integration OTP after email failure:', clearError.message);
+    }
+    console.error('[auth] Integration verification email failed:', emailTransportError(err));
+    res.status(503).json({ message: 'Could not send the integration verification code.' });
+  }
+};
+
+exports.verifyIntegrationOtp = async (req, res) => {
+  const purpose = req.body?.purpose;
+  const otp = typeof req.body?.otp === 'string' ? req.body.otp.trim() : '';
+  if (!['access', 'save'].includes(purpose) || !/^\d{6}$/.test(otp)) {
+    return res.status(400).json({ message: 'Enter the six-digit verification code.' });
+  }
+
+  try {
+    const user = await User.findById(req.user._id).select(INTEGRATION_OTP_FIELDS);
+    if (!user) return res.status(401).json({ message: 'Account no longer exists.' });
+    const now = new Date();
+    if (user.integrationOtpLockedUntil && user.integrationOtpLockedUntil.getTime() > now.getTime()) {
+      return res.status(429).json({ message: 'Too many incorrect codes. Please try again later.' });
+    }
+    if (user.integrationOtpPurpose !== purpose || !user.integrationOtpHash || !user.integrationOtpExpires
+      || user.integrationOtpExpires.getTime() <= now.getTime()) {
+      if (user.integrationOtpExpires && user.integrationOtpExpires.getTime() <= now.getTime()) {
+        clearIntegrationOtp(user);
+        await user.save();
+      }
+      return res.status(400).json({ message: INVALID_INTEGRATION_OTP_MESSAGE });
+    }
+    if ((user.integrationOtpAttempts || 0) >= INTEGRATION_OTP_MAX_ATTEMPTS) {
+      return res.status(429).json({ message: 'Too many incorrect codes. Please request a new code later.' });
+    }
+    if (!await bcrypt.compare(otp, user.integrationOtpHash)) {
+      const failedAttempt = await User.findOneAndUpdate(
+        {
+          _id: user._id,
+          integrationOtpHash: user.integrationOtpHash,
+          integrationOtpExpires: { $gt: now },
+          integrationOtpPurpose: purpose,
+          integrationOtpAttempts: { $lt: INTEGRATION_OTP_MAX_ATTEMPTS },
+        },
+        { $inc: { integrationOtpAttempts: 1 } },
+        { new: true }
+      ).select('+integrationOtpAttempts');
+      if (!failedAttempt) return res.status(400).json({ message: INVALID_INTEGRATION_OTP_MESSAGE });
+      if (failedAttempt.integrationOtpAttempts >= INTEGRATION_OTP_MAX_ATTEMPTS) {
+        await User.updateOne(
+          {
+            _id: user._id,
+            integrationOtpHash: user.integrationOtpHash,
+            integrationOtpAttempts: { $gte: INTEGRATION_OTP_MAX_ATTEMPTS },
+          },
+          {
+            $set: { integrationOtpLockedUntil: new Date(now.getTime() + INTEGRATION_OTP_LOCK_MS) },
+            $unset: { integrationOtpHash: 1, integrationOtpExpires: 1, integrationOtpPurpose: 1 },
+          }
+        );
+        return res.status(429).json({ message: 'Too many incorrect codes. Please try again later.' });
+      }
+      return res.status(400).json({ message: INVALID_INTEGRATION_OTP_MESSAGE });
+    }
+
+    if (!process.env.JWT_SECRET) {
+      console.error('[auth] Cannot issue integration access without JWT_SECRET.');
+      return res.status(503).json({ message: 'Integration verification is temporarily unavailable.' });
+    }
+
+    const consumed = await User.findOneAndUpdate(
+      {
+        _id: user._id,
+        integrationOtpHash: user.integrationOtpHash,
+        integrationOtpExpires: { $gt: now },
+        integrationOtpPurpose: purpose,
+        integrationOtpAttempts: { $lt: INTEGRATION_OTP_MAX_ATTEMPTS },
+      },
+      {
+        $unset: { integrationOtpHash: 1, integrationOtpExpires: 1, integrationOtpPurpose: 1 },
+        $set: { integrationOtpAttempts: 0, integrationOtpSentAt: null },
+      },
+      { new: false }
+    );
+    if (!consumed) return res.status(400).json({ message: INVALID_INTEGRATION_OTP_MESSAGE });
+
+    const claims = { id: String(req.user._id), scope: 'settings:integrations', purpose };
+    if (purpose === 'access') {
+      claims.stage = 'email-verified';
+      claims.jti = crypto.randomBytes(32).toString('hex');
+    } else {
+      claims.jti = crypto.randomBytes(32).toString('hex');
+    }
+    const accessToken = jwt.sign(claims, process.env.JWT_SECRET, {
+      expiresIn: purpose === 'save' ? INTEGRATION_SAVE_TTL : INTEGRATION_PIN_CHALLENGE_TTL,
+    });
+    if (purpose === 'save') {
+      const grantHash = crypto.createHash('sha256').update(claims.jti).digest('hex');
+      const grantResult = await User.updateOne(
+        { _id: req.user._id },
+        { $set: { integrationSaveGrantHash: grantHash, integrationSaveGrantExpires: new Date(now.getTime() + 5 * 60 * 1000) } }
+      );
+      if (grantResult.matchedCount !== 1) {
+        return res.status(401).json({ message: 'Account no longer exists.' });
+      }
+      return res.set('Cache-Control', 'no-store').json({
+        accessToken,
+        expiresInSeconds: 300,
+      });
+    }
+
+    const challengeHash = crypto.createHash('sha256').update(claims.jti).digest('hex');
+    const challengeResult = await User.updateOne(
+      { _id: req.user._id },
+      {
+        $set: {
+          integrationPinChallengeHash: challengeHash,
+          integrationPinChallengeExpires: new Date(now.getTime() + 2 * 60 * 1000),
+          integrationPinAttempts: 0,
+        },
+      }
+    );
+    if (challengeResult.matchedCount !== 1) {
+      return res.status(401).json({ message: 'Account no longer exists.' });
+    }
+    res.set('Cache-Control', 'no-store').json({
+      pinChallenge: accessToken,
+      requiresPin: true,
+      expiresInSeconds: 120,
     });
   } catch (err) {
-    console.error('[auth] Could not load Google OAuth clients:', err.message);
-    res.status(503).json({ message: 'Could not load Google OAuth clients.' });
+    console.error('[auth] Integration verification failed:', err.message);
+    res.status(503).json({ message: 'Could not verify the integration code.' });
+  }
+};
+
+exports.verifyIntegrationPin = async (req, res) => {
+  const configuredPin = String(process.env.SU_PIN || '').trim();
+  const pin = typeof req.body?.pin === 'string' ? req.body.pin.trim() : '';
+  const challengeToken = typeof req.body?.pinChallenge === 'string' ? req.body.pinChallenge : '';
+  if (!configuredPin || configuredPin.length > 64) {
+    return res.status(503).json({ message: 'The integration PIN is not configured.' });
+  }
+  if (!pin || pin.length > 64 || !challengeToken) {
+    return res.status(400).json({ message: 'Enter the configured integration PIN.' });
+  }
+  if (!process.env.JWT_SECRET) {
+    console.error('[auth] Cannot verify integration PIN without JWT_SECRET.');
+    return res.status(503).json({ message: 'Integration verification is temporarily unavailable.' });
+  }
+
+  let challenge;
+  try {
+    challenge = jwt.verify(challengeToken, process.env.JWT_SECRET);
+  } catch {
+    return res.status(403).json({ message: 'Email verification expired. Request a new code.' });
+  }
+  if (challenge.scope !== 'settings:integrations' || challenge.purpose !== 'access'
+    || challenge.stage !== 'email-verified' || challenge.id !== String(req.user._id)
+    || typeof challenge.jti !== 'string') {
+    return res.status(403).json({ message: 'Email verification is invalid. Request a new code.' });
+  }
+
+  try {
+    const user = await User.findById(req.user._id).select(INTEGRATION_OTP_FIELDS);
+    if (!user) return res.status(401).json({ message: 'Account no longer exists.' });
+    const now = new Date();
+    if (user.integrationPinLockedUntil && user.integrationPinLockedUntil.getTime() > now.getTime()) {
+      return res.status(429).json({ message: 'Too many incorrect PIN attempts. Please try again later.' });
+    }
+    const challengeHash = crypto.createHash('sha256').update(challenge.jti).digest('hex');
+    if (user.integrationPinChallengeHash !== challengeHash || !user.integrationPinChallengeExpires
+      || user.integrationPinChallengeExpires.getTime() <= now.getTime()) {
+      return res.status(403).json({ message: 'Email verification expired or was already used. Request a new code.' });
+    }
+    if ((user.integrationPinAttempts || 0) >= INTEGRATION_OTP_MAX_ATTEMPTS) {
+      return res.status(429).json({ message: 'Too many incorrect PIN attempts. Please try again later.' });
+    }
+
+    const expected = Buffer.from(configuredPin);
+    const supplied = Buffer.from(pin);
+    const comparisonLength = Math.max(supplied.length, expected.length);
+    const suppliedPadded = Buffer.alloc(comparisonLength);
+    const expectedPadded = Buffer.alloc(comparisonLength);
+    supplied.copy(suppliedPadded);
+    expected.copy(expectedPadded);
+    const pinMatches = crypto.timingSafeEqual(suppliedPadded, expectedPadded)
+      && supplied.length === expected.length;
+    if (!pinMatches) {
+      const failedAttempt = await User.findOneAndUpdate(
+        {
+          _id: user._id,
+          integrationPinChallengeHash: challengeHash,
+          integrationPinChallengeExpires: { $gt: now },
+          integrationPinAttempts: { $lt: INTEGRATION_OTP_MAX_ATTEMPTS },
+        },
+        { $inc: { integrationPinAttempts: 1 } },
+        { new: true }
+      ).select('+integrationPinAttempts');
+      if (!failedAttempt) return res.status(403).json({ message: 'Email verification expired or was already used. Request a new code.' });
+      if (failedAttempt.integrationPinAttempts >= INTEGRATION_OTP_MAX_ATTEMPTS) {
+        await User.updateOne(
+          {
+            _id: user._id,
+            integrationPinChallengeHash: challengeHash,
+            integrationPinAttempts: { $gte: INTEGRATION_OTP_MAX_ATTEMPTS },
+          },
+          {
+            $set: { integrationPinLockedUntil: new Date(now.getTime() + INTEGRATION_OTP_LOCK_MS) },
+            $unset: { integrationPinChallengeHash: 1, integrationPinChallengeExpires: 1 },
+          }
+        );
+        return res.status(429).json({ message: 'Too many incorrect PIN attempts. Please try again later.' });
+      }
+      return res.status(403).json({ message: 'The integration PIN is incorrect.' });
+    }
+
+    const consumedChallenge = await User.findOneAndUpdate(
+      {
+        _id: user._id,
+        integrationPinChallengeHash: challengeHash,
+        integrationPinChallengeExpires: { $gt: now },
+        integrationPinAttempts: { $lt: INTEGRATION_OTP_MAX_ATTEMPTS },
+      },
+      {
+        $unset: { integrationPinChallengeHash: 1, integrationPinChallengeExpires: 1 },
+        $set: { integrationPinAttempts: 0 },
+      },
+      { new: false }
+    );
+    if (!consumedChallenge) return res.status(403).json({ message: 'Email verification expired or was already used. Request a new code.' });
+
+    const accessToken = jwt.sign(
+      { id: String(req.user._id), scope: 'settings:integrations', purpose: 'access' },
+      process.env.JWT_SECRET,
+      { expiresIn: INTEGRATION_ACCESS_TTL }
+    );
+    res.set('Cache-Control', 'no-store').json({ accessToken, expiresInSeconds: 1800 });
+  } catch (err) {
+    console.error('[auth] Integration PIN verification failed:', err.message);
+    res.status(503).json({ message: 'Could not verify the integration PIN.' });
+  }
+};
+
+exports.getGoogleOAuthConfig = async (req, res) => {
+  try {
+    const settings = await AuthSettings.findOne({ key: 'global' }) || DEFAULT_AUTH_SETTINGS;
+    res.json({ config: await googleOAuthClients.managementConfig(settings) });
+  } catch (err) {
+    console.error('[auth] Could not load Google OAuth configuration:', err.message);
+    res.status(503).json({ message: 'Could not load Google OAuth configuration.' });
+  }
+};
+
+exports.getRecaptchaConfig = async (req, res) => {
+  try {
+    const settings = await AuthSettings.findOne({ key: 'global' }) || DEFAULT_AUTH_SETTINGS;
+    res.json({ config: await recaptchaClients.managementConfig(settings) });
+  } catch (err) {
+    console.error('[auth] Could not load reCAPTCHA configuration:', err.message);
+    res.status(503).json({ message: 'Could not load reCAPTCHA configuration.' });
+  }
+};
+
+function recaptchaClientInput(body, { requireSecret = true } = {}) {
+  const siteKey = typeof body.siteKey === 'string' ? body.siteKey.trim() : '';
+  const secretKey = typeof body.secretKey === 'string' ? body.secretKey.trim() : '';
+  if (!siteKey || siteKey.length > 256) throw new Error('Enter a reCAPTCHA site key of 1 to 256 characters.');
+  if (requireSecret && !secretKey) throw new Error('Enter the reCAPTCHA secret key.');
+  if (secretKey.length > 2048) throw new Error('The reCAPTCHA secret key is too long.');
+  const allowedHostnames = Array.isArray(body.allowedHostnames)
+    ? body.allowedHostnames
+    : typeof body.allowedHostnames === 'string'
+      ? body.allowedHostnames.split(',')
+      : [];
+  const normalizedHostnames = [...new Set(allowedHostnames.map((hostname) => String(hostname).trim().toLowerCase()).filter(Boolean))];
+  if (!normalizedHostnames.length || normalizedHostnames.some((hostname) => (
+    hostname.length > 253
+    || !/^(localhost|(?:[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?)(?:\.(?:[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?))*)$/.test(hostname)
+  ))) {
+    throw new Error('Enter comma-separated hostnames without URLs or ports.');
+  }
+  return { siteKey, secretKey, allowedHostnames: normalizedHostnames };
+}
+
+exports.saveRecaptchaClient = async (req, res) => {
+  try {
+    const settings = await loadAuthSettings();
+    const currentConfig = await recaptchaClients.managementConfig(settings);
+    const currentClient = recaptchaClients.MANAGED_CLIENT_ID_PATTERN.test(currentConfig.id)
+      ? await RecaptchaClient.findById(currentConfig.id).select('+encryptedSecret')
+      : null;
+    const input = recaptchaClientInput(req.body || {}, { requireSecret: !currentClient });
+    if (await recaptchaClients.findDuplicate(input.siteKey, currentClient && currentClient._id)) {
+      return res.status(409).json({ message: 'That reCAPTCHA site key is already configured.' });
+    }
+    const client = currentClient || new RecaptchaClient({ label: 'Custom reCAPTCHA configuration' });
+    client.siteKey = input.siteKey;
+    client.normalizedSiteKey = input.siteKey.toLowerCase();
+    client.allowedHostnames = input.allowedHostnames;
+    if (input.secretKey) client.encryptedSecret = recaptchaClients.encryptSecret(input.secretKey);
+    await client.save();
+    await AuthSettings.findOneAndUpdate(
+      { key: 'global' },
+      { $set: { activeRecaptchaClientId: String(client._id) } },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+    res.json({ config: await recaptchaClients.managementConfig({ activeRecaptchaClientId: String(client._id) }) });
+  } catch (err) {
+    if (err.code === 11000) return res.status(409).json({ message: 'That reCAPTCHA site key is already configured.' });
+    if (err.name === 'ValidationError' || err.message.startsWith('Enter ') || err.message.startsWith('The reCAPTCHA')) {
+      return res.status(400).json({ message: err.message });
+    }
+    console.error('[auth] Could not save reCAPTCHA configuration:', err.message);
+    res.status(503).json({ message: 'Could not save reCAPTCHA configuration.' });
   }
 };
 
 function googleOAuthClientInput(body, { requireSecret = true } = {}) {
-  const label = typeof body.label === 'string' ? body.label.trim() : '';
   const clientId = typeof body.clientId === 'string' ? body.clientId.trim() : '';
   const clientSecret = typeof body.clientSecret === 'string' ? body.clientSecret.trim() : '';
-  if (!label || label.length > 80) throw new Error('Enter a client name of 1 to 80 characters.');
   if (!googleOAuthClients.validClientId(clientId)) {
     throw new Error('Enter a valid Google OAuth Client ID ending in .apps.googleusercontent.com.');
   }
   if (requireSecret && !clientSecret) throw new Error('Enter the Google OAuth Client Secret.');
   if (clientSecret.length > 2048) throw new Error('Google OAuth Client Secret is too long.');
-  return { label, clientId, clientSecret };
+  return { clientId, clientSecret };
 }
 
-exports.addGoogleOAuthClient = async (req, res) => {
+exports.saveGoogleOAuthClient = async (req, res) => {
   try {
-    const input = googleOAuthClientInput(req.body || {});
-    if (await googleOAuthClients.findDuplicate(input.clientId, null, await loadAuthSettings())) {
+    const settings = await loadAuthSettings();
+    const currentConfig = await googleOAuthClients.managementConfig(settings);
+    const currentClient = googleOAuthClients.MANAGED_CLIENT_ID_PATTERN.test(currentConfig.id)
+      ? await GoogleOAuthClient.findById(currentConfig.id).select('+encryptedClientSecret')
+      : null;
+    const input = googleOAuthClientInput(req.body || {}, { requireSecret: !currentClient });
+    const callbackUrl = typeof req.body.callbackUrl === 'string' ? req.body.callbackUrl.trim() : '';
+    let parsedCallbackUrl;
+    try {
+      parsedCallbackUrl = new URL(callbackUrl);
+    } catch {
+      return res.status(400).json({ message: 'Enter a valid Google callback URL.' });
+    }
+    if (!['http:', 'https:'].includes(parsedCallbackUrl.protocol)) {
+      return res.status(400).json({ message: 'Enter a valid Google callback URL.' });
+    }
+    if (await googleOAuthClients.findDuplicate(input.clientId, currentClient && currentClient._id)) {
       return res.status(409).json({ message: 'That Google OAuth Client ID is already configured.' });
     }
-    const client = await GoogleOAuthClient.create({
-      label: input.label,
+    // Check the credentials with Google before storing them, so a mistyped or autofilled
+    // secret is rejected instead of silently breaking Google sign-in.
+    const secretToCheck = input.clientSecret
+      || (await googleOAuthClients.resolveClient(String(currentClient._id), settings)).clientSecret;
+    const credentialStatus = await googleOAuthClients.checkCredentials({
       clientId: input.clientId,
-      normalizedClientId: input.clientId.toLowerCase(),
-      encryptedClientSecret: googleOAuthClients.encryptSecret(input.clientSecret),
+      clientSecret: secretToCheck,
+      callbackUrl,
     });
-    res.status(201).json({ message: 'Google OAuth client added.', client: googleOAuthClients.publicManagedClient(client) });
-  } catch (err) {
-    if (err.code === 11000) return res.status(409).json({ message: 'That Google OAuth Client ID is already configured.' });
-    if (err.name === 'ValidationError' || err.message.startsWith('Enter ') || err.message.startsWith('Google OAuth')) {
-      return res.status(400).json({ message: err.message });
+    if (credentialStatus === 'invalid') {
+      return res.status(400).json({
+        message: 'Google rejected this Client ID and Client Secret. Check both values in Google Cloud Console. Nothing was saved.',
+      });
     }
-    console.error('[auth] Could not add Google OAuth client:', err.message);
-    res.status(503).json({ message: 'Could not add Google OAuth client.' });
-  }
-};
 
-exports.updateGoogleOAuthClient = async (req, res) => {
-  try {
-    if (!/^[a-f\d]{24}$/i.test(req.params.id)) return res.status(404).json({ message: 'Google OAuth client not found.' });
-    const client = await GoogleOAuthClient.findById(req.params.id).select('+encryptedClientSecret');
-    if (!client) return res.status(404).json({ message: 'Google OAuth client not found.' });
-    const input = googleOAuthClientInput(req.body || {}, { requireSecret: false });
-    if (await googleOAuthClients.findDuplicate(input.clientId, client._id, await loadAuthSettings())) {
-      return res.status(409).json({ message: 'That Google OAuth Client ID is already configured.' });
-    }
-    client.label = input.label;
+    const client = currentClient || new GoogleOAuthClient({ label: 'Custom Google client' });
     client.clientId = input.clientId;
     client.normalizedClientId = input.clientId.toLowerCase();
-    if (input.clientSecret) {
-      client.encryptedClientSecret = googleOAuthClients.encryptSecret(input.clientSecret);
-    }
+    client.callbackUrl = callbackUrl;
+    if (input.clientSecret) client.encryptedClientSecret = googleOAuthClients.encryptSecret(input.clientSecret);
     await client.save();
-    res.json({ message: 'Google OAuth client updated.', client: googleOAuthClients.publicManagedClient(client) });
+    await AuthSettings.findOneAndUpdate(
+      { key: 'global' },
+      { $set: {
+        activeGoogleOAuthClientId: String(client._id),
+        customGoogleClientEnabled: true,
+      } },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+    res.json({ config: await googleOAuthClients.managementConfig({ activeGoogleOAuthClientId: String(client._id) }) });
   } catch (err) {
     if (err.code === 11000) return res.status(409).json({ message: 'That Google OAuth Client ID is already configured.' });
     if (err.name === 'ValidationError' || err.message.startsWith('Enter ') || err.message.startsWith('Google OAuth')) {
       return res.status(400).json({ message: err.message });
     }
-    console.error('[auth] Could not update Google OAuth client:', err.message);
-    res.status(503).json({ message: 'Could not update Google OAuth client.' });
-  }
-};
-
-exports.deleteGoogleOAuthClient = async (req, res) => {
-  try {
-    if (!/^[a-f\d]{24}$/i.test(req.params.id)) return res.status(404).json({ message: 'Google OAuth client not found.' });
-    const settings = await loadAuthSettings();
-    if (activeGoogleOAuthClientId(settings).toLowerCase() === req.params.id.toLowerCase()) {
-      return res.status(409).json({ message: 'Select a different active Google OAuth client before deleting this one.' });
-    }
-    const [schoolConnection, personalConnection] = await Promise.all([
-      CalendarIntegration.exists({
-        $or: [
-          { connected: true, oauthClientSelectionId: req.params.id },
-          { pendingOAuthClientSelectionId: req.params.id, pendingStateExpires: { $gt: new Date() } },
-        ],
-      }),
-      PersonalGoogleCalendarConnection.exists({
-        $or: [
-          { connected: true, oauthClientSelectionId: req.params.id },
-          { pendingOAuthClientSelectionId: req.params.id, pendingStateExpires: { $gt: new Date() } },
-        ],
-      }),
-    ]);
-    if (schoolConnection || personalConnection) {
-      return res.status(409).json({ message: 'This client is used by a connected or pending Google Calendar. Disconnect or reconnect that calendar before removing the client.' });
-    }
-    const client = await GoogleOAuthClient.findByIdAndDelete(req.params.id);
-    if (!client) return res.status(404).json({ message: 'Google OAuth client not found.' });
-    res.json({ message: 'Google OAuth client removed.' });
-  } catch (err) {
-    console.error('[auth] Could not remove Google OAuth client:', err.message);
-    res.status(503).json({ message: 'Could not remove Google OAuth client.' });
+    console.error('[auth] Could not save Google OAuth configuration:', err.message);
+    res.status(503).json({ message: 'Could not save Google OAuth configuration.' });
   }
 };
 
@@ -701,55 +1054,40 @@ exports.deleteGoogleOAuthClient = async (req, res) => {
 exports.updateAuthSettings = async (req, res) => {
   const body = req.body || {};
   const { googleAuthEnabled, captchaEnabled } = body;
-  const hasActiveClient = Object.prototype.hasOwnProperty.call(body, 'activeGoogleOAuthClientId');
-  const hasLegacyClientToggle = Object.prototype.hasOwnProperty.call(body, 'customGoogleClientEnabled');
-  const requestedActiveClientId = hasActiveClient
-    ? body.activeGoogleOAuthClientId
-    : hasLegacyClientToggle
-      ? body.customGoogleClientEnabled === true
-        ? googleOAuthClients.ENV_CUSTOM_CLIENT_ID
-        : googleOAuthClients.DEFAULT_CLIENT_ID
-      : undefined;
   if (typeof googleAuthEnabled !== 'boolean' || typeof captchaEnabled !== 'boolean') {
     return res.status(400).json({ message: 'Google Authentication and CAPTCHA values must be true or false.' });
   }
-  if (hasLegacyClientToggle && typeof body.customGoogleClientEnabled !== 'boolean') {
-    return res.status(400).json({ message: 'Custom Google client selection must be true or false.' });
-  }
-  if (typeof requestedActiveClientId !== 'undefined'
-    && (typeof requestedActiveClientId !== 'string' || requestedActiveClientId.length > 64)) {
-    return res.status(400).json({ message: 'Select a valid Google OAuth client.' });
-  }
-  if (captchaEnabled && (!recaptchaSiteKey() || !recaptchaSecretKey())) {
-    return res.status(400).json({ message: 'CAPTCHA cannot be enabled until its site and secret keys are configured.' });
-  }
 
   try {
-    if (typeof requestedActiveClientId !== 'undefined') {
-      try {
-        const settings = await loadAuthSettings();
-        if (googleAuthEnabled) {
-          await googleOAuthClients.resolveClient(requestedActiveClientId, settings);
-        } else if (!await googleOAuthClients.clientExists(requestedActiveClientId, settings)) {
-          return res.status(400).json({ message: 'Select a Google OAuth client that is available in the catalog.' });
-        }
-      } catch (err) {
-        return res.status(400).json({ message: err.message });
-      }
+    const settings = await loadAuthSettings();
+    const activeGoogleId = body.activeGoogleOAuthClientId
+      || (typeof body.customGoogleClientEnabled === 'boolean'
+        ? (body.customGoogleClientEnabled ? googleOAuthClients.ENV_CUSTOM_CLIENT_ID : googleOAuthClients.DEFAULT_CLIENT_ID)
+        : activeGoogleOAuthClientId(settings));
+    const activeRecaptchaId = body.activeRecaptchaClientId || activeRecaptchaClientId(settings);
+    if (typeof activeGoogleId !== 'string' || activeGoogleId.length > 64
+      || typeof activeRecaptchaId !== 'string' || activeRecaptchaId.length > 64) {
+      return res.status(400).json({ message: 'Select a valid authentication configuration.' });
+    }
+    if (googleAuthEnabled) await googleOAuthClients.resolveClient(activeGoogleId, settings);
+    if (captchaEnabled && !await recaptchaClients.isConfigured(activeRecaptchaId)) {
+      return res.status(400).json({ message: 'CAPTCHA cannot be enabled until a site and secret key are configured.' });
     }
 
-    const updates = { googleAuthEnabled, captchaEnabled };
-    if (typeof requestedActiveClientId !== 'undefined') {
-      updates.activeGoogleOAuthClientId = requestedActiveClientId;
-      updates.customGoogleClientEnabled = requestedActiveClientId !== googleOAuthClients.DEFAULT_CLIENT_ID;
-    }
-    const settings = await AuthSettings.findOneAndUpdate(
+    const savedSettings = await AuthSettings.findOneAndUpdate(
       { key: 'global' },
-      { $set: updates },
+      { $set: {
+        googleAuthEnabled,
+        captchaEnabled,
+        activeGoogleOAuthClientId: activeGoogleId,
+        activeRecaptchaClientId: activeRecaptchaId,
+        customGoogleClientEnabled: activeGoogleId !== googleOAuthClients.DEFAULT_CLIENT_ID,
+      } },
       { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true }
     );
-    res.json({ message: 'Authentication security settings saved.', settings: authSettingsPayload(settings) });
+    res.json({ message: 'Authentication security settings saved.', settings: await authSettingsPayload(savedSettings) });
   } catch (err) {
+    console.error('[auth] Could not save authentication security settings:', err.message);
     res.status(503).json({ message: 'Could not save authentication security settings.' });
   }
 };
@@ -772,12 +1110,10 @@ exports.googleStart = async (req, res) => {
   }
 
   try {
-    const clientSelectionId = activeGoogleOAuthClientId(settings);
-    const googleClient = await createGoogleOAuthClient(clientSelectionId, settings);
+    const { clientSelectionId, googleClient } = await selectGoogleOAuthClient(settings);
     const state = createGoogleState(mode, clientSelectionId);
     const authorizationUrl = googleClient.generateAuthUrl({
       access_type: 'online',
-      prompt: 'login',
       scope: ['profile', 'email'],
       state,
     });
@@ -790,10 +1126,15 @@ exports.googleStart = async (req, res) => {
 };
 
 // GET /api/auth/recaptcha-config
-exports.recaptchaConfig = (req, res) => {
-  const siteKey = recaptchaSiteKey();
-  if (!siteKey) return res.status(503).json({ message: 'CAPTCHA is not configured.' });
-  res.json({ siteKey });
+exports.recaptchaConfig = async (req, res) => {
+  try {
+    const settings = await loadAuthSettings();
+    const siteKey = await recaptchaClients.siteKey(activeRecaptchaClientId(settings));
+    res.json({ siteKey });
+  } catch (err) {
+    console.error('[auth] Could not load active reCAPTCHA configuration:', err.message);
+    res.status(503).json({ message: 'CAPTCHA is not configured.' });
+  }
 };
 
 // POST /api/auth/google/start
@@ -809,9 +1150,19 @@ exports.googleStartWithCaptcha = async (req, res) => {
   }
 
   const captchaRequired = settings.captchaEnabled === true;
-  const result = captchaRequired
-    ? await verifyRecaptchaToken(req.body && req.body.token, req.ip)
-    : { ok: true };
+  let result = { ok: true };
+  if (captchaRequired) {
+    try {
+      result = await verifyRecaptchaToken(
+        req.body && req.body.token,
+        req.ip,
+        activeRecaptchaClientId(settings)
+      );
+    } catch (err) {
+      console.error('[CAPTCHA configuration error]:', err.message);
+      return res.status(503).json({ message: 'CAPTCHA is not configured. Please contact the school admin.' });
+    }
+  }
   if (!result.ok) {
     const messages = {
       configuration: 'CAPTCHA is not configured. Please contact the school admin.',
@@ -827,12 +1178,14 @@ exports.googleStartWithCaptcha = async (req, res) => {
   }
 
   try {
-    const clientSelectionId = activeGoogleOAuthClientId(settings);
-    const googleClient = await createGoogleOAuthClient(clientSelectionId, settings);
+    const { clientSelectionId, googleClient } = await selectGoogleOAuthClient(settings);
     const state = createGoogleState('login', clientSelectionId);
+    const loginHint = typeof req.body.loginHint === 'string'
+      ? resetEmail(req.body.loginHint)
+      : '';
     const authorizationUrl = googleClient.generateAuthUrl({
       access_type: 'online',
-      prompt: 'login',
+      ...(isValidEmail(loginHint) ? { login_hint: loginHint } : {}),
       scope: ['profile', 'email'],
       state,
     });
@@ -869,13 +1222,19 @@ exports.googleCallback = async (req, res) => {
   setGoogleStateCookie(res, '', true);
 
   if (req.query.error) {
+    if (req.query.error !== 'access_denied') console.error('[auth] Google returned an error:', req.query.error);
     return redirectGoogleError(res, req.query.error === 'access_denied' ? 'cancelled' : 'failed');
   }
-  if (typeof req.query.code !== 'string') return redirectGoogleError(res, 'failed');
+  if (typeof req.query.code !== 'string') {
+    console.error('[auth] Google callback arrived without an authorization code.');
+    return redirectGoogleError(res, 'failed');
+  }
 
   try {
-    const clientSelectionId = googleState.clientSelectionId || activeGoogleOAuthClientId(settings);
-    const googleClient = await createGoogleOAuthClient(clientSelectionId, settings);
+    const googleClient = await createGoogleOAuthClient(
+      googleState.clientSelectionId || activeGoogleOAuthClientId(settings),
+      settings
+    );
     const { tokens } = await googleClient.getToken(req.query.code);
     googleClient.setCredentials(tokens);
     const { data: profile } = await googleClient.request({ url: 'https://www.googleapis.com/oauth2/v2/userinfo' });
@@ -931,6 +1290,10 @@ exports.googleCallback = async (req, res) => {
       captchaRequired
     );
   } catch (err) {
+    const detail = err.response && err.response.data
+      ? JSON.stringify(err.response.data)
+      : err.message;
+    console.error('[auth] Google sign-in callback failed:', detail);
     redirectGoogleError(res, 'failed');
   }
 };
@@ -938,7 +1301,7 @@ exports.googleCallback = async (req, res) => {
 // POST /api/auth/google/exchange
 exports.googleExchange = async (req, res) => {
   try {
-    const { code, password } = req.body;
+    const { code } = req.body;
     if (typeof code !== 'string' || !/^[a-f0-9]{64}$/.test(code)) {
       return res.status(400).json({ message: 'Google sign-in session is invalid or expired.' });
     }
@@ -951,17 +1314,11 @@ exports.googleExchange = async (req, res) => {
     const codeHash = crypto.createHash('sha256').update(code).digest('hex');
     const pendingUser = await User.findOne(
       { googleLoginCodeHash: codeHash, googleLoginCodeExpires: { $gt: new Date() } }
-    ).select('+password +googleLoginMode +googleLoginCaptchaVerified');
+    ).select('+googleLoginMode +googleLoginCaptchaVerified');
     if (!pendingUser) return res.status(401).json({ message: 'Google sign-in session is invalid or expired.' });
     if (settings.captchaEnabled === true && pendingUser.googleLoginMode === 'login'
       && pendingUser.googleLoginCaptchaVerified !== true) {
       return res.status(403).json({ message: 'CAPTCHA verification is required. Please start Google sign-in again.' });
-    }
-    if (typeof password !== 'string' || !password) {
-      return res.status(400).json({ message: 'Enter your Play-is-School password to continue.' });
-    }
-    if (!pendingUser.password || !(await pendingUser.comparePassword(password))) {
-      return res.status(401).json({ message: 'Incorrect Play-is-School password.' });
     }
 
     const user = await User.findOneAndUpdate(

@@ -6,9 +6,12 @@ const ctrl = require('../controllers/progressController');
 router.use(protect);
 router.get('/', allowRoles('admin'), ctrl.listAllProgress);
 router.patch('/:id/review', allowRoles('admin'), ctrl.reviewProgress);
+router.get('/google-drive/status', allowRoles('teacher'), ctrl.googleDriveStatus);
+router.post('/google-drive/connect', allowRoles('teacher'), ctrl.connectGoogleDrive);
+router.get('/google-drive/picker-config', allowRoles('teacher'), ctrl.googleDrivePickerConfig);
 router.post('/', allowRoles('teacher'), uploadProgressPhotos, ctrl.addProgress);
 router.patch('/:id', allowRoles('teacher'), uploadProgressPhotos, ctrl.updateProgress);
-router.get('/:id/attachments/:attachmentId', allowRoles('admin', 'teacher'), ctrl.getAttachment);
+router.get('/:id/attachments/:attachmentId', allowRoles('admin', 'teacher', 'parent'), ctrl.getAttachment);
 router.get('/student/:studentId', ctrl.getStudentProgress);
 
 module.exports = router;
