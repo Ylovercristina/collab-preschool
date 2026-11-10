@@ -90,8 +90,7 @@ exports.sendAccountApprovalEmail = async (user) => {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 
-  await emailTransporter.sendMail({
-    from: `Play-is-School <${process.env.EMAIL_USER}>`,
+  const result = await sendEmail({
     to: user.email,
     subject: 'Your Play-is-School account has been approved!',
     text: `Hello ${name},
@@ -110,6 +109,7 @@ Thank you for joining Play-is-School!`,
         <p>Thank you for joining Play-is-School!</p>
       </div>`,
   });
+  if (!result.success) throw new Error(result.error || 'Email delivery failed.');
 };
 
 async function issueResetOtp(user) {
@@ -904,10 +904,17 @@ exports.verifyIntegrationPin = async (req, res) => {
   }
 };
 
+// Only tell the admin UI whether a custom configuration is active; never send the
+// stored identifiers back to the browser.
+function publicIntegrationStatus(config) {
+  return { source: config.source, customConfigured: config.source === 'managed' };
+}
+
 exports.getGoogleOAuthConfig = async (req, res) => {
   try {
     const settings = await AuthSettings.findOne({ key: 'global' }) || DEFAULT_AUTH_SETTINGS;
-    res.json({ config: await googleOAuthClients.managementConfig(settings) });
+    res.set('Cache-Control', 'no-store')
+      .json({ config: publicIntegrationStatus(await googleOAuthClients.managementConfig(settings)) });
   } catch (err) {
     console.error('[auth] Could not load Google OAuth configuration:', err.message);
     res.status(503).json({ message: 'Could not load Google OAuth configuration.' });
@@ -917,7 +924,8 @@ exports.getGoogleOAuthConfig = async (req, res) => {
 exports.getRecaptchaConfig = async (req, res) => {
   try {
     const settings = await AuthSettings.findOne({ key: 'global' }) || DEFAULT_AUTH_SETTINGS;
-    res.json({ config: await recaptchaClients.managementConfig(settings) });
+    res.set('Cache-Control', 'no-store')
+      .json({ config: publicIntegrationStatus(await recaptchaClients.managementConfig(settings)) });
   } catch (err) {
     console.error('[auth] Could not load reCAPTCHA configuration:', err.message);
     res.status(503).json({ message: 'Could not load reCAPTCHA configuration.' });
@@ -967,7 +975,7 @@ exports.saveRecaptchaClient = async (req, res) => {
       { $set: { activeRecaptchaClientId: String(client._id) } },
       { new: true, upsert: true, setDefaultsOnInsert: true }
     );
-    res.json({ config: await recaptchaClients.managementConfig({ activeRecaptchaClientId: String(client._id) }) });
+    res.json({ config: publicIntegrationStatus(await recaptchaClients.managementConfig({ activeRecaptchaClientId: String(client._id) })) });
   } catch (err) {
     if (err.code === 11000) return res.status(409).json({ message: 'That reCAPTCHA site key is already configured.' });
     if (err.name === 'ValidationError' || err.message.startsWith('Enter ') || err.message.startsWith('The reCAPTCHA')) {
@@ -979,10 +987,19 @@ exports.saveRecaptchaClient = async (req, res) => {
 };
 
 function googleOAuthClientInput(body, { requireSecret = true } = {}) {
-  const clientId = typeof body.clientId === 'string' ? body.clientId.trim() : '';
+  // Tolerate common copy-paste artifacts: surrounding whitespace and a trailing period.
+  const clientId = typeof body.clientId === 'string' ? body.clientId.trim().replace(/\.+$/, '') : '';
   const clientSecret = typeof body.clientSecret === 'string' ? body.clientSecret.trim() : '';
   if (!googleOAuthClients.validClientId(clientId)) {
-    throw new Error('Enter a valid Google OAuth Client ID ending in .apps.googleusercontent.com.');
+    if (!clientId) throw new Error('Enter the Google OAuth Client ID.');
+    if (/\s/.test(clientId)) throw new Error('Enter the Google OAuth Client ID without spaces.');
+    if (!/\.apps\.googleusercontent\.com$/i.test(clientId)) {
+      throw new Error('Enter a Google OAuth Client ID ending in .apps.googleusercontent.com.');
+    }
+    if (!/^\d+-/.test(clientId)) {
+      throw new Error('Enter the full Google OAuth Client ID. It must start with your project number and a dash, e.g. 123456789012-abc123.apps.googleusercontent.com. Copy it from Google Cloud Console > APIs & Services > Credentials.');
+    }
+    throw new Error('Enter a valid Google OAuth Client ID, e.g. 123456789012-abc123.apps.googleusercontent.com.');
   }
   if (requireSecret && !clientSecret) throw new Error('Enter the Google OAuth Client Secret.');
   if (clientSecret.length > 2048) throw new Error('Google OAuth Client Secret is too long.');
@@ -997,15 +1014,16 @@ exports.saveGoogleOAuthClient = async (req, res) => {
       ? await GoogleOAuthClient.findById(currentConfig.id).select('+encryptedClientSecret')
       : null;
     const input = googleOAuthClientInput(req.body || {}, { requireSecret: !currentClient });
-    const callbackUrl = typeof req.body.callbackUrl === 'string' ? req.body.callbackUrl.trim() : '';
-    let parsedCallbackUrl;
-    try {
-      parsedCallbackUrl = new URL(callbackUrl);
-    } catch {
-      return res.status(400).json({ message: 'Enter a valid Google callback URL.' });
-    }
-    if (!['http:', 'https:'].includes(parsedCallbackUrl.protocol)) {
-      return res.status(400).json({ message: 'Enter a valid Google callback URL.' });
+    // Blank callback => use the server's GOOGLE_CALLBACK_URL. Anything else must target the
+    // backend sign-in callback route, or Google sign-in breaks (redirect_uri_mismatch).
+    const enteredCallbackUrl = typeof req.body.callbackUrl === 'string' ? req.body.callbackUrl.trim() : '';
+    const callbackUrl = (enteredCallbackUrl || googleOAuthClients.defaultCallbackUrl()).replace(/\/+$/, '');
+    if (!googleOAuthClients.isSignInCallbackUrl(callbackUrl)) {
+      const example = googleOAuthClients.defaultCallbackUrl()
+        || `http://localhost:5000${googleOAuthClients.SIGN_IN_CALLBACK_PATH}`;
+      return res.status(400).json({
+        message: `The Google callback URL must point to the backend sign-in route (${googleOAuthClients.SIGN_IN_CALLBACK_PATH}), e.g. ${example}. Leave it blank to use the server default.`,
+      });
     }
     if (await googleOAuthClients.findDuplicate(input.clientId, currentClient && currentClient._id)) {
       return res.status(409).json({ message: 'That Google OAuth Client ID is already configured.' });
@@ -1039,7 +1057,7 @@ exports.saveGoogleOAuthClient = async (req, res) => {
       } },
       { new: true, upsert: true, setDefaultsOnInsert: true }
     );
-    res.json({ config: await googleOAuthClients.managementConfig({ activeGoogleOAuthClientId: String(client._id) }) });
+    res.json({ config: publicIntegrationStatus(await googleOAuthClients.managementConfig({ activeGoogleOAuthClientId: String(client._id) })) });
   } catch (err) {
     if (err.code === 11000) return res.status(409).json({ message: 'That Google OAuth Client ID is already configured.' });
     if (err.name === 'ValidationError' || err.message.startsWith('Enter ') || err.message.startsWith('Google OAuth')) {

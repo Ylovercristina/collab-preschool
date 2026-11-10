@@ -240,6 +240,8 @@ function bindCredentialManagers() {
       secret: 'googleOAuthClientSecret',
       callback: 'googleOAuthCallbackUrl',
       message: 'googleOAuthClientMessage',
+      status: 'googleOAuthClientStatus',
+      label: 'Google Sign-In',
       route: '/auth/google-clients',
       fields: { clientId: 'clientId', secret: 'clientSecret', callback: 'callbackUrl' },
     },
@@ -253,6 +255,8 @@ function bindCredentialManagers() {
       secret: 'recaptchaSecretKey',
       hostnames: 'recaptchaAllowedHostnames',
       message: 'recaptchaClientMessage',
+      status: 'recaptchaClientStatus',
+      label: 'reCAPTCHA',
       route: '/auth/recaptcha-clients',
       fields: { clientId: 'siteKey', secret: 'secretKey', hostnames: 'allowedHostnames' },
     },
@@ -267,21 +271,34 @@ function bindCredentialManagers() {
     const secret = document.getElementById(config.secret);
     if (!openButton || !closeButton || !dialog || !form || !saveButton || !message || !secret) return;
 
+    const status = document.getElementById(config.status);
+    const renderStatus = (current) => {
+      if (!status) return;
+      status.textContent = current && current.customConfigured
+        ? `A custom ${config.label} configuration is active. Enter new values below to replace it.`
+        : `Using the default ${config.label} configuration. Enter values below to set a custom one.`;
+    };
+    // Never prefill stored credentials: the admin always enters a complete new configuration.
+    const clearFields = () => {
+      form.reset();
+      secret.value = '';
+      secret.required = true;
+      secret.placeholder = 'Enter a new secret';
+    };
+
     openButton.addEventListener('click', async () => {
       message.textContent = '';
+      if (status) status.textContent = '';
+      clearFields();
       dialog.showModal();
       try {
         const { config: current } = await api.get(config.route, integrationAccessOptions());
-        document.getElementById(config.clientId).value = current[config.fields.clientId] || '';
-        document.getElementById(config.callback || config.hostnames).value =
-          config.callback ? current.callbackUrl || '' : (current.allowedHostnames || []).join(', ');
-        secret.value = '';
-        secret.required = current.source !== 'managed';
-        secret.placeholder = current.source === 'managed' ? 'Leave blank to keep current' : '';
+        renderStatus(current);
       } catch (err) {
         showMsg(message, err.message);
       }
     });
+    dialog.addEventListener('close', clearFields);
     closeButton.addEventListener('click', () => dialog.close());
     dialog.addEventListener('click', (event) => {
       if (event.target === dialog) dialog.close();
@@ -296,11 +313,10 @@ function bindCredentialManagers() {
       if (config.hostnames) payload[config.fields.hostnames] = document.getElementById(config.hostnames).value;
       setButtonLoading(saveButton, true, 'Saving');
       try {
-        await api.put(config.route, payload, integrationAccessOptions());
+        const { config: saved } = await api.put(config.route, payload, integrationAccessOptions());
         showMsg(message, 'Custom configuration saved.', 'success');
-        secret.value = '';
-        secret.required = false;
-        secret.placeholder = 'Leave blank to keep current';
+        clearFields();
+        renderStatus(saved);
       } catch (err) {
         showMsg(message, err.message);
       } finally {

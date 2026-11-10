@@ -490,26 +490,29 @@
       </div>
       <dialog id="googleOAuthClientDialog" class="credential-manager" aria-labelledby="googleOAuthDialogTitle">
         <div class="credential-manager-header"><h2 id="googleOAuthDialogTitle">Custom Google Sign-In</h2><button type="button" class="btn btn-secondary btn-sm" id="closeGoogleOAuthClientDialog">Close</button></div>
+        <p id="googleOAuthClientStatus" class="credential-manager-status" aria-live="polite"></p>
         <form id="googleOAuthClientForm" class="credential-manager-form" autocomplete="off">
           <label for="googleOAuthClientId">Google Client ID</label>
-          <input id="googleOAuthClientId" maxlength="256" required autocomplete="off" spellcheck="false" data-lpignore="true" data-1p-ignore />
+          <input id="googleOAuthClientId" maxlength="256" required autocomplete="off" spellcheck="false" data-lpignore="true" data-1p-ignore placeholder="Enter a new Client ID" />
           <label for="googleOAuthClientSecret">Google Client Secret</label>
           <input id="googleOAuthClientSecret" type="text" class="masked-secret" maxlength="2048" autocomplete="off" spellcheck="false" data-lpignore="true" data-1p-ignore />
           <label for="googleOAuthCallbackUrl">Google Callback URL</label>
-          <input id="googleOAuthCallbackUrl" type="url" maxlength="2048" required />
+          <input id="googleOAuthCallbackUrl" type="url" maxlength="2048" autocomplete="off" placeholder="Leave blank to use the server default (…/api/auth/google/callback)" />
+          <small class="credential-manager-hint">Add this callback URL to “Authorized redirect URIs” of your OAuth client in Google Cloud Console.</small>
           <button type="submit" class="btn btn-primary" id="saveGoogleOAuthClient">Save custom configuration</button>
         </form>
         <p id="googleOAuthClientMessage" class="form-msg" aria-live="polite"></p>
       </dialog>
       <dialog id="recaptchaClientDialog" class="credential-manager" aria-labelledby="recaptchaDialogTitle">
         <div class="credential-manager-header"><h2 id="recaptchaDialogTitle">Custom reCAPTCHA</h2><button type="button" class="btn btn-secondary btn-sm" id="closeRecaptchaClientDialog">Close</button></div>
+        <p id="recaptchaClientStatus" class="credential-manager-status" aria-live="polite"></p>
         <form id="recaptchaClientForm" class="credential-manager-form" autocomplete="off">
           <label for="recaptchaSiteKey">reCAPTCHA site key</label>
-          <input id="recaptchaSiteKey" maxlength="256" required autocomplete="off" spellcheck="false" data-lpignore="true" data-1p-ignore />
+          <input id="recaptchaSiteKey" maxlength="256" required autocomplete="off" spellcheck="false" data-lpignore="true" data-1p-ignore placeholder="Enter a new site key" />
           <label for="recaptchaSecretKey">reCAPTCHA secret key</label>
           <input id="recaptchaSecretKey" type="text" class="masked-secret" maxlength="2048" autocomplete="off" spellcheck="false" data-lpignore="true" data-1p-ignore />
           <label for="recaptchaAllowedHostnames">Allowed hostnames</label>
-          <input id="recaptchaAllowedHostnames" placeholder="localhost, example.com" required />
+          <input id="recaptchaAllowedHostnames" placeholder="localhost, example.com" required autocomplete="off" />
           <button type="submit" class="btn btn-primary" id="saveRecaptchaClient">Save custom configuration</button>
         </form>
         <p id="recaptchaClientMessage" class="form-msg" aria-live="polite"></p>

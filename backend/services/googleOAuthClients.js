@@ -9,6 +9,29 @@ const DRIVE_ENV_CLIENT_ID = 'drive-env';
 const GOOGLE_CLIENT_ID_PATTERN = /^\d+-[A-Za-z0-9_-]+\.apps.googleusercontent.com$/;
 const MANAGED_CLIENT_ID_PATTERN = /^[a-f\d]{24}$/i;
 
+// Google must redirect sign-ins back to this backend route; any other URL (e.g. the
+// frontend origin) breaks the flow with redirect_uri_mismatch or a lost auth code.
+const SIGN_IN_CALLBACK_PATH = '/api/auth/google/callback';
+
+function defaultCallbackUrl() {
+  return String(process.env.GOOGLE_CALLBACK_URL || '').trim();
+}
+
+function isSignInCallbackUrl(value) {
+  try {
+    const url = new URL(String(value || '').trim());
+    return ['http:', 'https:'].includes(url.protocol)
+      && url.pathname.replace(/\/+$/, '') === SIGN_IN_CALLBACK_PATH;
+  } catch {
+    return false;
+  }
+}
+
+// Uses the stored callback only when it targets the sign-in route; otherwise the .env one.
+function signInCallbackUrl(stored) {
+  return isSignInCallbackUrl(stored) ? String(stored).trim().replace(/\/+$/, '') : defaultCallbackUrl();
+}
+
 function validClientId(value) {
   return typeof value === 'string' && GOOGLE_CLIENT_ID_PATTERN.test(value.trim());
 }
@@ -56,7 +79,7 @@ async function resolveClient(selectionId, settings = {}) {
     selectionId: String(client._id),
     label: client.label,
     clientId: client.clientId,
-    callbackUrl: client.callbackUrl || String(process.env.GOOGLE_CALLBACK_URL || '').trim(),
+    callbackUrl: signInCallbackUrl(client.callbackUrl),
     clientSecret: credentialEncryption.decryptSecret(
       client.encryptedClientSecret,
       'google-oauth-client',
@@ -145,7 +168,7 @@ async function managementConfig(settings = {}) {
       id: String(client._id),
       source: 'managed',
       clientId: client.clientId,
-      callbackUrl: client.callbackUrl || String(process.env.GOOGLE_CALLBACK_URL || '').trim(),
+      callbackUrl: signInCallbackUrl(client.callbackUrl),
     };
   }
   const environment = envClient(activeId, settings) || envClient(DEFAULT_CLIENT_ID, settings);
@@ -163,7 +186,10 @@ module.exports = {
   CALENDAR_ENV_CLIENT_ID,
   DRIVE_ENV_CLIENT_ID,
   MANAGED_CLIENT_ID_PATTERN,
+  SIGN_IN_CALLBACK_PATH,
   validClientId,
+  isSignInCallbackUrl,
+  defaultCallbackUrl,
   findDuplicate,
   managementConfig,
   resolveClient,
