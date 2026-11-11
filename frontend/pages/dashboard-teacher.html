@@ -42,7 +42,7 @@
         <button class="nav-item settings-button" type="button" data-panel="settings" aria-label="Settings" title="Settings"><i class="fa-solid fa-gear"></i></button>
         <div class="settings-submenu" aria-label="Settings sections">
           <button class="settings-subnav active" type="button" data-settings-section="profile"><i class="fa-solid fa-user"></i> Profile</button>
-          <button class="settings-subnav" type="button" data-settings-section="calendar"><i class="fa-regular fa-calendar"></i> Google Calendar</button>
+          <button class="settings-subnav" type="button" data-settings-section="calendar" hidden><i class="fa-regular fa-calendar"></i> Google Calendar</button>
         </div>
       </div>
     </div>
@@ -81,6 +81,10 @@
         <div>
           <h1 style="margin:0;">Assigned Student Information &amp; Profiles</h1>
           <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Review assigned student and enrollment information, and update accurate records.</p>
+        </div>
+        <div class="field" style="margin:0; min-width:200px;">
+          <label for="teacherStudentsClassFilter">Class</label>
+          <select id="teacherStudentsClassFilter"><option value="all">All classes</option></select>
         </div>
       </div>
       <div class="table-responsive">
@@ -381,7 +385,10 @@
           <h1 style="margin:0;">Notifications</h1>
           <p class="fee-page-subtitle">School event updates and other notices for your account.</p>
         </div>
-        <button type="button" class="btn btn-ghost btn-sm" id="refreshTeacherNotifications"><i class="fa-solid fa-rotate"></i> Refresh</button>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button type="button" class="btn btn-secondary btn-sm" id="markAllTeacherNotificationsRead" disabled><i class="fa-solid fa-check-double" aria-hidden="true"></i> Mark all as read</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="refreshTeacherNotifications"><i class="fa-solid fa-rotate"></i> Refresh</button>
+        </div>
       </div>
       <div id="teacherNotificationsList" aria-live="polite"></div>
     </section>

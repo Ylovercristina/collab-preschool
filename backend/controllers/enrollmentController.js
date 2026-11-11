@@ -4,6 +4,13 @@ const Student = require('../models/Student');
 const logActivity = require('../utils/logActivity');
 const { resolveClassAssignment } = require('../utils/classAssignment');
 const crypto = require('crypto');
+const mongoose = require('mongoose');
+const {
+  removeStudentPhotoFile,
+  copyStudentPhoto,
+  photoRecord,
+  sendStudentPhoto,
+} = require('../middleware/studentPhotoUpload');
 
 function normalizeStudentName(studentName) {
   return studentName.trim().replace(/\s+/g, ' ').toLowerCase();
@@ -94,6 +101,16 @@ exports.listApplications = async (req, res) => {
 };
 
 exports.submitApplication = async (req, res) => {
+  // The uploaded photo is kept only if the application is actually created.
+  let photoSaved = false;
+  try {
+    return await submitApplicationWithPhoto(req, res, () => { photoSaved = true; });
+  } finally {
+    if (req.file && !photoSaved) await removeStudentPhotoFile(req.file.filename);
+  }
+};
+
+async function submitApplicationWithPhoto(req, res, markPhotoSaved) {
   const period = await EnrollmentPeriod.findOne().sort({ updatedAt: -1 });
   if (!periodIsOpen(period)) {
     return res.status(403).json({ message: 'Enrollment is not currently open for a term.' });
@@ -110,6 +127,9 @@ exports.submitApplication = async (req, res) => {
     || !req.body.birthdate || Number.isNaN(birthdate.getTime())
     || birthdate >= new Date()) {
     return res.status(400).json({ message: 'Enter the student’s full name, guardian name, and a valid birthdate.' });
+  }
+  if (!req.file) {
+    return res.status(400).json({ message: 'Upload a photo of the student before submitting the enrollment.' });
   }
 
   const identityKey = studentIdentityKey(studentName, birthdate);
@@ -150,7 +170,9 @@ exports.submitApplication = async (req, res) => {
       requestedClass: typeof req.body.requestedClass === 'string' ? req.body.requestedClass.trim().slice(0, 80) : '',
       guardianPhone: typeof req.body.guardianPhone === 'string' ? req.body.guardianPhone.trim().slice(0, 30) : '',
       notes: typeof req.body.notes === 'string' ? req.body.notes.trim().slice(0, 1000) : '',
+      studentPhoto: photoRecord(req.file),
     });
+    markPhotoSaved();
     await logActivity(req.user._id, 'enrollment-application-submitted', studentName);
     return res.status(201).json({ application });
   } catch (err) {
@@ -159,6 +181,21 @@ exports.submitApplication = async (req, res) => {
     }
     console.error('Could not submit enrollment application:', err);
     return res.status(500).json({ message: 'Could not submit enrollment application.' });
+  }
+}
+
+// GET /api/enrollment/applications/:id/photo  (admin, or the person who submitted it)
+exports.getApplicationPhoto = async (req, res) => {
+  try {
+    if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(404).json({ message: 'Photo not found.' });
+    const filter = { _id: req.params.id };
+    if (req.user.role !== 'admin') filter.applicant = req.user._id;
+    const application = await EnrollmentApplication.findOne(filter).select('studentPhoto');
+    if (!application || !application.studentPhoto) return res.status(404).json({ message: 'Photo not found.' });
+    sendStudentPhoto(res, application.studentPhoto);
+  } catch (err) {
+    console.error('[enrollment] Photo load failed:', err.message);
+    res.status(500).json({ message: 'Could not load photo.' });
   }
 };
 
@@ -179,6 +216,12 @@ exports.reviewApplication = async (req, res) => {
         { new: true }
       );
       if (!application) return res.status(404).json({ message: 'Pending enrollment application not found.' });
+      // A rejected application does not keep the child's photo.
+      if (application.studentPhoto) {
+        await removeStudentPhotoFile(application.studentPhoto.filename);
+        await EnrollmentApplication.updateOne({ _id: application._id }, { $unset: { studentPhoto: 1 } });
+        application.studentPhoto = undefined;
+      }
       await logActivity(req.user._id, 'enrollment-application-rejected', application.studentName);
       return res.json({ application });
     }
@@ -220,6 +263,14 @@ exports.reviewApplication = async (req, res) => {
         teacher: application.teacher,
         enrollmentApplication: application._id,
       };
+      // The student record gets its own copy, so replacing it later never affects the application.
+      if (application.studentPhoto) {
+        try {
+          studentData.photo = await copyStudentPhoto(application.studentPhoto);
+        } catch (err) {
+          console.error('[enrollment] Could not copy the application photo:', err.message);
+        }
+      }
       // A requested class that is set up under Classes brings its teacher.
       const resolvedClass = await resolveClassAssignment(studentData.className);
       if (!resolvedClass.error) {
@@ -232,7 +283,12 @@ exports.reviewApplication = async (req, res) => {
           { $setOnInsert: studentData },
           { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
         );
+        // Another approval created the student first: drop the unused photo copy.
+        if (studentData.photo && student.photo?.filename !== studentData.photo.filename) {
+          await removeStudentPhotoFile(studentData.photo.filename);
+        }
       } catch (err) {
+        if (studentData.photo) await removeStudentPhotoFile(studentData.photo.filename);
         if (err.code !== 11000) throw err;
         student = await Student.findOne({ enrollmentApplication: application._id });
         if (!student) throw err;

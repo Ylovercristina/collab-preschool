@@ -41,6 +41,7 @@ function initSidebarNav() {
       else document.querySelector('.settings-menu')?.classList.remove('open');
       const targetPanel = document.getElementById(`panel-${btn.dataset.panel}`);
       if (targetPanel) targetPanel.classList.add('active');
+      rememberDashboardPanel(btn.dataset.panel);
       if (typeof onPanelShown === 'function') onPanelShown(btn.dataset.panel);
       if (btn.dataset.panel === 'events') loadPersonalGoogleCalendarButton();
       if (btn.dataset.panel === 'settings') {
@@ -67,10 +68,25 @@ function initSidebarNav() {
     });
   });
 
-  const requestedPanel = new URLSearchParams(window.location.search).get('panel');
+  // A ?panel= link wins; otherwise reopen the page this tab was on before a reload.
+  const requestedPanel = new URLSearchParams(window.location.search).get('panel') || recalledDashboardPanel();
   const panelButton = Array.from(document.querySelectorAll('.nav-item[data-panel]'))
     .find((btn) => btn.dataset.panel === requestedPanel);
-  if (panelButton) panelButton.click();
+  if (panelButton && !panelButton.classList.contains('active')) panelButton.click();
+}
+
+// Remembers the open dashboard page per browser tab, so a page reload (for example
+// after saving) returns to the same page instead of the Overview.
+function dashboardPanelStorageKey() {
+  return `play-is-school:panel:${window.location.pathname}`;
+}
+
+function rememberDashboardPanel(panel) {
+  try { sessionStorage.setItem(dashboardPanelStorageKey(), panel); } catch { /* storage unavailable */ }
+}
+
+function recalledDashboardPanel() {
+  try { return sessionStorage.getItem(dashboardPanelStorageKey()); } catch { return null; }
 }
 
 function initLogout() {
@@ -706,26 +722,68 @@ async function openMessageFromPopup(thread) {
   }
 }
 
+// Compact stack pinned to the top-center of the page, used only for new-message notices.
+function getMessageNotifyStack() {
+  let stack = document.getElementById('messageNotifyStack');
+  if (!stack) {
+    stack = document.createElement('div');
+    stack.id = 'messageNotifyStack';
+    stack.className = 'message-notify-stack';
+    stack.setAttribute('aria-live', 'polite');
+    document.body.appendChild(stack);
+  }
+  return stack;
+}
+
+const MESSAGE_POPUP_MAX_VISIBLE = 3;
+const MESSAGE_POPUP_DURATION_MS = 5000;
+
+function dismissMessagePopup(popup) {
+  if (!popup.isConnected || popup.classList.contains('is-leaving')) return;
+  popup.classList.add('is-leaving');
+  window.setTimeout(() => popup.remove(), 200);
+}
+
 function showMessagePopup(thread, sender) {
-  const stack = getToastStack();
+  const stack = getMessageNotifyStack();
   const title = thread.type === 'group' ? `${sender.name} · ${thread.name}` : sender.name;
-  const preview = String(thread.lastMessage.content || '').slice(0, 140);
-  const popup = document.createElement('button');
-  popup.type = 'button';
-  popup.className = 'toast-message message-popup';
-  popup.setAttribute('aria-label', `New message from ${title}: ${preview}. Open conversation`);
+  const preview = String(thread.lastMessage.content || '').slice(0, 140) || 'Sent an attachment';
+  const key = messagePopupKey(thread);
+  // One notice per conversation: a newer message replaces the older notice.
+  stack.querySelectorAll('.message-popup').forEach((existing) => {
+    if (existing.dataset.thread === key) existing.remove();
+  });
+
+  const popup = document.createElement('div');
+  popup.className = 'message-popup';
+  popup.dataset.thread = key;
+  popup.setAttribute('role', 'status');
   popup.innerHTML = `
-    <span class="message-popup-icon" aria-hidden="true"><i class="fa-solid ${thread.type === 'group' ? 'fa-users' : 'fa-comment-dots'}"></i></span>
-    <span class="message-popup-copy">
-      <strong>${escapeDashboardHtml(title)}</strong>
-      <span>${escapeDashboardHtml(preview)}</span>
-    </span>`;
-  popup.addEventListener('click', () => {
-    popup.remove();
+    <button type="button" class="message-popup-open" aria-label="New message from ${escapeDashboardHtml(title)}: ${escapeDashboardHtml(preview)}. Open conversation">
+      <span class="message-popup-icon" aria-hidden="true"><i class="fa-solid ${thread.type === 'group' ? 'fa-users' : 'fa-comment-dots'}"></i></span>
+      <span class="message-popup-copy">
+        <span class="message-popup-meta">New message · just now</span>
+        <strong>${escapeDashboardHtml(title)}</strong>
+        <span class="message-popup-preview">${escapeDashboardHtml(preview)}</span>
+      </span>
+    </button>
+    <button type="button" class="message-popup-close" aria-label="Dismiss notification"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>`;
+  popup.querySelector('.message-popup-open').addEventListener('click', () => {
+    dismissMessagePopup(popup);
     openMessageFromPopup(thread);
   });
-  stack.appendChild(popup);
-  window.setTimeout(() => popup.remove(), 8000);
+  popup.querySelector('.message-popup-close').addEventListener('click', () => dismissMessagePopup(popup));
+
+  // Auto-dismiss, but hold while the pointer is over the notice.
+  let timer = window.setTimeout(() => dismissMessagePopup(popup), MESSAGE_POPUP_DURATION_MS);
+  popup.addEventListener('mouseenter', () => window.clearTimeout(timer));
+  popup.addEventListener('mouseleave', () => {
+    timer = window.setTimeout(() => dismissMessagePopup(popup), 3000);
+  });
+
+  stack.prepend(popup);
+  const visible = stack.querySelectorAll('.message-popup:not(.is-leaving)');
+  for (let i = MESSAGE_POPUP_MAX_VISIBLE; i < visible.length; i += 1) dismissMessagePopup(visible[i]);
 
   // Background tab: also use the browser's own notification if the user allowed it.
   if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
@@ -749,6 +807,7 @@ async function checkForNewMessages() {
   } catch {
     return;
   }
+  updateMessagesUnreadBadge(threads);
   threads.forEach((thread) => {
     const message = thread.lastMessage;
     if (!message || !message._id) return;
@@ -764,6 +823,23 @@ async function checkForNewMessages() {
     showMessagePopup(thread, sender);
   });
   messagePopupPrimed = true;
+}
+
+// Unread-message count shown on the sidebar "Messages" item.
+function updateMessagesUnreadBadge(threads) {
+  const navItem = document.querySelector('.nav-item[data-panel="messages"]');
+  if (!navItem) return;
+  let badge = navItem.querySelector('.nav-unread-count');
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.className = 'nav-unread-count';
+    badge.hidden = true;
+    navItem.appendChild(badge);
+  }
+  const total = threads.reduce((sum, thread) => sum + (Number(thread.unread) || 0), 0);
+  badge.textContent = total > 99 ? '99+' : String(total);
+  badge.hidden = total === 0;
+  badge.setAttribute('aria-label', `${total} unread message${total === 1 ? '' : 's'}`);
 }
 
 function initMessagePopups() {
@@ -2182,10 +2258,13 @@ async function showStudentDetailsModal(studentId, { canEdit = true, onStudentUpd
       const guardianContact = s.parent?.email || s.parent?.phone;
 
       return `
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; border-bottom:1px solid #E2E8F0; padding-bottom:12px;">
-          <div>
-            <h3 style="margin:0; font-size:22px; color:var(--ink);">${escapeStudentModalValue(s.name)}</h3>
-            <span class="badge ${escapeStudentModalValue(s.status)}">${escapeStudentModalValue(s.status)}</span>
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:16px; border-bottom:1px solid #E2E8F0; padding-bottom:12px;">
+          <div style="display:flex; align-items:center; gap:14px;">
+            ${studentPhotoHtml(s, { size: 'lg', editable: canEdit })}
+            <div>
+              <h3 style="margin:0; font-size:22px; color:var(--ink);">${escapeStudentModalValue(s.name)}</h3>
+              <span class="badge ${escapeStudentModalValue(s.status)}">${escapeStudentModalValue(s.status)}</span>
+            </div>
           </div>
           ${canEdit ? `
             <button class="btn btn-secondary btn-sm" id="modalEditStudentBtn">
@@ -2284,9 +2363,14 @@ async function showStudentDetailsModal(studentId, { canEdit = true, onStudentUpd
     };
 
     Modal.open(renderModalContent(student, authorizations), true);
+    hydrateProtectedImages(Modal.body);
 
     // Bind Edit Student button
     if (canEdit) {
+      bindStudentPhotoUploads(Modal.body, async (updatedStudent) => {
+        if (onStudentUpdated) await onStudentUpdated(updatedStudent);
+        await showStudentDetailsModal(studentId, { canEdit, onStudentUpdated, teacherMode });
+      });
       document.getElementById('modalEditStudentBtn')?.addEventListener('click', () => {
         openEditStudentModal(student, async (updatedStudent) => {
           if (onStudentUpdated) await onStudentUpdated(updatedStudent);
@@ -2349,6 +2433,22 @@ async function openEditStudentModal(student, onSaved, { teacherMode = false } = 
     <h3>${teacherMode ? 'Manage Student Enrollment' : 'Edit Student Information'}</h3>
     <div id="modalEditMsg" class="form-msg"></div>
     <form id="editStudentForm">
+      <section class="student-edit-photo" aria-label="Student photo">
+        <span class="student-edit-photo-avatar" id="esPhotoPreview">
+          ${studentPhotoPath(student)
+            ? `<img data-protected-src="${escapeStudentModalValue(studentPhotoPath(student))}" alt="Photo of ${escapeStudentModalValue(student.name || 'student')}" />`
+            : `<span aria-hidden="true">${escapeStudentModalValue(studentInitials(student.name))}</span>`}
+        </span>
+        <div class="student-edit-photo-copy">
+          <h4>Student photo</h4>
+          <p>JPG, PNG or WEBP, up to 5 MB.</p>
+          <input class="profile-file-input" id="esPhoto" type="file" accept="image/jpeg,image/png,image/webp" />
+          <label class="btn btn-secondary btn-sm profile-upload-button" for="esPhoto"><i class="fa-solid fa-arrow-up-from-bracket"></i> <span id="esPhotoButtonLabel">${student.photo ? 'Change image' : 'Choose image'}</span></label>
+          <small id="esPhotoStatus" class="student-edit-photo-status"></small>
+        </div>
+      </section>
+
+      <div class="student-edit-fields">
       <div class="field">
         <label for="esName">Full Name</label>
         <input type="text" id="esName" value="${escapeStudentModalValue(student.name || '')}" maxlength="120" required />
@@ -2426,10 +2526,37 @@ async function openEditStudentModal(student, onSaved, { teacherMode = false } = 
         <button type="button" class="btn btn-ghost" id="cancelEditStudentBtn">Cancel</button>
         <button type="submit" class="btn btn-primary">Save Changes</button>
       </div>
+      </div>
     </form>
-  `);
+  `, true);
+  Modal.body.classList.add('modal-student-edit');
 
   document.getElementById('cancelEditStudentBtn').addEventListener('click', () => Modal.close());
+  hydrateProtectedImages(Modal.body);
+
+  // The chosen photo is previewed here and uploaded together with "Save Changes".
+  const photoInput = document.getElementById('esPhoto');
+  const photoPreview = document.getElementById('esPhotoPreview');
+  const photoStatus = document.getElementById('esPhotoStatus');
+  let selectedPhoto = null;
+  photoInput.addEventListener('change', () => {
+    const file = photoInput.files && photoInput.files[0];
+    if (!file) return;
+    const problem = studentPhotoFileError(file);
+    if (problem) {
+      photoInput.value = '';
+      showMsg(document.getElementById('modalEditMsg'), problem);
+      return;
+    }
+    selectedPhoto = file;
+    const image = document.createElement('img');
+    image.alt = '';
+    image.src = URL.createObjectURL(file);
+    image.addEventListener('load', () => URL.revokeObjectURL(image.src), { once: true });
+    photoPreview.replaceChildren(image);
+    document.getElementById('esPhotoButtonLabel').textContent = 'Change image';
+    photoStatus.textContent = 'New photo selected. It will be saved when you click Save Changes.';
+  });
 
   document.getElementById('editStudentForm').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -2463,6 +2590,20 @@ async function openEditStudentModal(student, onSaved, { teacherMode = false } = 
       saveButton.disabled = false;
       saveButton.textContent = 'Save Changes';
       return;
+    }
+
+    if (selectedPhoto) {
+      try {
+        saveButton.textContent = 'Uploading photo...';
+        const formData = new FormData();
+        formData.append('photo', selectedPhoto);
+        ({ student: updatedStudent } = await api.putFormData(`/students/${student._id}/photo`, formData));
+      } catch (err) {
+        showMsg(msg, `Student details saved, but the photo could not be uploaded: ${err.message}`);
+        saveButton.disabled = false;
+        saveButton.textContent = 'Save Changes';
+        return;
+      }
     }
 
     try {
@@ -2696,13 +2837,83 @@ function studentInitials(name = '') {
   return String(name).trim().split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0].toUpperCase()).join('') || '?';
 }
 
+// ---------- Student photos ----------
+const STUDENT_PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+const STUDENT_PHOTO_MAX_BYTES = 5 * 1024 * 1024;
+
+// Returns an error message for an unacceptable photo file, or '' when it is fine.
+function studentPhotoFileError(file) {
+  if (!file) return 'Choose a photo of the student.';
+  if (!STUDENT_PHOTO_TYPES.includes(file.type)) return 'The student photo must be a JPG, PNG or WEBP image.';
+  if (file.size > STUDENT_PHOTO_MAX_BYTES) return 'The student photo must be 5 MB or smaller.';
+  return '';
+}
+
+// The version query makes a replaced photo bypass the in-page image cache.
+function studentPhotoPath(student) {
+  if (!student || !student.photo) return '';
+  return `/students/${encodeURIComponent(student._id)}/photo?v=${encodeURIComponent(new Date(student.photo.uploadedAt || 0).getTime())}`;
+}
+
+// Round photo (or initials when there is none). With `editable`, adds a "Change photo" control
+// that bindStudentPhotoUploads() wires up.
+function studentPhotoHtml(student, { size = 'md', editable = false } = {}) {
+  const path = studentPhotoPath(student);
+  const name = student?.name || 'Student';
+  const avatar = `
+    <span class="student-photo student-photo-${size}">
+      ${path
+        ? `<img data-protected-src="${escapeDashboardHtml(path)}" alt="Photo of ${escapeDashboardHtml(name)}" />`
+        : `<span class="student-photo-initials" aria-hidden="true">${escapeDashboardHtml(studentInitials(name))}</span>`}
+    </span>`;
+  if (!editable) return avatar;
+  return `
+    <span class="student-photo-editor">
+      ${avatar}
+      <label class="btn btn-ghost btn-sm student-photo-change">
+        <i class="fa-solid fa-camera" aria-hidden="true"></i> ${path ? 'Change photo' : 'Add photo'}
+        <input type="file" accept="image/jpeg,image/png,image/webp" data-student-photo-input="${escapeDashboardHtml(student._id)}" hidden />
+      </label>
+    </span>`;
+}
+
+function bindStudentPhotoUploads(root, onUploaded) {
+  root.querySelectorAll('[data-student-photo-input]').forEach((input) => {
+    input.addEventListener('change', async () => {
+      const file = input.files && input.files[0];
+      input.value = '';
+      if (!file) return;
+      const problem = studentPhotoFileError(file);
+      if (problem) {
+        showToast(problem, 'error');
+        return;
+      }
+      const label = input.closest('label');
+      label?.classList.add('is-loading');
+      try {
+        const formData = new FormData();
+        formData.append('photo', file);
+        const { student } = await api.putFormData(`/students/${encodeURIComponent(input.dataset.studentPhotoInput)}/photo`, formData);
+        showToast('Student photo saved.');
+        if (onUploaded) await onUploaded(student);
+      } catch (err) {
+        showToast(err.message || 'Could not save the student photo.', 'error');
+      } finally {
+        label?.classList.remove('is-loading');
+      }
+    });
+  });
+}
+
 // Prominent "whose record is this" header.
 function studentProgressHeaderHtml(student, entries = [], extraHtml = '') {
   const milestones = entries.filter((entry) => entry.entryType === 'weekly' || entry.entryType === 'monthly').length;
   const photos = entries.reduce((total, entry) => total + (entry.attachments || []).length, 0);
   return `
     <div class="student-progress-header">
-      <div class="student-avatar" aria-hidden="true">${escapeDashboardHtml(studentInitials(student.name))}</div>
+      ${studentPhotoPath(student)
+        ? `<div class="student-avatar has-photo"><img data-protected-src="${escapeDashboardHtml(studentPhotoPath(student))}" alt="Photo of ${escapeDashboardHtml(student.name)}" /></div>`
+        : `<div class="student-avatar" aria-hidden="true">${escapeDashboardHtml(studentInitials(student.name))}</div>`}
       <div class="student-progress-identity">
         <span class="student-progress-eyebrow">Academic progress record</span>
         <h2>${escapeDashboardHtml(student.name)}</h2>

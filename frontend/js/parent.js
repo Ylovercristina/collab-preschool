@@ -34,10 +34,16 @@ async function loadChildren() {
       activeTeacherId = myChildren[0].teacher ? (myChildren[0].teacher._id || myChildren[0].teacher) : null;
     }
   }
+  renderChildSwitcher();
+}
+
+function renderChildSwitcher() {
   const box = document.getElementById('childSwitcherBox');
+  const activeChild = myChildren.find((c) => c._id === activeChildId);
   if (myChildren.length > 1) {
     box.innerHTML = `
-      <div style="background:#F0FDF4; border:1px solid #BBF7D0; padding:12px 16px; border-radius:10px; display:inline-flex; align-items:center; gap:10px;">
+      <div style="background:#F0FDF4; border:1px solid #BBF7D0; padding:12px 16px; border-radius:10px; display:inline-flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        ${activeChild ? studentPhotoHtml(activeChild, { size: 'md', editable: true }) : ''}
         <i class="fa-solid fa-children" style="color:var(--primary); font-size:18px;"></i>
         <label style="font-weight:700; font-size:14px; color:var(--ink);">Select Child: </label>
         <select id="childSwitch" style="padding:6px 12px; border-radius:6px; border:1.5px solid #38A169; font-weight:700; background:#FFF;">
@@ -49,11 +55,13 @@ async function loadChildren() {
       activeChildId = e.target.value;
       const child = myChildren.find((c) => c._id === activeChildId);
       activeTeacherId = child && child.teacher ? (child.teacher._id || child.teacher) : null;
+      renderChildSwitcher();
       loadOverview(true);
     });
   } else if (myChildren.length === 1) {
     box.innerHTML = `
-      <div style="background:#F0FDF4; border:1px solid #BBF7D0; padding:10px 16px; border-radius:10px; display:inline-flex; align-items:center; gap:10px;">
+      <div style="background:#F0FDF4; border:1px solid #BBF7D0; padding:10px 16px; border-radius:10px; display:inline-flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        ${studentPhotoHtml(myChildren[0], { size: 'md', editable: true })}
         <i class="fa-solid fa-child" style="color:var(--primary); font-size:18px;"></i>
         <span style="font-weight:700; color:var(--ink);">${myChildren[0].name}</span>
         ${myChildren[0].className ? `<span class="badge approved">${myChildren[0].className}</span>` : ''}
@@ -62,6 +70,11 @@ async function loadChildren() {
   } else {
     box.innerHTML = `<div class="empty-state"><i class="fa-solid fa-user-clock"></i><p>No student profile is currently linked to your parent account. Please contact the school administration.</p></div>`;
   }
+  hydrateProtectedImages(box);
+  bindStudentPhotoUploads(box, (updatedStudent) => {
+    myChildren = myChildren.map((child) => (child._id === updatedStudent._id ? updatedStudent : child));
+    renderChildSwitcher();
+  });
 }
 
 async function loadOverview(skipChildLoad) {

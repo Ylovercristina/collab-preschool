@@ -84,6 +84,7 @@ function renderProgressDetails() {
   if (!entries.length) {
     container.innerHTML = `${studentProgressHeaderHtml(student, [])}
       <div class="empty-state"><i class="fa-solid fa-clipboard-question"></i><p>No academic progress records are available for this student yet.</p></div>`;
+    hydrateProtectedImages(container);
     return;
   }
 

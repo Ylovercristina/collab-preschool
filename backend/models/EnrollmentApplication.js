@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { photoSchema } = require('./Student');
 
 const enrollmentApplicationSchema = new mongoose.Schema(
   {
@@ -16,6 +17,7 @@ const enrollmentApplicationSchema = new mongoose.Schema(
     requestedClass: { type: String, trim: true, maxlength: 80, default: '' },
     guardianPhone: { type: String, trim: true, maxlength: 30, default: '' },
     notes: { type: String, trim: true, maxlength: 1000, default: '' },
+    studentPhoto: { type: photoSchema, default: undefined },
     status: { type: String, enum: ['pending', 'approving', 'approved', 'rejected'], default: 'pending' },
     student: { type: mongoose.Schema.Types.ObjectId, ref: 'Student' },
     reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },

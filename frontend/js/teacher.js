@@ -9,6 +9,7 @@ let teacherCalendar = null;
 let teacherAudiencePicker = null;
 let teacherAlertView = 'active';
 let knownTeacherNotificationIds = new Set();
+let unreadTeacherNotificationIds = [];
 let teacherNotificationsInitialized = false;
 
 function escapeTeacherHtml(value = '') {
@@ -118,6 +119,11 @@ async function loadTeacherNotifications({ silent = false } = {}) {
     }
     knownTeacherNotificationIds = new Set(notifications.map((notification) => notification._id));
     teacherNotificationsInitialized = true;
+    unreadTeacherNotificationIds = notifications
+      .filter((notification) => !notification.readAt)
+      .map((notification) => notification._id);
+    const markAllButton = document.getElementById('markAllTeacherNotificationsRead');
+    if (markAllButton) markAllButton.disabled = unreadTeacherNotificationIds.length === 0;
     if (!container) return;
     container.innerHTML = notifications.length ? `
       <div class="teacher-notification-list">
@@ -163,10 +169,35 @@ document.getElementById('refreshTeacherNotifications')?.addEventListener('click'
   loadTeacherNotifications();
 });
 
+document.getElementById('markAllTeacherNotificationsRead')?.addEventListener('click', async (event) => {
+  const button = event.currentTarget;
+  if (!unreadTeacherNotificationIds.length) return;
+  button.disabled = true;
+  try {
+    await Promise.all(unreadTeacherNotificationIds.map((id) => api.patch(`/notifications/${id}/read`, {})));
+    await loadTeacherNotifications({ silent: true });
+    showToast('All notifications marked as read.');
+  } catch (error) {
+    showToast(error.message || 'Could not mark all notifications as read.', 'error');
+    await loadTeacherNotifications({ silent: true });
+  }
+});
+
 // ---------- Students Panel (Edit Student Information & Pickup) ----------
 async function loadStudentsPanel() {
   await loadMyStudents();
-  const displayList = myStudents;
+  renderStudentsPanel();
+}
+
+function renderStudentsPanel() {
+  const filter = document.getElementById('teacherStudentsClassFilter');
+  const classes = [...new Set(myStudents.map((student) => student.className || 'Unassigned'))].sort();
+  const selectedClass = classes.includes(filter.value) ? filter.value : 'all';
+  filter.innerHTML = `<option value="all">All classes</option>${classes.map((className) => `<option value="${escapeTeacherHtml(className)}">${escapeTeacherHtml(className)}</option>`).join('')}`;
+  filter.value = selectedClass;
+  const displayList = selectedClass === 'all'
+    ? myStudents
+    : myStudents.filter((student) => (student.className || 'Unassigned') === selectedClass);
 
   const tbody = document.getElementById('teacherStudentsTbody');
   if (!displayList.length) {
@@ -178,7 +209,7 @@ async function loadStudentsPanel() {
     const bdate = s.birthdate ? new Date(s.birthdate).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—';
     return `
       <tr>
-        <td><strong>${escapeTeacherHtml(s.name)}</strong></td>
+        <td><span class="student-name-cell">${studentPhotoHtml(s, { size: 'sm' })}<strong>${escapeTeacherHtml(s.name)}</strong></span></td>
         <td><span class="badge" style="background:#F1F5F9; color:var(--ink);">${escapeTeacherHtml(s.className || 'Unassigned')}</span></td>
         <td>${escapeTeacherHtml(s.guardianName || s.parent?.name || 'Unassigned')}</td>
         <td>${bdate}</td>
@@ -196,6 +227,7 @@ async function loadStudentsPanel() {
       </tr>
     `;
   }).join('');
+  hydrateProtectedImages(tbody);
 
   // Bind Edit buttons
   tbody.querySelectorAll('[data-edit-student]').forEach((btn) => {
@@ -216,6 +248,8 @@ async function loadStudentsPanel() {
     });
   });
 }
+
+document.getElementById('teacherStudentsClassFilter').addEventListener('change', renderStudentsPanel);
 
 async function loadFeeStatuses() {
   const { fees } = await api.get('/fees/teacher');
@@ -1227,6 +1261,7 @@ async function renderProgressList() {
     if (document.getElementById('progStudentSelect').value !== sid) return;
     progressEntriesForStudent = progress;
     header.innerHTML = studentProgressHeaderHtml(student || { name: 'Student' }, progress);
+    hydrateProtectedImages(header);
     list.innerHTML = progress.length
       ? `<h3 class="progress-list-heading">Records for ${escapeTeacherHtml(student?.name || 'this student')}</h3>${progress.map((entry) => progressEntryCardHtml(entry, {
         actionsHtml: relatedUserId(entry.teacher) === String(user.id)

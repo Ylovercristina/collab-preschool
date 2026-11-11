@@ -69,8 +69,7 @@ function beginIntegrationVerification(purpose, onVerified, messageTarget) {
   }).catch((err) => {
     const action = pendingIntegrationAction;
     pendingIntegrationAction = null;
-    if (action && action.messageTarget) showMsg(action.messageTarget, err.message);
-    else showToast(err.message, 'error');
+    showErrorPopup(err.message);
   });
 }
 
@@ -161,7 +160,9 @@ function initIntegrationPinDialog() {
       });
       await completeIntegrationVerification(action, accessToken, dialog);
     } catch (err) {
-      showMsg(message, err.message);
+      message.textContent = '';
+      message.className = 'form-msg';
+      showErrorPopup(err.message);
       input.select();
     } finally {
       verifying = false;
@@ -189,14 +190,13 @@ async function loadAuthSecuritySettings() {
     const settings = response.settings || {};
     googleToggle.checked = settings.googleAuthEnabled === true;
     captchaToggle.checked = settings.captchaEnabled === true;
+    message.textContent = '';
+    message.className = 'form-msg';
     if (settings.captchaEnabled && !settings.captchaConfigured) {
-      showMsg(message, 'CAPTCHA is enabled, but its configuration is unavailable.');
-    } else {
-      message.textContent = '';
-      message.className = 'form-msg';
+      showErrorPopup('CAPTCHA is enabled, but its configuration is unavailable.');
     }
   } catch (err) {
-    showMsg(message, err.message);
+    showErrorPopup(err.message);
     saveButton.disabled = true;
     return;
   }
@@ -204,6 +204,7 @@ async function loadAuthSecuritySettings() {
   if (authSecuritySettingsBound) return;
   authSecuritySettingsBound = true;
   bindCredentialManagers();
+  bindRestoreIntegrationDefaults();
   saveButton.addEventListener('click', async () => {
     if (!window.confirm('Save these Google authentication settings?')) return;
     setButtonLoading(saveButton, true, 'Saving');
@@ -219,9 +220,53 @@ async function loadAuthSecuritySettings() {
       showMsg(message, 'Authentication security settings saved.', 'success');
       showToast('Authentication security settings saved.');
     } catch (err) {
-      showMsg(message, err.message);
+      showErrorPopup(err.message);
     } finally {
       setButtonLoading(saveButton, false);
+    }
+  });
+}
+
+function bindRestoreIntegrationDefaults() {
+  const openButton = document.getElementById('openRestoreIntegrationDefaults');
+  const dialog = document.getElementById('restoreIntegrationDefaultsDialog');
+  const form = document.getElementById('restoreIntegrationDefaultsForm');
+  const cancelButton = document.getElementById('cancelRestoreIntegrationDefaults');
+  const confirmButton = document.getElementById('confirmRestoreIntegrationDefaults');
+  const googleBox = document.getElementById('restoreGoogleDefault');
+  const recaptchaBox = document.getElementById('restoreRecaptchaDefault');
+  const message = document.getElementById('restoreIntegrationDefaultsMessage');
+  if (!openButton || !dialog || !form || !cancelButton || !confirmButton || !googleBox || !recaptchaBox || !message) return;
+
+  openButton.addEventListener('click', () => {
+    form.reset();
+    message.textContent = '';
+    message.className = 'form-msg';
+    dialog.showModal();
+  });
+  cancelButton.addEventListener('click', () => dialog.close());
+  dialog.addEventListener('click', (event) => {
+    if (event.target === dialog) dialog.close();
+  });
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const google = googleBox.checked;
+    const recaptcha = recaptchaBox.checked;
+    if (!google && !recaptcha) {
+      showErrorPopup('Choose at least one configuration to restore.');
+      return;
+    }
+    const names = [google && 'Google Sign-In', recaptcha && 'reCAPTCHA'].filter(Boolean).join(' and ');
+    if (!window.confirm(`Restore the default ${names} configuration? Your custom values will be removed.`)) return;
+    setButtonLoading(confirmButton, true, 'Restoring');
+    try {
+      await api.post('/auth/integrations/restore-defaults', { google, recaptcha }, integrationAccessOptions());
+      dialog.close();
+      showToast(`Default ${names} configuration restored.`);
+    } catch (err) {
+      showErrorPopup(err.message);
+    } finally {
+      setButtonLoading(confirmButton, false);
     }
   });
 }
@@ -295,7 +340,7 @@ function bindCredentialManagers() {
         const { config: current } = await api.get(config.route, integrationAccessOptions());
         renderStatus(current);
       } catch (err) {
-        showMsg(message, err.message);
+        showErrorPopup(err.message);
       }
     });
     dialog.addEventListener('close', clearFields);
@@ -318,7 +363,9 @@ function bindCredentialManagers() {
         clearFields();
         renderStatus(saved);
       } catch (err) {
-        showMsg(message, err.message);
+        message.textContent = '';
+        message.className = 'form-msg';
+        showErrorPopup(err.message);
       } finally {
         setButtonLoading(saveButton, false);
       }

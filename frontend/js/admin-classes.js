@@ -80,9 +80,13 @@ function renderClasses() {
 function openClassForm(classroom = {}) {
   const isEdit = Boolean(classroom._id);
   const currentTeacher = classroom.teacher ? String(classroom.teacher._id || classroom.teacher) : '';
-  const leading = new Map(managedClasses
+  const leading = new Map();
+  managedClasses
     .filter((item) => item.status === 'active' && item.teacher && item._id !== classroom._id)
-    .map((item) => [String(item.teacher._id), item.name]));
+    .forEach((item) => {
+      const key = String(item.teacher._id);
+      leading.set(key, [...(leading.get(key) || []), item.name]);
+    });
   Modal.open(`
     <h3>${isEdit ? `Edit ${escapeClassHtml(classroom.name)}` : 'New class'}</h3>
     <form id="classForm" novalidate>
@@ -92,10 +96,10 @@ function openClassForm(classroom = {}) {
           <option value="">No teacher yet</option>
           ${classTeachers.map((teacher) => {
     const busy = leading.get(String(teacher._id));
-    return `<option value="${escapeClassHtml(teacher._id)}" ${String(teacher._id) === currentTeacher ? 'selected' : ''} ${busy ? 'disabled' : ''}>${escapeClassHtml(teacher.name)}${busy ? ` (leads ${escapeClassHtml(busy)})` : ''}</option>`;
+    return `<option value="${escapeClassHtml(teacher._id)}" ${String(teacher._id) === currentTeacher ? 'selected' : ''}>${escapeClassHtml(teacher.name)}${busy ? ` (also leads ${escapeClassHtml(busy.join(', '))})` : ''}</option>`;
   }).join('')}
         </select>
-        <div class="field-hint">Every student in this class is assigned to this teacher. A teacher can lead one active class.</div>
+        <div class="field-hint">Every student in this class is assigned to this teacher. A teacher can lead more than one class.</div>
       </div>
       <div class="field"><label for="classDescriptionInput">Description</label><textarea id="classDescriptionInput" rows="2" maxlength="500" placeholder="Age group, schedule or room (optional)">${escapeClassHtml(classroom.description || '')}</textarea></div>
       ${isEdit ? '<div class="field-hint">Renaming a class also renames it on every student and teacher record.</div>' : ''}

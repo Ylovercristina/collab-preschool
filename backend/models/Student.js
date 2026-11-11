@@ -12,8 +12,19 @@ const documentSchema = new mongoose.Schema(
   { _id: true }
 );
 
+const photoSchema = new mongoose.Schema(
+  {
+    filename: { type: String, required: true },
+    mimetype: { type: String, required: true },
+    size: { type: Number, required: true },
+    uploadedAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
 const studentSchema = new mongoose.Schema(
   {
+    photo: { type: photoSchema, default: undefined },
     studentId: { type: String, unique: true, sparse: true, default: () => `STU-${crypto.randomBytes(4).toString('hex').toUpperCase()}` },
     name: { type: String, required: true, trim: true },
     birthdate: { type: Date },
@@ -34,3 +45,4 @@ const studentSchema = new mongoose.Schema(
 studentSchema.index({ enrollmentApplication: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model('Student', studentSchema);
+module.exports.photoSchema = photoSchema;

@@ -14,6 +14,7 @@ router.get('/google-clients', protect, allowRoles('admin'), requireIntegrationOt
 router.put('/google-clients', protect, allowRoles('admin'), requireIntegrationOtp('access'), ctrl.saveGoogleOAuthClient);
 router.get('/recaptcha-clients', protect, allowRoles('admin'), requireIntegrationOtp('access'), ctrl.getRecaptchaConfig);
 router.put('/recaptcha-clients', protect, allowRoles('admin'), requireIntegrationOtp('access'), ctrl.saveRecaptchaClient);
+router.post('/integrations/restore-defaults', protect, allowRoles('admin'), requireIntegrationOtp('access'), ctrl.restoreIntegrationDefaults);
 router.get('/recaptcha-config', ctrl.recaptchaConfig);
 router.post('/google/start', ctrl.googleStartWithCaptcha);
 router.get('/google', ctrl.googleStart);

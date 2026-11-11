@@ -1,3 +1,4 @@
+const Classroom = require('../models/Classroom');
 const Event = require('../models/Event');
 const EmailLog = require('../models/EmailLog');
 const Notification = require('../models/Notification');
@@ -115,7 +116,12 @@ async function getEventRecipients(event) {
         role: 'teacher',
         assignedClass: { $in: targetClasses },
       });
-      teacherIds = [...new Set([...assignedTeacherIds, ...classTeachers].map(String))];
+      const classroomTeachers = await Classroom.distinct('teacher', {
+        teacher: { $ne: null },
+        name: { $in: targetClasses },
+        status: 'active',
+      });
+      teacherIds = [...new Set([...assignedTeacherIds, ...classTeachers, ...classroomTeachers].map(String))];
     }
     const teachers = await User.find({
       role: 'teacher',
@@ -201,6 +207,7 @@ exports.listEvents = async (req, res) => {
       teacher: req.user._id,
       status: 'active',
     });
+    teacherClasses.push(...await Classroom.distinct('name', { teacher: req.user._id, status: 'active' }));
     if (req.user.assignedClass) teacherClasses.push(req.user.assignedClass);
     filter.$and = [
       {

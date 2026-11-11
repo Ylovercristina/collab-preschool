@@ -2,6 +2,7 @@ const Student = require('../models/Student');
 const logActivity = require('../utils/logActivity');
 const { applyClassToStudentData } = require('../utils/classAssignment');
 const mongoose = require('mongoose');
+const { removeStudentPhotoFile, photoRecord, sendStudentPhoto } = require('../middleware/studentPhotoUpload');
 
 // Helper: build a scope filter based on who's asking
 function scopeFilter(user) {
@@ -86,6 +87,47 @@ exports.updateStudent = async (req, res) => {
   } catch (err) {
     const statusCode = err.name === 'ValidationError' || err.name === 'CastError' ? 400 : 500;
     res.status(statusCode).json({ message: statusCode === 400 ? err.message : 'Could not update student.', error: err.message });
+  }
+};
+
+// GET /api/students/:id/photo  (admin, assigned teacher, or the student's parent)
+exports.getStudentPhoto = async (req, res) => {
+  try {
+    if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(404).json({ message: 'Photo not found.' });
+    const student = await Student.findOne({ _id: req.params.id, ...scopeFilter(req.user) }).select('photo');
+    if (!student || !student.photo) return res.status(404).json({ message: 'Photo not found.' });
+    sendStudentPhoto(res, student.photo);
+  } catch (err) {
+    console.error('[students] Photo load failed:', err.message);
+    res.status(500).json({ message: 'Could not load photo.' });
+  }
+};
+
+// PUT /api/students/:id/photo  (admin, assigned teacher, or the student's parent)
+exports.updateStudentPhoto = async (req, res) => {
+  if (!req.file) return res.status(400).json({ message: 'Choose a photo of the student to upload.' });
+  try {
+    if (!mongoose.isObjectIdOrHexString(req.params.id)) {
+      await removeStudentPhotoFile(req.file.filename);
+      return res.status(404).json({ message: 'Student not found.' });
+    }
+    const student = await Student.findOne({ _id: req.params.id, ...scopeFilter(req.user) });
+    if (!student) {
+      await removeStudentPhotoFile(req.file.filename);
+      return res.status(404).json({ message: 'Student not found.' });
+    }
+    const previous = student.photo && student.photo.filename;
+    student.photo = photoRecord(req.file);
+    await student.save();
+    if (previous) await removeStudentPhotoFile(previous);
+    await student.populate('parent', 'name email phone status emailVerified emailVerifiedBy');
+    await student.populate('teacher', 'name email');
+    await logActivity(req.user._id, 'student-photo-updated', student.name);
+    res.json({ student });
+  } catch (err) {
+    await removeStudentPhotoFile(req.file.filename);
+    console.error('[students] Photo update failed:', err.message);
+    res.status(500).json({ message: 'Could not save the student photo.' });
   }
 };
 

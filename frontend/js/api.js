@@ -137,6 +137,47 @@ function el(html) {
   t.innerHTML = html.trim();
   return t.content.firstElementChild;
 }
+// Shows an error as a pop-up. Uses a modal <dialog> so it appears above any open dialog.
+// Optional `action` adds a second button, e.g. { label: 'Go to Sign In', href: 'login.html' }.
+// `onClose` runs after the pop-up is dismissed.
+function showErrorPopup(text, { title = 'Something went wrong', action = null, onClose = null } = {}) {
+  let popup = document.getElementById('errorPopupDialog');
+  if (!popup) {
+    popup = document.createElement('dialog');
+    popup.id = 'errorPopupDialog';
+    popup.className = 'credential-manager integration-otp-dialog error-popup';
+    popup.setAttribute('aria-labelledby', 'errorPopupTitle');
+    popup.innerHTML = `
+      <div class="credential-manager-header"><h2 id="errorPopupTitle"><i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i> <span id="errorPopupTitleText"></span></h2></div>
+      <p id="errorPopupText" class="error-popup-text"></p>
+      <div class="credential-manager-actions">
+        <a class="btn btn-secondary" id="errorPopupAction" hidden></a>
+        <button type="button" class="btn btn-primary" id="closeErrorPopup">OK</button>
+      </div>`;
+    document.body.appendChild(popup);
+    popup.querySelector('#closeErrorPopup').addEventListener('click', () => popup.close());
+    popup.addEventListener('click', (event) => {
+      if (event.target === popup) popup.close();
+    });
+    popup.addEventListener('close', () => {
+      const callback = popup.onCloseCallback;
+      popup.onCloseCallback = null;
+      if (typeof callback === 'function') callback();
+    });
+  }
+  popup.querySelector('#errorPopupTitleText').textContent = title;
+  popup.querySelector('#errorPopupText').textContent = text;
+  const actionLink = popup.querySelector('#errorPopupAction');
+  actionLink.hidden = !action;
+  if (action) {
+    actionLink.textContent = action.label;
+    actionLink.href = action.href;
+  }
+  popup.onCloseCallback = onClose;
+  if (!popup.open) popup.showModal();
+  popup.querySelector('#closeErrorPopup').focus();
+}
+
 function showMsg(node, text, type = 'error') {
   node.textContent = text;
   node.className = `form-msg ${type}`;

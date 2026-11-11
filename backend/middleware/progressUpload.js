@@ -77,4 +77,4 @@ function uploadProgressPhotos(req, res, next) {
   });
 }
 
-module.exports = { uploadProgressPhotos, removeUploadedFiles, progressPhotoDirectory, MAX_PHOTOS_PER_ENTRY };
+module.exports = { uploadProgressPhotos, removeUploadedFiles, progressPhotoDirectory, MAX_PHOTOS_PER_ENTRY, hasImageSignature };

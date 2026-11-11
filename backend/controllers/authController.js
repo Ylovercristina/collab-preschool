@@ -1068,6 +1068,41 @@ exports.saveGoogleOAuthClient = async (req, res) => {
   }
 };
 
+// POST /api/auth/integrations/restore-defaults (admin only)
+// Removes the custom Google and/or reCAPTCHA configuration so the .env defaults are used again.
+exports.restoreIntegrationDefaults = async (req, res) => {
+  const body = req.body || {};
+  const restoreGoogle = body.google === true;
+  const restoreRecaptcha = body.recaptcha === true;
+  if (!restoreGoogle && !restoreRecaptcha) {
+    return res.status(400).json({ message: 'Choose at least one configuration to restore.' });
+  }
+  try {
+    const update = {};
+    if (restoreGoogle) {
+      await GoogleOAuthClient.deleteMany({});
+      update.activeGoogleOAuthClientId = googleOAuthClients.DEFAULT_CLIENT_ID;
+      update.customGoogleClientEnabled = false;
+    }
+    if (restoreRecaptcha) {
+      await RecaptchaClient.deleteMany({});
+      update.activeRecaptchaClientId = recaptchaClients.DEFAULT_CLIENT_ID;
+    }
+    const settings = await AuthSettings.findOneAndUpdate(
+      { key: 'global' },
+      { $set: update },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+    res.set('Cache-Control', 'no-store').json({
+      google: publicIntegrationStatus(await googleOAuthClients.managementConfig(settings)),
+      recaptcha: publicIntegrationStatus(await recaptchaClients.managementConfig(settings)),
+    });
+  } catch (err) {
+    console.error('[auth] Could not restore default integrations:', err.message);
+    res.status(503).json({ message: 'Could not restore the default configuration.' });
+  }
+};
+
 // PATCH /api/auth/settings (admin only)
 exports.updateAuthSettings = async (req, res) => {
   const body = req.body || {};

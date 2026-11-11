@@ -43,7 +43,7 @@
         <div class="settings-submenu" aria-label="Settings sections">
           <button class="settings-subnav active" type="button" data-settings-section="profile"><i class="fa-solid fa-user"></i> Profile</button>
           <button class="settings-subnav" type="button" data-settings-section="integrations"><i class="fa-solid fa-plug"></i> Integrations</button>
-          <button class="settings-subnav" type="button" data-settings-section="calendar"><i class="fa-regular fa-calendar"></i> Google Calendar</button>
+          <button class="settings-subnav" type="button" data-settings-section="calendar" hidden><i class="fa-regular fa-calendar"></i> Google Calendar</button>
         </div>
       </div>
     </div>
@@ -485,7 +485,7 @@
           </button>
         </div>
         <p class="auth-security-notice"><i class="fa-solid fa-shield-halved"></i> These settings affect Google authentication only. Password login is unchanged.</p>
-        <div class="profile-form-footer"><button class="btn btn-primary" type="button" id="saveAuthSecuritySettings"><i class="fa-solid fa-floppy-disk"></i> Save security settings</button></div>
+        <div class="profile-form-footer"><button class="btn btn-secondary" type="button" id="openRestoreIntegrationDefaults" aria-haspopup="dialog" style="margin-right:auto;"><i class="fa-solid fa-rotate-left"></i> Restore defaults</button><button class="btn btn-primary" type="button" id="saveAuthSecuritySettings"><i class="fa-solid fa-floppy-disk"></i> Save security settings</button></div>
         </div>
       </div>
       <dialog id="googleOAuthClientDialog" class="credential-manager" aria-labelledby="googleOAuthDialogTitle">
@@ -517,7 +517,20 @@
         </form>
         <p id="recaptchaClientMessage" class="form-msg" aria-live="polite"></p>
       </dialog>
-      <dialog id="integrationOtpDialog" class="credential-manager integration-otp-dialog" aria-labelledby="integrationOtpTitle">
+      <dialog id="restoreIntegrationDefaultsDialog" class="credential-manager integration-otp-dialog" aria-labelledby="restoreIntegrationDefaultsTitle">
+        <div class="credential-manager-header"><h2 id="restoreIntegrationDefaultsTitle">Restore defaults</h2></div>
+        <form id="restoreIntegrationDefaultsForm" class="credential-manager-form">
+          <p>Choose which configurations to restore. The custom values you saved will be removed and the default configuration will be used again.</p>
+          <label class="restore-default-option"><input type="checkbox" id="restoreGoogleDefault" /> Google Sign-In (Client ID and Client Secret)</label>
+          <label class="restore-default-option"><input type="checkbox" id="restoreRecaptchaDefault" /> reCAPTCHA (site key and secret key)</label>
+          <p id="restoreIntegrationDefaultsMessage" class="form-msg" aria-live="polite"></p>
+          <div class="credential-manager-actions">
+            <button type="button" class="btn btn-secondary" id="cancelRestoreIntegrationDefaults">Cancel</button>
+            <button type="submit" class="btn btn-primary" id="confirmRestoreIntegrationDefaults">Restore</button>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="integrationOtpDialog"class="credential-manager integration-otp-dialog" aria-labelledby="integrationOtpTitle">
         <div class="credential-manager-header">
           <h2 id="integrationOtpTitle">Email verification</h2>
         </div>

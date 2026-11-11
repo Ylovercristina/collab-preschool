@@ -1,3 +1,4 @@
+const Classroom = require('../models/Classroom');
 const Student = require('../models/Student');
 
 async function isEventVisibleToUser(event, user) {
@@ -17,6 +18,7 @@ async function isEventVisibleToUser(event, user) {
     ? await Student.distinct('className', { parent: user._id, status: 'active' })
     : [
       ...await Student.distinct('className', { teacher: user._id, status: 'active' }),
+      ...await Classroom.distinct('name', { teacher: user._id, status: 'active' }),
       ...(user.assignedClass ? [user.assignedClass] : []),
     ];
   return (event.targetClasses || []).some((className) => classNames.includes(className));

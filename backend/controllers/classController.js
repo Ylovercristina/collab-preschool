@@ -11,14 +11,24 @@ async function populated(id) {
   return Classroom.findById(id).populate('teacher', 'name email status');
 }
 
-async function validateTeacher(teacherId, classId) {
+// A teacher may lead several active classes.
+async function validateTeacher(teacherId) {
   if (!teacherId) return { teacher: null };
   if (!mongoose.isObjectIdOrHexString(teacherId)) return { error: 'Select a valid teacher.' };
   const teacher = await User.findOne({ _id: teacherId, role: 'teacher', status: { $ne: 'archived' } });
   if (!teacher) return { error: 'Select an active teacher account.' };
-  const otherClass = await Classroom.findOne({ teacher: teacher._id, status: 'active', _id: { $ne: classId } });
-  if (otherClass) return { error: `${teacher.name} already leads ${otherClass.name}. Remove them from that class first.` };
   return { teacher };
+}
+
+// User.assignedClass holds a single class name for display; keep it pointing at a class the teacher still leads.
+async function syncTeacherAssignedClass(teacherId) {
+  if (!teacherId) return;
+  const teacher = await User.findById(teacherId).select('assignedClass');
+  if (!teacher) return;
+  const led = (await Classroom.find({ teacher: teacherId, status: 'active' }).select('name').sort({ name: 1 })).map((item) => item.name);
+  const current = String(teacher.assignedClass || '').toLowerCase();
+  if (led.some((name) => name.toLowerCase() === current)) return;
+  await User.updateOne({ _id: teacherId }, { $set: { assignedClass: led[0] || '' } });
 }
 
 function readName(value) {
@@ -33,7 +43,7 @@ function readName(value) {
 async function applyTeacherToClass(className, teacherId) {
   const update = teacherId ? { $set: { teacher: teacherId } } : { $unset: { teacher: '' } };
   await Student.updateMany({ className: exactName(className) }, update);
-  if (teacherId) await User.updateOne({ _id: teacherId }, { $set: { assignedClass: className } });
+  if (teacherId) await syncTeacherAssignedClass(teacherId);
 }
 
 // GET /api/classes
@@ -70,7 +80,7 @@ exports.createClass = async (req, res) => {
     const { name, error } = readName(req.body.name);
     if (error) return res.status(400).json({ message: error });
     if (await Classroom.exists({ nameKey: name.toLowerCase() })) return res.status(409).json({ message: `A class named "${name}" already exists.` });
-    const teacherCheck = await validateTeacher(req.body.teacher || null, null);
+    const teacherCheck = await validateTeacher(req.body.teacher || null);
     if (teacherCheck.error) return res.status(400).json({ message: teacherCheck.error });
     const classroom = await Classroom.create({
       name,
@@ -110,7 +120,7 @@ exports.updateClass = async (req, res) => {
     }
     let nextTeacher = previousTeacher;
     if (req.body.teacher !== undefined) {
-      const teacherCheck = await validateTeacher(req.body.teacher || null, classroom._id);
+      const teacherCheck = await validateTeacher(req.body.teacher || null);
       if (teacherCheck.error) return res.status(400).json({ message: teacherCheck.error });
       nextTeacher = teacherCheck.teacher ? String(teacherCheck.teacher._id) : '';
     }
@@ -125,8 +135,8 @@ exports.updateClass = async (req, res) => {
       await User.updateMany({ assignedClass: exactName(previousName) }, { $set: { assignedClass: nextName } });
     }
     if (nextTeacher !== previousTeacher) {
-      if (previousTeacher) await User.updateOne({ _id: previousTeacher, assignedClass: exactName(nextName) }, { $set: { assignedClass: '' } });
       await applyTeacherToClass(nextName, nextTeacher || null);
+      await syncTeacherAssignedClass(previousTeacher);
     }
     await logActivity(req.user._id, 'class-updated', nextName);
     res.json({ class: await populated(classroom._id) });
@@ -149,7 +159,7 @@ exports.archiveClass = async (req, res) => {
     }
     classroom.status = 'archived';
     await classroom.save();
-    if (classroom.teacher) await User.updateOne({ _id: classroom.teacher, assignedClass: exactName(classroom.name) }, { $set: { assignedClass: '' } });
+    await syncTeacherAssignedClass(classroom.teacher);
     await logActivity(req.user._id, 'class-archived', classroom.name);
     res.json({ class: await populated(classroom._id) });
   } catch (err) {

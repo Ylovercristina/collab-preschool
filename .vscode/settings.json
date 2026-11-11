@@ -1,3 +1,13 @@
 {
-    "envWatcher.enabled": true
+    "envWatcher.enabled": true,
+    "python.terminal.useEnvFile": true,
+    "liveServer.settings.ignoreFiles": [
+        ".vscode/**",
+        "**/*.scss",
+        "**/*.sass",
+        "**/*.ts",
+        "backend/**",
+        "**/node_modules/**",
+        "*.csv"
+    ]
 }

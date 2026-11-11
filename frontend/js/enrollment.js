@@ -189,7 +189,9 @@ async function loadAdminEnrollment() {
         <thead><tr><th>Student</th><th>Parent / Guardian</th><th>Submitted by</th><th>Term</th><th>Class requested</th><th>Submitted</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>${applications.map((application) => `
           <tr>
-            <td><strong>${enrollmentEscape(application.studentName)}</strong><div style="font-size:12px;color:var(--ink-muted);">Born ${fmtDate(application.birthdate)}</div></td>
+            <td><span class="student-name-cell">${application.studentPhoto
+              ? `<button type="button" class="student-photo student-photo-sm student-photo-button" data-photo-open aria-label="View photo of ${enrollmentEscape(application.studentName)}"><img data-protected-src="/enrollment/applications/${enrollmentEscape(application._id)}/photo" alt="Photo of ${enrollmentEscape(application.studentName)}" /></button>`
+              : `<span class="student-photo student-photo-sm"><span class="student-photo-initials" aria-hidden="true">${enrollmentEscape(studentInitials(application.studentName))}</span></span>`}<span><strong>${enrollmentEscape(application.studentName)}</strong><div style="font-size:12px;color:var(--ink-muted);">Born ${fmtDate(application.birthdate)}</div></span></span></td>
             <td>${enrollmentEscape(application.guardianName || application.parent?.name || '—')}<div style="font-size:12px;color:var(--ink-muted);">${enrollmentEscape(application.guardianPhone || application.parent?.phone || '')}</div></td>
             <td>${enrollmentEscape(application.applicant?.name || application.parent?.name || '—')}<div style="font-size:12px;color:var(--ink-muted);">${enrollmentEscape(application.submittedRole || 'parent')}</div></td>
             <td>${enrollmentEscape(application.term)} ${enrollmentEscape(application.schoolYear)}</td>
@@ -202,6 +204,7 @@ async function loadAdminEnrollment() {
         `).join('')}</tbody>
       </table>
     ` : '<div class="empty-state"><i class="fa-solid fa-file-circle-question"></i><p>No enrollment applications have been submitted.</p></div>';
+    hydrateProtectedImages(container);
   } catch (err) {
     showMsg(message, err.message);
   }
@@ -389,7 +392,18 @@ function ensureEnrollmentForm(role) {
           <button type="button" class="btn btn-ghost btn-sm" id="${prefix}EnrollmentClose" aria-label="Close enrollment application"><i class="fa-solid fa-xmark"></i> Close</button>
         </div>
         <div id="${prefix}EnrollmentMessage" class="form-msg" aria-live="polite"></div>
-        <form id="${prefix}EnrollmentForm" class="enrollment-form">
+        <form id="${prefix}EnrollmentForm" class="enrollment-form" novalidate>
+          <div class="field enrollment-photo-field">
+            <label for="applicationStudentPhoto">Student photo <span class="required-mark" aria-hidden="true">*</span></label>
+            <div class="enrollment-photo-picker">
+              <span class="enrollment-photo-preview" id="applicationStudentPhotoPreview" aria-hidden="true"><i class="fa-solid fa-child"></i></span>
+              <div>
+                <label class="btn btn-secondary btn-sm" for="applicationStudentPhoto"><i class="fa-solid fa-camera" aria-hidden="true"></i> <span id="applicationStudentPhotoLabel">Choose photo</span></label>
+                <input id="applicationStudentPhoto" type="file" accept="image/jpeg,image/png,image/webp" required hidden />
+                <small>A clear, recent photo of the student&#39;s face. JPG, PNG or WEBP, up to 5 MB. Required.</small>
+              </div>
+            </div>
+          </div>
           <div class="grid-2">
             <div class="field"><label for="applicationStudentName">Student full name</label><input id="applicationStudentName" maxlength="120" autocomplete="name" required /></div>
             <div class="field"><label for="applicationBirthdate">Birthdate</label><input id="applicationBirthdate" type="date" required /></div>
@@ -424,23 +438,67 @@ function ensureEnrollmentForm(role) {
     if (event.key === 'Escape' && !applicationPanel.hidden) setFormVisible(false);
   });
 
+  const photoInput = document.getElementById('applicationStudentPhoto');
+  const photoPreview = document.getElementById('applicationStudentPhotoPreview');
+  const photoLabel = document.getElementById('applicationStudentPhotoLabel');
+  let photoPreviewUrl = '';
+  const resetPhotoPreview = () => {
+    if (photoPreviewUrl) URL.revokeObjectURL(photoPreviewUrl);
+    photoPreviewUrl = '';
+    photoPreview.innerHTML = '<i class="fa-solid fa-child"></i>';
+    photoLabel.textContent = 'Choose photo';
+  };
+  photoInput.addEventListener('change', () => {
+    const file = photoInput.files && photoInput.files[0];
+    const problem = file ? studentPhotoFileError(file) : '';
+    if (!file || problem) {
+      photoInput.value = '';
+      resetPhotoPreview();
+      if (problem) showMsg(document.getElementById(`${prefix}EnrollmentMessage`), problem);
+      return;
+    }
+    if (photoPreviewUrl) URL.revokeObjectURL(photoPreviewUrl);
+    photoPreviewUrl = URL.createObjectURL(file);
+    photoPreview.innerHTML = '';
+    const image = document.createElement('img');
+    image.src = photoPreviewUrl;
+    image.alt = '';
+    photoPreview.appendChild(image);
+    photoLabel.textContent = 'Change photo';
+  });
+
   document.getElementById(`${prefix}EnrollmentForm`).addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
     const message = document.getElementById(`${prefix}EnrollmentMessage`);
     const submitButton = form.querySelector('[type="submit"]');
+    const photo = photoInput.files && photoInput.files[0];
+    const photoProblem = studentPhotoFileError(photo);
+    if (photoProblem) {
+      showMsg(message, photo ? photoProblem : 'Upload a photo of the student before submitting the enrollment.');
+      return;
+    }
+    // novalidate lets the photo message show first; check the other required fields here.
+    const firstInvalid = [...form.querySelectorAll('input, textarea')]
+      .find((field) => field !== photoInput && !field.checkValidity());
+    if (firstInvalid) {
+      firstInvalid.reportValidity();
+      return;
+    }
     submitButton.disabled = true;
     try {
-      await api.post('/enrollment/applications', {
-        studentName: document.getElementById('applicationStudentName').value.trim(),
-        birthdate: document.getElementById('applicationBirthdate').value,
-        guardianName: isTeacher ? document.getElementById('applicationGuardianName').value.trim() : undefined,
-        requestedClass: document.getElementById('applicationClass').value.trim(),
-        guardianPhone: document.getElementById('applicationPhone').value.trim(),
-        notes: document.getElementById('applicationNotes').value.trim(),
-      });
+      const formData = new FormData();
+      formData.append('studentName', document.getElementById('applicationStudentName').value.trim());
+      formData.append('birthdate', document.getElementById('applicationBirthdate').value);
+      if (isTeacher) formData.append('guardianName', document.getElementById('applicationGuardianName').value.trim());
+      formData.append('requestedClass', document.getElementById('applicationClass').value.trim());
+      formData.append('guardianPhone', document.getElementById('applicationPhone').value.trim());
+      formData.append('notes', document.getElementById('applicationNotes').value.trim());
+      formData.append('studentPhoto', photo);
+      await api.post('/enrollment/applications', formData);
       showMsg(message, 'Enrollment application submitted for admin review.', 'success');
       form.reset();
+      resetPhotoPreview();
       await loadEnrollmentPanel(role);
     } catch (err) {
       showMsg(message, err.message);
