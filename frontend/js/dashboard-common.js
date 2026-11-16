@@ -872,6 +872,36 @@ function setButtonLoading(button, isLoading, label = 'Saving') {
   }
 }
 
+// Days a fee is past due (0 when it is paid or not yet due).
+function feeDaysOverdue(fee, status) {
+  if (status === 'paid' || !fee || !fee.dueDate) return 0;
+  const due = new Date(fee.dueDate);
+  if (Number.isNaN(due.getTime())) return 0;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  due.setHours(0, 0, 0, 0);
+  return Math.max(0, Math.floor((today - due) / 86400000));
+}
+
+// "Overdue" badge, used where there is room for a second pill (e.g. the payment history header).
+function feeOverdueBadge(fee, status) {
+  const days = feeDaysOverdue(fee, status);
+  if (!days) return '';
+  return `<span class="badge overdue" title="Due ${days} day${days === 1 ? '' : 's'} ago"><i class="fa-regular fa-clock" aria-hidden="true"></i>Overdue</span>`;
+}
+
+// Fee tables: one status pill per row.
+function feeStatusCell(fee, status, statusLabel) {
+  return `<span class="badge ${status}">${statusLabel}</span>`;
+}
+
+// Fee tables: the due date, turned red with "N days overdue" underneath when it has passed.
+function feeDueDateCell(fee, status) {
+  const days = feeDaysOverdue(fee, status);
+  if (!days) return fmtDate(fee.dueDate);
+  return `<span class="fee-due is-overdue">${fmtDate(fee.dueDate)}<small>${days} day${days === 1 ? '' : 's'} overdue</small></span>`;
+}
+
 function escapeDashboardHtml(value = '') {
   return String(value).replace(/[&<>"']/g, (character) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',

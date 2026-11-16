@@ -2,6 +2,7 @@ const Student = require('../models/Student');
 const logActivity = require('../utils/logActivity');
 const { applyClassToStudentData } = require('../utils/classAssignment');
 const mongoose = require('mongoose');
+const { studentFieldError, findDuplicateStudent } = require('../utils/validation');
 const { removeStudentPhotoFile, photoRecord, sendStudentPhoto } = require('../middleware/studentPhotoUpload');
 
 // Helper: build a scope filter based on who's asking
@@ -25,6 +26,7 @@ exports.listStudents = async (req, res) => {
 
 // GET /api/students/:id
 exports.getStudent = async (req, res) => {
+  if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(404).json({ message: 'Student not found.' });
   const student = await Student.findOne({ _id: req.params.id, ...scopeFilter(req.user) })
     .populate('parent', 'name email phone status emailVerified emailVerifiedBy')
     .populate('teacher', 'name email');
@@ -37,8 +39,14 @@ exports.createStudent = async (req, res) => {
   try {
     const { name, birthdate, className, parent, teacher, notes } = req.body;
     const data = { name, birthdate, className, parent, teacher, notes };
+    const fieldError = studentFieldError(data);
+    if (fieldError) return res.status(400).json({ message: fieldError });
     const classError = await applyClassToStudentData(data);
     if (classError) return res.status(400).json({ message: classError });
+    const duplicate = await findDuplicateStudent(data);
+    if (duplicate) {
+      return res.status(409).json({ message: `A student record for ${duplicate.name} already exists. Edit that record instead.` });
+    }
     const student = await Student.create(data);
     await logActivity(req.user._id, 'student-created', name);
     const populated = await Student.findById(student._id)
@@ -46,6 +54,7 @@ exports.createStudent = async (req, res) => {
       .populate('teacher', 'name email');
     res.status(201).json({ student: populated });
   } catch (err) {
+    if (err.name === 'ValidationError' || err.name === 'CastError') return res.status(400).json({ message: err.message });
     res.status(500).json({ message: 'Could not add student.', error: err.message });
   }
 };
@@ -68,12 +77,26 @@ exports.updateStudent = async (req, res) => {
       return res.status(400).json({ message: 'Provide at least one student field to update.' });
     }
 
+    const fieldError = studentFieldError(update);
+    if (fieldError) return res.status(400).json({ message: fieldError });
+
     const filter = { _id: req.params.id };
     if (req.user.role === 'teacher') filter.teacher = req.user._id;
     const student = await Student.findOne(filter);
     if (!student) return res.status(404).json({ message: 'Student not found.' });
     const classError = await applyClassToStudentData(update, student.className);
     if (classError) return res.status(400).json({ message: classError });
+    if (update.name !== undefined || update.parent !== undefined || update.birthdate !== undefined) {
+      const duplicate = await findDuplicateStudent({
+        name: update.name ?? student.name,
+        parent: update.parent !== undefined ? update.parent : student.parent,
+        birthdate: update.birthdate !== undefined ? update.birthdate : student.birthdate,
+        className: update.className ?? student.className,
+      }, student._id);
+      if (duplicate) {
+        return res.status(409).json({ message: `Another student record for ${duplicate.name} already exists.` });
+      }
+    }
     // Teachers may not move a student out of their own care.
     if (req.user.role === 'teacher' && update.teacher !== undefined && String(update.teacher || '') !== String(req.user._id)) {
       return res.status(403).json({ message: 'You can only move students into a class you teach. Ask an admin to change their class.' });
@@ -133,6 +156,7 @@ exports.updateStudentPhoto = async (req, res) => {
 
 // PATCH /api/students/:id/archive
 exports.archiveStudent = async (req, res) => {
+  if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(404).json({ message: 'Student not found.' });
   const student = await Student.findByIdAndUpdate(req.params.id, { status: 'archived' }, { new: true });
   if (!student) return res.status(404).json({ message: 'Student not found.' });
   await logActivity(req.user._id, 'student-archived', student.name);

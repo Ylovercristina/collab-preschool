@@ -264,7 +264,7 @@ async function loadFeeStatuses() {
     const totalPaid = Number(Number(fee.amountPaid || 0).toFixed(2));
     const remaining = Math.max(0, Number((Number(fee.amount) - totalPaid).toFixed(2)));
     const status = totalPaid <= 0 ? 'unpaid' : (remaining === 0 ? 'paid' : 'partial');
-    const statusLabel = { unpaid: 'Unpaid', partial: 'Partial Payment', paid: 'Paid' }[status];
+    const statusLabel = { unpaid: 'Unpaid', partial: 'Partial', paid: 'Paid' }[status];
     return `
       <tr>
         <td data-label="Student"><strong class="fee-primary-value">${escapeTeacherHtml(fee.student ? fee.student.name : '—')}</strong></td>
@@ -272,10 +272,10 @@ async function loadFeeStatuses() {
         <td data-label="Fee">${escapeTeacherHtml(fee.description)}</td>
         <td data-label="Total" class="fee-numeric"><strong class="fee-primary-value">${fmtMoney(fee.amount)}</strong></td>
         <td data-label="Paid" class="fee-numeric">${fmtMoney(totalPaid)}</td>
-        <td data-label="Remaining" class="fee-numeric"><span class="fee-balance">${fmtMoney(remaining)}</span></td>
-        <td data-label="Due Date">${fmtDate(fee.dueDate)}</td>
-        <td data-label="Status"><span class="badge ${status}">${statusLabel}</span></td>
-        <td data-label="Actions"><div class="fee-row-actions">${status !== 'paid' ? `<button type="button" class="btn btn-secondary btn-sm" title="Remind parent" aria-label="Remind parent about ${escapeTeacherHtml(fee.student ? fee.student.name : 'student')}" data-fee-reminder="${escapeTeacherHtml(fee._id)}"><i class="fa-solid fa-envelope" aria-hidden="true"></i></button>` : '<span class="badge paid"><i class="fa-solid fa-check"></i> Settled</span>'}</div></td>
+        <td data-label="Remaining" class="fee-numeric"><span class="fee-balance${remaining === 0 ? ' is-zero' : ''}">${fmtMoney(remaining)}</span></td>
+        <td data-label="Due Date">${feeDueDateCell(fee, status)}</td>
+        <td data-label="Status">${feeStatusCell(fee, status, statusLabel)}</td>
+        <td data-label="Actions"><div class="fee-row-actions">${status !== 'paid' ? `<button type="button" class="btn btn-secondary btn-sm" title="Remind parent" aria-label="Remind parent about ${escapeTeacherHtml(fee.student ? fee.student.name : 'student')}" data-fee-reminder="${escapeTeacherHtml(fee._id)}"><i class="fa-solid fa-envelope" aria-hidden="true"></i></button>` : '<span class="fee-settled"><i class="fa-solid fa-check" aria-hidden="true"></i> Settled</span>'}</div></td>
       </tr>
     `;
   }).join('');

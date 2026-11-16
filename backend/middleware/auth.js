@@ -1,6 +1,11 @@
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const RevokedToken = require('../models/RevokedToken');
+
+function hashToken(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
 
 const INTEGRATION_ACCESS_TTL = '30m';
 
@@ -12,11 +17,17 @@ async function protect(req, res, next) {
     if (!token) return res.status(401).json({ message: 'Not authenticated. Please log in.' });
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (await RevokedToken.exists({ tokenHash: hashToken(token) })) {
+      return res.status(401).json({ message: 'You have been logged out. Please log in again.' });
+    }
     const user = await User.findById(decoded.id);
     if (!user) return res.status(401).json({ message: 'Account no longer exists.' });
     if (user.status === 'archived') return res.status(403).json({ message: 'This account has been archived.' });
+    if (user.status === 'rejected') return res.status(403).json({ message: 'This registration was not approved.' });
 
     req.user = user;
+    req.authToken = token;
+    req.authTokenExpiresAt = decoded.exp ? new Date(decoded.exp * 1000) : null;
     next();
   } catch (err) {
     return res.status(401).json({ message: 'Session expired or invalid. Please log in again.' });
@@ -79,4 +90,4 @@ function requireIntegrationOtp(purpose = 'access') {
   };
 }
 
-module.exports = { protect, allowRoles, requireIntegrationOtp };
+module.exports = { protect, allowRoles, requireIntegrationOtp, hashToken };

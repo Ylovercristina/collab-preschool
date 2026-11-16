@@ -139,6 +139,7 @@ exports.markAttendanceBulk = async (req, res) => {
 
 // GET /api/attendance/student/:studentId
 exports.getStudentAttendance = async (req, res) => {
+  if (!mongoose.isObjectIdOrHexString(req.params.studentId)) return res.status(404).json({ message: 'Student not found.' });
   if (req.user.role === 'teacher') {
     const student = await Student.findOne({ _id: req.params.studentId, teacher: req.user._id });
     if (!student) return res.status(403).json({ message: 'Not authorized to view this record.' });

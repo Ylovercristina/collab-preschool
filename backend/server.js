@@ -48,6 +48,19 @@ app.use('/api/reports', require('./routes/reportRoutes'));
 
 app.use((req, res) => res.status(404).json({ message: 'Route not found.' }));
 app.use((err, req, res, next) => {
+  // Client mistakes get a 4xx with a readable message instead of a generic 500.
+  if (err.type === 'entity.parse.failed') {
+    return res.status(400).json({ message: 'The request body is not valid JSON.' });
+  }
+  if (err.type === 'entity.too.large') {
+    return res.status(413).json({ message: 'The request is too large.' });
+  }
+  if (err.name === 'CastError') {
+    return res.status(400).json({ message: `Invalid value for ${err.path === '_id' ? 'ID' : err.path}.` });
+  }
+  if (err.name === 'ValidationError') {
+    return res.status(400).json({ message: err.message });
+  }
   console.error(err);
   res.status(500).json({ message: 'Something went wrong on the server.' });
 });

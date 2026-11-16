@@ -26,6 +26,7 @@ router.put('/:id', uploadProfileImage, ctrl.updateUserProfile);
 router.patch('/:id', ctrl.updateUser);
 router.patch('/:id/archive', ctrl.archiveUser);
 router.patch('/:id/approve', ctrl.approveUser);
+router.patch('/:id/reject', ctrl.rejectUser);
 router.patch('/:id/reactivate', ctrl.reactivateUser);
 router.patch('/:id/verify-email', ctrl.verifyParentEmail);
 

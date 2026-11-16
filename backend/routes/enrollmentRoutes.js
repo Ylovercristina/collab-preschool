@@ -9,6 +9,7 @@ router.put('/period', allowRoles('admin'), ctrl.updatePeriod);
 router.patch('/period/start', allowRoles('admin'), ctrl.startPeriod);
 router.get('/applications', allowRoles('admin'), ctrl.listApplications);
 router.post('/applications', allowRoles('parent', 'teacher'), uploadStudentPhoto('studentPhoto'), ctrl.submitApplication);
+router.post('/applications/bulk-approve', allowRoles('admin'), ctrl.bulkApproveApplications);
 router.get('/applications/:id/photo', allowRoles('admin', 'parent', 'teacher'), ctrl.getApplicationPhoto);
 router.patch('/applications/:id', allowRoles('admin'), ctrl.reviewApplication);
 

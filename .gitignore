@@ -8,3 +8,11 @@ build/
 backend/uploads/
 
 backend/private-records/
+
+# MongoDB data files accidentally created inside backend/ (never commit database files)
+backend/*.wt
+backend/WiredTiger*
+backend/mongod.lock
+backend/journal/
+backend/diagnostic.data/
+backend/_tmp/

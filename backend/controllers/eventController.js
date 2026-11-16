@@ -7,6 +7,9 @@ const User = require('../models/User');
 const { queueEmailDelivery } = require('../services/emailDelivery');
 const logActivity = require('../utils/logActivity');
 const { eventMapsUrl } = require('../utils/eventMaps');
+const { isRealCalendarDate, escapeRegex } = require('../utils/validation');
+
+const MAX_EVENT_YEARS_AHEAD = 5;
 const {
   addToGoogleCalendarUrl,
   getImportedGoogleCalendarEvents,
@@ -57,10 +60,15 @@ function validateEvent(body) {
   }
   const location = normalizeLocation(body.location);
   if (location === false) return { error: 'The selected map location is invalid. Choose the venue on the map again.' };
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateValue) || Number.isNaN(Date.parse(`${dateValue}T00:00:00Z`))) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateValue) || !isRealCalendarDate(dateValue)) {
     return { error: 'Enter a valid event date.' };
   }
   if (dateValue < new Date().toISOString().slice(0, 10)) return { error: 'Event date cannot be in the past.' };
+  const latestAllowed = new Date();
+  latestAllowed.setUTCFullYear(latestAllowed.getUTCFullYear() + MAX_EVENT_YEARS_AHEAD);
+  if (dateValue > latestAllowed.toISOString().slice(0, 10)) {
+    return { error: `Event date must be within ${MAX_EVENT_YEARS_AHEAD} years from today.` };
+  }
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return { error: 'Enter a valid event time.' };
   if (targetType === 'classes' && !targetClasses.length) return { error: 'Select at least one class or choose all recipients.' };
   if (!['all', 'parents', 'teachers'].includes(audience)) return { error: 'Select a valid event audience.' };
@@ -256,11 +264,29 @@ exports.listEvents = async (req, res) => {
   res.json({ events });
 };
 
+// Same title (ignoring case and spacing) on the same date and time, unless that event was rejected.
+async function findDuplicateEvent({ title, date, time }, excludeId = null) {
+  const filter = {
+    title: new RegExp(`^\\s*${escapeRegex(title.trim().replace(/\s+/g, ' ')).replace(/ /g, '\\s+')}\\s*$`, 'i'),
+    date,
+    time,
+    publicationStatus: { $ne: 'rejected' },
+  };
+  if (excludeId) filter._id = { $ne: excludeId };
+  return Event.findOne(filter).select('_id title');
+}
+
+function duplicateEventMessage(event) {
+  return `An event called "${event.title}" is already scheduled at this date and time. Edit that event instead.`;
+}
+
 // POST /api/events
 exports.createEvent = async (req, res) => {
   try {
     const validated = validateEvent(req.body);
     if (validated.error) return res.status(400).json({ message: validated.error });
+    const duplicate = await findDuplicateEvent(validated.value);
+    if (duplicate) return res.status(409).json({ message: duplicateEventMessage(duplicate) });
     const values = { ...validated.value, createdBy: req.user._id };
     if (req.user.role === 'teacher') {
       if (values.publicationStatus === 'published') values.publicationStatus = 'pending';
@@ -325,6 +351,8 @@ exports.updateEvent = async (req, res) => {
       audience: req.body.audience === undefined ? (event.audience || 'parents') : req.body.audience,
     });
     if (validated.error) return res.status(400).json({ message: validated.error });
+    const duplicate = await findDuplicateEvent(validated.value, event._id);
+    if (duplicate) return res.status(409).json({ message: duplicateEventMessage(duplicate) });
     if (req.user.role === 'teacher') {
       if (previousStatus === 'rejected' || validated.value.publicationStatus === 'published') {
         validated.value.publicationStatus = 'pending';

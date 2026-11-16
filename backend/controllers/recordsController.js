@@ -7,6 +7,7 @@ const User = require('../models/User');
 const { uploadDirectory } = require('../middleware/recordUpload');
 const logActivity = require('../utils/logActivity');
 const { applyClassToStudentData } = require('../utils/classAssignment');
+const { studentFieldError, findDuplicateStudent } = require('../utils/validation');
 
 const studentFields = ['name', 'className', 'birthdate', 'enrollmentDate', 'guardianName', 'guardianPhone', 'parent', 'teacher', 'notes'];
 const teacherFields = ['name', 'phone', 'assignedClass', 'employmentStartDate', 'employmentType'];
@@ -68,10 +69,16 @@ exports.createStudent = async (req, res) => {
   try {
     const data = selectedFields(req.body, studentFields);
     if (!data.name || !data.className) return res.status(400).json({ message: 'Student name and class or section are required.' });
+    const fieldError = studentFieldError(data);
+    if (fieldError) return res.status(400).json({ message: fieldError });
     const classError = await applyClassToStudentData(data);
     if (classError) return res.status(400).json({ message: classError });
     const referenceError = await validateStudentReferences(data);
     if (referenceError) return res.status(400).json({ message: referenceError });
+    const duplicate = await findDuplicateStudent(data);
+    if (duplicate) {
+      return res.status(409).json({ message: `A student record for ${duplicate.name} already exists. Edit that record instead.` });
+    }
     const student = await Student.create(data);
     await logActivity(req.user._id, 'student-record-created', student.name);
     res.status(201).json({ student: await populatedStudent(student._id) });
@@ -88,10 +95,21 @@ exports.updateStudent = async (req, res) => {
     const data = selectedFields(req.body, studentFields);
     if (data.name === '' || (data.name === undefined && !student.name)) return res.status(400).json({ message: 'Student name is required.' });
     if (data.className === '' || (data.className === undefined && !student.className)) return res.status(400).json({ message: 'Student class or section is required.' });
+    const fieldError = studentFieldError(data);
+    if (fieldError) return res.status(400).json({ message: fieldError });
     const classError = await applyClassToStudentData(data, student.className);
     if (classError) return res.status(400).json({ message: classError });
     const referenceError = await validateStudentReferences(data);
     if (referenceError) return res.status(400).json({ message: referenceError });
+    if (data.name !== undefined || data.parent !== undefined || data.birthdate !== undefined) {
+      const duplicate = await findDuplicateStudent({
+        name: data.name ?? student.name,
+        parent: data.parent !== undefined ? data.parent : student.parent,
+        birthdate: data.birthdate !== undefined ? data.birthdate : student.birthdate,
+        className: data.className ?? student.className,
+      }, student._id);
+      if (duplicate) return res.status(409).json({ message: `Another student record for ${duplicate.name} already exists.` });
+    }
     Object.assign(student, data);
     await student.save();
     await logActivity(req.user._id, 'student-record-updated', student.name);
@@ -119,7 +137,7 @@ exports.createTeacher = async (req, res) => {
       return res.status(400).json({ message: 'Name, email, contact number, password, employment type and start date are required.' });
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ message: 'Enter a valid email address.' });
-    if (password.length < 6) return res.status(400).json({ message: 'Password must be at least 6 characters.' });
+    if (password.length < 8) return res.status(400).json({ message: 'Password must be at least 8 characters.' });
     if (!phoneIsValid(data.phone)) return res.status(400).json({ message: 'Enter a valid contact number.' });
     const teacher = await User.create({
       ...data,

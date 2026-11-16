@@ -25,7 +25,14 @@ exports.feeReport = async (req, res) => {
     acc[f.status] = (acc[f.status] || 0) + 1;
     return acc;
   }, {});
-  res.json({ totalBilled, totalCollected, outstanding, byStatus, count: fees.length });
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const overdueFees = fees.filter((f) => f.status !== 'paid' && f.dueDate && f.dueDate < todayStart);
+  const overdue = {
+    count: overdueFees.length,
+    amount: overdueFees.reduce((sum, f) => sum + Math.max(0, f.amount - f.amountPaid), 0),
+  };
+  res.json({ totalBilled, totalCollected, outstanding, byStatus, overdue, count: fees.length });
 };
 
 // GET /api/reports/attendance   (admin: quick attendance snapshot)

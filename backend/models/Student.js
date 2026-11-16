@@ -26,8 +26,14 @@ const studentSchema = new mongoose.Schema(
   {
     photo: { type: photoSchema, default: undefined },
     studentId: { type: String, unique: true, sparse: true, default: () => `STU-${crypto.randomBytes(4).toString('hex').toUpperCase()}` },
-    name: { type: String, required: true, trim: true },
-    birthdate: { type: Date },
+    name: { type: String, required: true, trim: true, maxlength: [120, 'Student name must be 120 characters or fewer.'] },
+    birthdate: {
+      type: Date,
+      validate: {
+        validator: (value) => !value || value <= new Date(),
+        message: 'Birthdate cannot be in the future.',
+      },
+    },
     className: { type: String, trim: true, default: 'Unassigned' },
     enrollmentDate: { type: Date, default: Date.now },
     guardianName: { type: String, trim: true, default: '' },

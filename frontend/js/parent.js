@@ -47,7 +47,7 @@ function renderChildSwitcher() {
         <i class="fa-solid fa-children" style="color:var(--primary); font-size:18px;"></i>
         <label style="font-weight:700; font-size:14px; color:var(--ink);">Select Child: </label>
         <select id="childSwitch" style="padding:6px 12px; border-radius:6px; border:1.5px solid #38A169; font-weight:700; background:#FFF;">
-          ${myChildren.map((c) => `<option value="${c._id}" ${c._id === activeChildId ? 'selected' : ''}>${c.name} (${c.className || 'General'})</option>`).join('')}
+          ${myChildren.map((c) => `<option value="${c._id}" ${c._id === activeChildId ? 'selected' : ''}>${escapeParentMessage(c.name)} (${escapeParentMessage(c.className || 'General')})</option>`).join('')}
         </select>
       </div>
     `;
@@ -466,15 +466,15 @@ async function renderFees() {
       .toFixed(2));
     const remainingBalance = Math.max(0, Number((Number(f.amount) - totalPaid).toFixed(2)));
     const status = totalPaid <= 0 ? 'unpaid' : (remainingBalance === 0 ? 'paid' : 'partial');
-    const statusLabel = { unpaid: 'Unpaid', partial: 'Partial Payment', paid: 'Paid' }[status];
+    const statusLabel = { unpaid: 'Unpaid', partial: 'Partial', paid: 'Paid' }[status];
     return `
       <tr>
         <td data-label="Description"><strong class="fee-primary-value">${escapeParentMessage(f.description)}</strong>${renderPaymentHistory(f.payments, f._id, f.amount)}</td>
         <td data-label="Total Amount" class="fee-numeric"><strong class="fee-primary-value">${fmtMoney(f.amount)}</strong></td>
         <td data-label="Total Paid" class="fee-numeric">${fmtMoney(totalPaid)}</td>
-        <td data-label="Remaining Balance" class="fee-numeric"><span class="fee-balance">${fmtMoney(remainingBalance)}</span></td>
-        <td data-label="Due Date">${fmtDate(f.dueDate)}</td>
-        <td data-label="Status"><span class="badge ${status}">${statusLabel}</span></td>
+        <td data-label="Remaining Balance" class="fee-numeric"><span class="fee-balance${remainingBalance === 0 ? ' is-zero' : ''}">${fmtMoney(remainingBalance)}</span></td>
+        <td data-label="Due Date">${feeDueDateCell(f, status)}</td>
+        <td data-label="Status">${feeStatusCell(f, status, statusLabel)}</td>
       </tr>
     `;
   }).join('') : `<tr><td colspan="6"><div class="empty-state"><i class="fa-solid fa-credit-card"></i><p>No fee statements for this child.</p></div></td></tr>`;

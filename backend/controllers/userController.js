@@ -1,6 +1,7 @@
 const User = require('../models/User');
 const mongoose = require('mongoose');
 const logActivity = require('../utils/logActivity');
+const { isValidEmail } = require('../utils/validation');
 const { sendAccountApprovalEmail } = require('./authController');
 const fs = require('fs');
 const path = require('path');
@@ -239,6 +240,17 @@ exports.updateUserProfile = async (req, res) => {
       return res.status(400).json({ message: 'Profile image must be a valid JPG, PNG or WEBP file.' });
     }
 
+    if (user.role === 'admin' && role !== 'admin') {
+      if (user._id.equals(req.user._id)) {
+        await discardUploadedImage(req.file);
+        return res.status(400).json({ message: 'You cannot remove your own admin role.' });
+      }
+      if (await isLastActiveAdmin(user._id)) {
+        await discardUploadedImage(req.file);
+        return res.status(400).json({ message: 'At least one active admin account is required.' });
+      }
+    }
+
     const duplicate = await User.findOne({ email, _id: { $ne: user._id } });
     if (duplicate) {
       await discardUploadedImage(req.file);
@@ -309,37 +321,74 @@ exports.createUser = async (req, res) => {
     if (!['admin', 'teacher', 'parent'].includes(role)) {
       return res.status(400).json({ message: 'Invalid role.' });
     }
-    const exists = await User.findOne({ email: (email || '').toLowerCase() });
+    if (!name || !String(name).trim()) return res.status(400).json({ message: 'Name is required.' });
+    if (!isValidEmail(email)) return res.status(400).json({ message: 'Enter a valid email address.' });
+    const exists = await User.findOne({ email: String(email || '').trim().toLowerCase() });
     if (exists) return res.status(409).json({ message: 'Email already registered.' });
 
     const user = await User.create({ name, email, password, role, phone, status: 'approved' });
     await logActivity(req.user._id, 'user-created', `${role} ${email} created by admin`);
     res.status(201).json({ user: publicUser(user) });
   } catch (err) {
+    if (err.name === 'ValidationError') return res.status(400).json({ message: err.message });
+    if (err.code === 11000) return res.status(409).json({ message: 'Email already registered.' });
     res.status(500).json({ message: 'Could not create user.', error: err.message });
   }
 };
 
+// True when removing admin rights from `userId` would leave no active admin.
+async function isLastActiveAdmin(userId) {
+  const otherAdmins = await User.countDocuments({ role: 'admin', status: 'approved', _id: { $ne: userId } });
+  return otherAdmins === 0;
+}
+
 // PATCH /api/users/:id  (edit name/phone/role)
 exports.updateUser = async (req, res) => {
   try {
+    if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(404).json({ message: 'User not found.' });
     const { name, phone, role } = req.body;
     const update = {};
     if (name) update.name = name;
     if (phone) update.phone = phone;
-    if (role) update.role = role;
+    if (role) {
+      if (!['admin', 'teacher', 'parent'].includes(role)) {
+        return res.status(400).json({ message: 'Select a valid account role.' });
+      }
+      update.role = role;
+    }
 
-    const user = await User.findByIdAndUpdate(req.params.id, update, { new: true });
+    const existing = await User.findById(req.params.id);
+    if (!existing) return res.status(404).json({ message: 'User not found.' });
+    if (existing.role === 'admin' && update.role && update.role !== 'admin') {
+      if (existing._id.equals(req.user._id)) {
+        return res.status(400).json({ message: 'You cannot remove your own admin role.' });
+      }
+      if (await isLastActiveAdmin(existing._id)) {
+        return res.status(400).json({ message: 'At least one active admin account is required.' });
+      }
+    }
+
+    const user = await User.findByIdAndUpdate(req.params.id, update, { new: true, runValidators: true });
     if (!user) return res.status(404).json({ message: 'User not found.' });
     await logActivity(req.user._id, 'user-updated', `Updated ${user.email}`);
     res.json({ user: publicUser(user) });
   } catch (err) {
+    if (err.name === 'ValidationError') return res.status(400).json({ message: err.message });
     res.status(500).json({ message: 'Could not update user.', error: err.message });
   }
 };
 
 // PATCH /api/users/:id/archive
 exports.archiveUser = async (req, res) => {
+  if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(404).json({ message: 'User not found.' });
+  if (String(req.params.id) === String(req.user._id)) {
+    return res.status(400).json({ message: 'You cannot archive your own account.' });
+  }
+  const target = await User.findById(req.params.id).select('role');
+  if (!target) return res.status(404).json({ message: 'User not found.' });
+  if (target.role === 'admin' && await isLastActiveAdmin(target._id)) {
+    return res.status(400).json({ message: 'At least one active admin account is required.' });
+  }
   const user = await User.findByIdAndUpdate(req.params.id, { status: 'archived' }, { new: true });
   if (!user) return res.status(404).json({ message: 'User not found.' });
   await logActivity(req.user._id, 'user-archived', user.email);
@@ -431,6 +480,28 @@ exports.approveUser = async (req, res) => {
   }
 };
 
+
+// PATCH /api/users/:id/reject   (admin declines a pending self-registration)
+exports.rejectUser = async (req, res) => {
+  try {
+    if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(404).json({ message: 'User not found.' });
+    const user = await User.findOneAndUpdate(
+      { _id: req.params.id, status: 'pending' },
+      { $set: { status: 'rejected' } },
+      { new: true }
+    );
+    if (!user) {
+      const existing = await User.findById(req.params.id).select('status');
+      if (!existing) return res.status(404).json({ message: 'User not found.' });
+      return res.status(409).json({ message: 'Only pending registrations can be rejected.' });
+    }
+    await logActivity(req.user._id, 'user-rejected', user.email);
+    return res.json({ message: 'Registration rejected. This account cannot log in.', user: publicUser(user) });
+  } catch (err) {
+    console.error('[users] Could not reject account:', err.message);
+    return res.status(500).json({ message: 'Could not reject this registration. Please try again.' });
+  }
+};
 
 // PATCH /api/users/:id/reactivate
 exports.reactivateUser = async (req, res) => {

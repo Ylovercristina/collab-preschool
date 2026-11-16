@@ -427,7 +427,7 @@ async function openManagedRecordForm(record = null) {
           : `<div class="field"><label for="managedClass">Class / section</label><input id="managedClass" list="managedClassOptions" maxlength="80" value="${escapeRecordHtml(record?.className || '')}" required /></div>`}
       </div>
       ${isTeacher ? `
-        ${!isEditing ? '<div class="field"><label for="managedEmail">Email address (teacher sign-in)</label><input id="managedEmail" type="email" required /></div><div class="field"><label for="managedPassword">Temporary password</label><input id="managedPassword" type="password" minlength="6" required /></div>' : ''}
+        ${!isEditing ? '<div class="field"><label for="managedEmail">Email address (teacher sign-in)</label><input id="managedEmail" type="email" required /></div><div class="field"><label for="managedPassword">Temporary password</label><input id="managedPassword" type="password" minlength="8" required /></div>' : ''}
         <div class="grid-2">
           <div class="field"><label for="managedClass">Assigned class / section</label><input id="managedClass" maxlength="80" value="${escapeRecordHtml(record?.assignedClass || '')}" /></div>
           <div class="field"><label for="managedEmploymentType">Employment type</label><select id="managedEmploymentType" required><option value="">Select type</option>${['Full-time', 'Part-time', 'Contract', 'Substitute'].map((type) => `<option value="${type}" ${record?.employmentType === type ? 'selected' : ''}>${type}</option>`).join('')}</select></div>

@@ -7,6 +7,7 @@ const ReceiptCounter = require('../models/ReceiptCounter');
 const { queueEmailDelivery } = require('../services/emailDelivery');
 const logActivity = require('../utils/logActivity');
 const mongoose = require('mongoose');
+const { isRealCalendarDate } = require('../utils/validation');
 
 function formatMoney(value) {
   return `₱${Number(value).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -156,23 +157,45 @@ async function includePaymentHistory(fees) {
       .filter((payment) => payment.receiptState !== 'voided')
       .reduce((sum, payment) => sum + Number(payment.amountPaid || 0), 0)
       .toFixed(2));
+    const status = totalPaid <= 0 ? 'unpaid' : (totalPaid < fee.amount ? 'partial' : 'paid');
     return {
       ...fee.toObject(),
       amountPaid: totalPaid,
-      status: totalPaid <= 0 ? 'unpaid' : (totalPaid < fee.amount ? 'partial' : 'paid'),
+      status,
+      ...overdueInfo(fee.dueDate, status),
       payments: feePayments,
     };
   });
+}
+
+// A fee is overdue when it is not fully paid and its due date is before today.
+// `status` keeps its paid/partial/unpaid meaning; `overdue` is reported alongside it.
+function overdueInfo(dueDate, status) {
+  const due = new Date(dueDate);
+  if (status === 'paid' || Number.isNaN(due.getTime())) return { overdue: false, daysOverdue: 0 };
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const dueDay = new Date(due);
+  dueDay.setHours(0, 0, 0, 0);
+  const days = Math.floor((todayStart - dueDay) / (24 * 60 * 60 * 1000));
+  return days > 0 ? { overdue: true, daysOverdue: days } : { overdue: false, daysOverdue: 0 };
 }
 
 // POST /api/fees   (admin creates a fee record for a student)
 exports.createFee = async (req, res) => {
   try {
     const { student, description, amount, dueDate } = req.body;
+    if (!mongoose.isObjectIdOrHexString(student) || !(await Student.exists({ _id: student }))) {
+      return res.status(400).json({ message: 'Choose a valid student for this fee.' });
+    }
+    if (!dueDate || !isRealCalendarDate(dueDate)) {
+      return res.status(400).json({ message: 'Enter a valid due date.' });
+    }
     const fee = await Fee.create({ student, description, amount, dueDate, createdBy: req.user._id });
     await logActivity(req.user._id, 'fee-created', `${description} for student ${student}`);
     res.status(201).json({ fee });
   } catch (err) {
+    if (err.name === 'ValidationError' || err.name === 'CastError') return res.status(400).json({ message: err.message });
     res.status(500).json({ message: 'Could not create fee.', error: err.message });
   }
 };
@@ -195,10 +218,12 @@ exports.getStudentFees = async (req, res) => {
 
 // GET /api/fees   (admin: all fees, optional ?status=unpaid)
 exports.listFees = async (req, res) => {
-  const filter = {};
-  if (req.query.status) filter.status = req.query.status;
-  const fees = await Fee.find(filter).populate('student', 'name className').sort({ dueDate: 1 });
-  res.json({ fees: await includePaymentHistory(fees) });
+  const fees = await Fee.find().populate('student', 'name className').sort({ dueDate: 1 });
+  let summaries = await includePaymentHistory(fees);
+  // Filter on the computed status: the stored Fee.status can lag behind recorded payments.
+  if (req.query.status === 'overdue') summaries = summaries.filter((fee) => fee.overdue);
+  else if (req.query.status) summaries = summaries.filter((fee) => fee.status === req.query.status);
+  res.json({ fees: summaries });
 };
 
 // GET /api/fees/teacher (fees only for students assigned to this teacher)
@@ -399,7 +424,7 @@ exports.logPayment = async (req, res) => {
       return res.status(400).json({ message: 'Enter a valid payment amount greater than zero.' });
     }
     const receivedDate = new Date(datePaid);
-    if (!datePaid || Number.isNaN(receivedDate.getTime())) {
+    if (!datePaid || !isRealCalendarDate(datePaid)) {
       return res.status(400).json({ message: 'Enter a valid date received.' });
     }
 
@@ -484,7 +509,7 @@ exports.updatePayment = async (req, res) => {
       return res.status(400).json({ message: 'Enter a valid payment amount greater than zero.' });
     }
     const datePaid = req.body.datePaid === undefined ? payment.datePaid : new Date(req.body.datePaid);
-    if (Number.isNaN(new Date(datePaid).getTime())) {
+    if ((req.body.datePaid !== undefined && !isRealCalendarDate(req.body.datePaid)) || Number.isNaN(new Date(datePaid).getTime())) {
       return res.status(400).json({ message: 'Enter a valid date received.' });
     }
 

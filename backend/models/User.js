@@ -22,7 +22,7 @@ const userSchema = new mongoose.Schema(
     password: {
       type: String,
       required: function () { return !this.googleId; },
-      minlength: 6,
+      minlength: [8, 'Password must be at least 8 characters long.'],
       select: false,
     },
     googleId: { type: String, unique: true, sparse: true, default: undefined },
@@ -44,7 +44,8 @@ const userSchema = new mongoose.Schema(
     // Parents self-signup and need admin approval before they can log in.
     status: {
       type: String,
-      enum: ['pending', 'approved', 'archived'],
+      // 'rejected' = an admin declined a pending self-registration; the account cannot log in.
+      enum: ['pending', 'approved', 'archived', 'rejected'],
       default: function () {
         return this.role === 'parent' ? 'pending' : 'approved';
       },

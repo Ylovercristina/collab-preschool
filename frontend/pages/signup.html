@@ -6,6 +6,7 @@
 <title>Sign up — Play-is-School</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
 <link rel="stylesheet" href="../css/style.css" />
+<script src="https://www.google.com/recaptcha/api.js?onload=onRecaptchaApiLoad&render=explicit" async defer></script>
 </head>
 <body>
 <div class="auth-page-wrap">
@@ -58,11 +59,16 @@
         <div class="auth-field">
           <label class="auth-label" for="password">PASSWORD</label>
           <div class="input-with-icon">
-            <input type="password" id="password" placeholder="At least 6 characters" required minlength="6" autocomplete="new-password" />
+            <input type="password" id="password" placeholder="At least 8 characters" required minlength="8" autocomplete="new-password" />
             <button type="button" class="toggle-password-btn" id="togglePasswordBtn" aria-label="Toggle password visibility">
               <i class="fa-regular fa-eye" id="passwordEyeIcon"></i>
             </button>
           </div>
+        </div>
+
+        <div class="captcha-wrap" id="signupCaptchaWrap" hidden>
+          <div id="recaptchaWidget"></div>
+          <div id="captchaStatus" class="captcha-status" role="status"></div>
         </div>
 
         <button type="submit" class="btn btn-primary btn-block" style="margin-top: 10px;">
@@ -97,6 +103,53 @@ toggleBtn.addEventListener('click', () => {
   eyeIcon.className = isPassword ? 'fa-regular fa-eye-slash' : 'fa-regular fa-eye';
 });
 
+// reCAPTCHA (shown only while the admin has CAPTCHA enabled)
+let captchaEnabled = false;
+let captchaToken = '';
+let captchaWidgetId = null;
+let captchaSiteKey = '';
+const captchaStatus = document.getElementById('captchaStatus');
+
+function setCaptchaMessage(text, type = 'error') {
+  captchaStatus.textContent = text;
+  captchaStatus.className = text ? `captcha-status ${type}` : 'captcha-status';
+}
+
+function resetCaptcha(message = '') {
+  captchaToken = '';
+  if (captchaWidgetId !== null && window.grecaptcha) window.grecaptcha.reset(captchaWidgetId);
+  setCaptchaMessage(message);
+}
+
+function renderCaptcha() {
+  if (!captchaSiteKey || captchaWidgetId !== null || !window.grecaptcha || typeof window.grecaptcha.render !== 'function') return;
+  captchaWidgetId = window.grecaptcha.render('recaptchaWidget', {
+    sitekey: captchaSiteKey,
+    callback: (token) => { captchaToken = token; setCaptchaMessage('CAPTCHA verified.', 'success'); },
+    'expired-callback': () => resetCaptcha('CAPTCHA expired. Please verify again.'),
+    'error-callback': () => { captchaToken = ''; setCaptchaMessage('CAPTCHA could not load. Please refresh and try again.'); },
+  });
+}
+window.onRecaptchaApiLoad = renderCaptcha;
+
+(async function loadSignupCaptcha() {
+  try {
+    const { settings = {} } = await api.get('/auth/settings', { auth: false });
+    captchaEnabled = settings.captchaEnabled === true;
+  } catch {
+    captchaEnabled = true; // settings unavailable: show it; the server decides if it is required
+  }
+  if (!captchaEnabled) return;
+  document.getElementById('signupCaptchaWrap').hidden = false;
+  try {
+    captchaSiteKey = (await api.get('/auth/recaptcha-config', { auth: false })).siteKey || '';
+    if (!captchaSiteKey) throw new Error();
+    renderCaptcha();
+  } catch {
+    setCaptchaMessage('CAPTCHA is unavailable. Please contact the school admin.');
+  }
+})();
+
 // Signup form handler
 document.getElementById('googleSignupLink').href = `${API_BASE}/auth/google?mode=signup`;
 
@@ -111,7 +164,12 @@ document.getElementById('signupForm').addEventListener('submit', async (e) => {
     email: document.getElementById('email').value.trim(),
     phone: document.getElementById('phone').value.trim(),
     password: document.getElementById('password').value,
+    captchaToken,
   };
+  if (captchaEnabled && !captchaToken) {
+    setCaptchaMessage('Please complete the CAPTCHA verification first.');
+    return;
+  }
 
   try {
     const data = await api.post('/auth/signup', payload, { auth: false });
@@ -124,6 +182,8 @@ document.getElementById('signupForm').addEventListener('submit', async (e) => {
   } catch (err) {
     msg.textContent = '';
     msg.className = 'form-msg';
+    // A reCAPTCHA token can be used only once, so ask for a fresh check.
+    if (captchaEnabled) resetCaptcha('');
     const emailTaken = /already exists/i.test(err.message || '');
     if (emailTaken) {
       const emailInput = document.getElementById('email');

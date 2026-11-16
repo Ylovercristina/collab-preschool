@@ -584,18 +584,18 @@ function renderFilteredUsers() {
         <td>
           <div style="display:flex; align-items:center; gap:10px;">
             <div style="width:34px; height:34px; border-radius:50%; background:rgba(46,125,50,0.1); color:var(--primary); font-weight:800; font-size:12.5px; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
-              ${getInitials(u.name)}
+              ${escapeDashboardHtml(getInitials(u.name))}
             </div>
             <div>
-              <strong style="color:var(--ink); font-size:13.5px;">${u.name}</strong>
-              ${u.phone ? `<div style="font-size:11.5px; color:var(--ink-muted);"><i class="fa-solid fa-phone" style="font-size:10px; margin-right:4px;"></i>${u.phone}</div>` : ''}
+              <strong style="color:var(--ink); font-size:13.5px;">${escapeDashboardHtml(u.name)}</strong>
+              ${u.phone ? `<div style="font-size:11.5px; color:var(--ink-muted);"><i class="fa-solid fa-phone" style="font-size:10px; margin-right:4px;"></i>${escapeDashboardHtml(u.phone)}</div>` : ''}
             </div>
           </div>
         </td>
         <td>
-          <a href="mailto:${u.email}" style="color:var(--ink); font-size:13px; text-decoration:none; display:inline-flex; align-items:center; gap:6px;">
+          <a href="mailto:${escapeDashboardHtml(u.email)}" style="color:var(--ink); font-size:13px; text-decoration:none; display:inline-flex; align-items:center; gap:6px;">
             <i class="fa-regular fa-envelope" style="color:var(--ink-muted); font-size:12px;"></i>
-            ${u.email}
+            ${escapeDashboardHtml(u.email)}
           </a>
           ${u.role === 'parent' ? `<div><span class="badge ${u.emailVerified ? 'approved' : 'pending'}" style="margin-top:5px;">${u.emailVerified ? 'Verified' : 'Not verified'}</span></div>` : ''}
         </td>
@@ -610,6 +610,9 @@ function renderFilteredUsers() {
             ${u.status === 'pending' ? `
               <button class="btn btn-secondary btn-sm" data-approve="${u.id}" style="padding:4px 10px; font-size:12px; font-weight:700;" title="Approve account">
                 <i class="fa-solid fa-check"></i> Approve
+              </button>
+              <button class="btn btn-ghost btn-sm" data-reject="${u.id}" style="padding:4px 10px; font-size:12px; font-weight:700; color:#B91C1C;" title="Reject registration">
+                <i class="fa-solid fa-xmark"></i> Reject
               </button>
             ` : ''}
             ${u.role === 'parent' && !u.emailVerified && !isArchived ? `
@@ -637,17 +640,32 @@ function renderFilteredUsers() {
     `;
   }).join('');
 
-  // Bind actions
-  tbody.querySelectorAll('[data-approve]').forEach((b) => {
-    b.addEventListener('click', async () => {
-      try {
-        await api.patch(`/users/${b.dataset.approve}/approve`);
-        await loadUsers();
-      } catch (err) {
-        alert(err.message);
-      }
-    });
-  });
+  // Bind actions (each button gets exactly one handler)
+  tbody.querySelectorAll('[data-approve]').forEach((button) => button.addEventListener('click', async () => {
+    button.disabled = true;
+    try {
+      const result = await api.patch(`/users/${button.dataset.approve}/approve`);
+      alert(result.message);
+      await loadUsers();
+    } catch (err) {
+      alert(err.message);
+      button.disabled = false;
+    }
+  }));
+
+  tbody.querySelectorAll('[data-reject]').forEach((button) => button.addEventListener('click', async () => {
+    const pendingUser = cachedUsers.find((item) => item.id === button.dataset.reject);
+    if (!confirm(`Reject the registration for ${pendingUser ? `${pendingUser.name} (${pendingUser.email})` : 'this account'}? They will not be able to log in.`)) return;
+    button.disabled = true;
+    try {
+      const result = await api.patch(`/users/${button.dataset.reject}/reject`);
+      alert(result.message);
+      await loadUsers();
+    } catch (err) {
+      alert(err.message);
+      button.disabled = false;
+    }
+  }));
 
   tbody.querySelectorAll('[data-verify-email]').forEach((button) => {
     button.addEventListener('click', async () => {
@@ -685,21 +703,6 @@ function renderFilteredUsers() {
     });
   });
 
-
-  tbody.querySelectorAll('[data-approve]').forEach((button) => button.addEventListener('click', async () => {
-    button.disabled = true;
-    try {
-      const result = await api.patch(`/users/${button.dataset.approve}/approve`);
-      alert(result.message);
-      await loadUsers();
-    } catch (err) {
-      alert(err.message);
-      button.disabled = false;
-    }
-  }));
-  tbody.querySelectorAll('[data-archive]').forEach((b) => b.addEventListener('click', () => api.patch(`/users/${b.dataset.archive}/archive`).then(loadUsers)));
-  tbody.querySelectorAll('[data-reactivate]').forEach((b) => b.addEventListener('click', () => api.patch(`/users/${b.dataset.reactivate}/reactivate`).then(loadUsers)));
-
 }
 
 document.getElementById('addUserBtn').addEventListener('click', () => {
@@ -718,7 +721,7 @@ document.getElementById('addUserBtn').addEventListener('click', () => {
       <div class="field"><label>Full Name</label><input id="uName" placeholder="e.g. Sarah Jenkins" required /></div>
       <div class="field"><label>Email Address</label><input type="email" id="uEmail" placeholder="sarah@example.com" required /></div>
       <div class="field"><label>Phone Number</label><input id="uPhone" placeholder="Optional phone number" /></div>
-      <div class="field"><label>Temporary Password</label><input type="password" id="uPassword" minlength="6" placeholder="At least 6 characters" required /></div>
+      <div class="field"><label>Temporary Password</label><input type="password" id="uPassword" minlength="8" placeholder="At least 8 characters" required /></div>
       <button class="btn btn-primary btn-block" type="submit" style="margin-top:14px;">Create Account</button>
     </form>
   `);
@@ -752,10 +755,10 @@ async function loadStudents() {
 
   tbody.innerHTML = students.map((s) => `
     <tr>
-      <td><strong>${s.name}</strong></td>
-      <td>${s.className ? `<span class="badge" style="background:#F1F5F9; color:var(--ink);">${s.className}</span>` : '<em>Unassigned</em>'}</td>
-      <td>${s.parent ? s.parent.name : '<em>Unassigned</em>'}</td>
-      <td>${s.teacher ? s.teacher.name : '<em>Unassigned</em>'}</td>
+      <td><strong>${escapeDashboardHtml(s.name)}</strong></td>
+      <td>${s.className ? `<span class="badge" style="background:#F1F5F9; color:var(--ink);">${escapeDashboardHtml(s.className)}</span>` : '<em>Unassigned</em>'}</td>
+      <td>${s.parent ? escapeDashboardHtml(s.parent.name) : '<em>Unassigned</em>'}</td>
+      <td>${s.teacher ? escapeDashboardHtml(s.teacher.name) : '<em>Unassigned</em>'}</td>
       <td><span class="badge ${s.status}">${s.status}</span></td>
       <td>
         <div style="display:flex; gap:6px;">
@@ -816,10 +819,10 @@ document.getElementById('addStudentBtn').addEventListener('click', async () => {
       </div>
       <div class="grid-2">
         <div class="field"><label>Parent / Guardian</label>
-          <select id="sParent"><option value="">— Select parent —</option>${parents.map((p) => `<option value="${p.id}">${p.name} (${p.email})</option>`).join('')}</select>
+          <select id="sParent"><option value="">— Select parent —</option>${parents.map((p) => `<option value="${escapeDashboardHtml(p.id)}">${escapeDashboardHtml(p.name)} (${escapeDashboardHtml(p.email)})</option>`).join('')}</select>
         </div>
         <div class="field"><label>Assigned Teacher</label>
-          <select id="sTeacher"><option value="">— Select teacher —</option>${teachers.map((t) => `<option value="${t.id}">${t.name}</option>`).join('')}</select>
+          <select id="sTeacher"><option value="">— Select teacher —</option>${teachers.map((t) => `<option value="${escapeDashboardHtml(t.id)}">${escapeDashboardHtml(t.name)}</option>`).join('')}</select>
         </div>
       </div>
       <div class="field"><label>Notes / Dietary / Emergency</label><textarea id="sNotes" rows="2" placeholder="Optional notes…"></textarea></div>
@@ -921,17 +924,17 @@ function renderFeesTable(fees, query = '') {
       .toFixed(2));
     const remainingBalance = Math.max(0, Number((Number(f.amount) - totalPaid).toFixed(2)));
     const status = totalPaid <= 0 ? 'unpaid' : (remainingBalance === 0 ? 'paid' : 'partial');
-    const statusLabel = { unpaid: 'Unpaid', partial: 'Partial Payment', paid: 'Paid' }[status];
+    const statusLabel = { unpaid: 'Unpaid', partial: 'Partial', paid: 'Paid' }[status];
     return `
       <tr>
         <td data-label="Student"><strong class="fee-primary-value">${escapeDashboardHtml(f.student ? f.student.name : '—')}</strong></td>
         <td data-label="Description">${escapeDashboardHtml(f.description)}${renderAdminPaymentHistory(f)}</td>
         <td data-label="Total Amount" class="fee-numeric"><strong class="fee-primary-value">${fmtMoney(f.amount)}</strong></td>
         <td data-label="Total Paid" class="fee-numeric">${fmtMoney(totalPaid)}</td>
-        <td data-label="Remaining" class="fee-numeric"><span class="fee-balance">${fmtMoney(remainingBalance)}</span></td>
-        <td data-label="Due Date">${fmtDate(f.dueDate)}</td>
-        <td data-label="Status"><span class="badge ${status}">${statusLabel}</span></td>
-        <td data-label="Actions"><div class="fee-row-actions">${status !== 'paid' ? `<button class="btn btn-secondary btn-sm" title="Record cash payment" aria-label="Record cash payment for ${escapeDashboardHtml(f.student ? f.student.name : 'student')}" data-pay="${f._id}" data-remaining="${remainingBalance}" data-total-fee="${f.amount}"><i class="fa-solid fa-money-bill-wave" aria-hidden="true"></i></button><button type="button" class="btn btn-ghost btn-sm" title="Remind parent" aria-label="Remind parent about ${escapeDashboardHtml(f.student ? f.student.name : 'student')}" data-fee-reminder="${f._id}"><i class="fa-solid fa-envelope" aria-hidden="true"></i></button>` : '<span class="badge paid"><i class="fa-solid fa-check"></i> Settled</span>'}</div></td>
+        <td data-label="Remaining" class="fee-numeric"><span class="fee-balance${remainingBalance === 0 ? ' is-zero' : ''}">${fmtMoney(remainingBalance)}</span></td>
+        <td data-label="Due Date">${feeDueDateCell(f, status)}</td>
+        <td data-label="Status">${feeStatusCell(f, status, statusLabel)}</td>
+        <td data-label="Actions"><div class="fee-row-actions">${status !== 'paid' ? `<button class="btn btn-secondary btn-sm" title="Record cash payment" aria-label="Record cash payment for ${escapeDashboardHtml(f.student ? f.student.name : 'student')}" data-pay="${f._id}" data-remaining="${remainingBalance}" data-total-fee="${f.amount}"><i class="fa-solid fa-money-bill-wave" aria-hidden="true"></i></button><button type="button" class="btn btn-ghost btn-sm" title="Remind parent" aria-label="Remind parent about ${escapeDashboardHtml(f.student ? f.student.name : 'student')}" data-fee-reminder="${f._id}"><i class="fa-solid fa-envelope" aria-hidden="true"></i></button>` : '<span class="fee-settled"><i class="fa-solid fa-check" aria-hidden="true"></i> Settled</span>'}</div></td>
       </tr>
     `;
   }).join('');
@@ -996,12 +999,12 @@ function openPaymentHistoryModal(fee) {
         <h2 style="margin:0; font-size:20px; font-weight:800; color:var(--ink); display:flex; align-items:center; gap:8px;">
           <i class="fa-solid fa-clock-rotate-left" style="color:var(--primary);"></i> Payment History
         </h2>
-        <span class="badge ${status}" style="font-size:12px; padding:3px 10px;">${statusLabel}</span>
+        <span class="badge ${status}" style="font-size:12px; padding:3px 10px;">${statusLabel}</span>${feeOverdueBadge(fee, status).replace('class="badge overdue"', 'class="badge overdue" style="font-size:12px; padding:3px 10px;"')}
       </div>
       <p style="margin:0; font-size:13.5px; color:var(--ink-muted); line-height:1.4;">
-        Student: <strong style="color:var(--ink); font-size:14px;">${fee.student ? fee.student.name : '—'}</strong>
-        ${fee.student?.className ? `<span style="color:var(--ink-muted);"> (${fee.student.className})</span>` : ''}
-        &nbsp;&bull;&nbsp; Fee: <strong style="color:var(--ink);">${fee.description}</strong>
+        Student: <strong style="color:var(--ink); font-size:14px;">${fee.student ? escapeDashboardHtml(fee.student.name) : '—'}</strong>
+        ${fee.student?.className ? `<span style="color:var(--ink-muted);"> (${escapeDashboardHtml(fee.student.className)})</span>` : ''}
+        &nbsp;&bull;&nbsp; Fee: <strong style="color:var(--ink);">${escapeDashboardHtml(fee.description)}</strong>
       </p>
     </div>
 
@@ -1053,7 +1056,7 @@ function openPaymentHistoryModal(fee) {
                     <td style="padding:12px 14px; white-space:nowrap; font-weight:700; color:var(--primary); font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size:12.5px;">${receiptNum}</td>
                     <td style="padding:12px 14px; white-space:nowrap; text-align:right; font-weight:700; color:${isVoided ? '#94A3B8' : '#15803D'}; font-size:13.5px;">${fmtMoney(p.amountPaid)}</td>
                     <td style="padding:12px 14px; white-space:nowrap; text-align:right; color:#475569; font-weight:600;">${fmtMoney(balAfter)}</td>
-                    <td style="padding:12px 14px; white-space:nowrap; color:#334155;">${p.loggedBy?.name || 'Admin'}</td>
+                    <td style="padding:12px 14px; white-space:nowrap; color:#334155;">${escapeDashboardHtml(p.loggedBy?.name || 'Admin')}</td>
                     <td style="padding:12px 14px; white-space:nowrap; text-align:center;">
                       <span class="badge ${isVoided ? 'archived' : 'approved'}" style="font-size:11px; padding:2px 8px;">${isVoided ? 'Voided' : 'Issued'}</span>
                     </td>
@@ -1156,39 +1159,34 @@ function openPaymentReportsModal() {
   let lastGeneratedReportData = null;
 
   Modal.open(`
-    <div style="border-bottom:1px solid #E2E8F0; padding-bottom:14px; margin-bottom:16px; padding-right:48px;">
-      <h2 style="margin:0 0 4px; font-size:20px; font-weight:800; color:var(--ink); display:flex; align-items:center; gap:8px;">
-        <i class="fa-solid fa-file-invoice-dollar" style="color:var(--primary);"></i> Payment &amp; Collections Reports
-      </h2>
-      <p style="margin:0; font-size:13px; color:var(--ink-muted);">Generate official daily, monthly, and yearly payment collection reports.</p>
+    <div class="pay-report-head">
+      <h2><i class="fa-solid fa-file-invoice-dollar" aria-hidden="true"></i> Payment &amp; Collections Reports</h2>
+      <p>Official daily, monthly, and yearly payment collection reports.</p>
     </div>
 
-    <!-- Report Type Tabs & Filter Row -->
-    <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:12px 16px; margin-bottom:16px;">
-      <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:12px;">
-        <div style="display:flex; gap:6px;">
-          <button type="button" class="btn btn-sm btn-primary" id="tabDailyReport">Daily Report</button>
-          <button type="button" class="btn btn-sm btn-secondary" id="tabMonthlyReport">Monthly Report</button>
-          <button type="button" class="btn btn-sm btn-secondary" id="tabYearlyReport">Yearly Report</button>
-        </div>
+    <!-- Report type (segmented control) + period picker -->
+    <div class="pay-report-controls">
+      <div class="pay-report-tabs" role="tablist" aria-label="Report period">
+        <button type="button" class="pay-report-tab is-active" id="tabDailyReport" role="tab" aria-selected="true">Daily</button>
+        <button type="button" class="pay-report-tab" id="tabMonthlyReport" role="tab" aria-selected="false">Monthly</button>
+        <button type="button" class="pay-report-tab" id="tabYearlyReport" role="tab" aria-selected="false">Yearly</button>
       </div>
-
-      <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
-        <div id="filterDailyWrapper" style="display:flex; align-items:center; gap:8px;">
-          <label style="font-size:13px; font-weight:600; color:var(--ink);">Date:</label>
-          <input type="date" id="reportDailyInput" value="${todayStr}" style="padding:6px 10px; border:1px solid var(--border); border-radius:6px; font-size:13px;" />
+      <div class="pay-report-period">
+        <div class="pay-report-field" id="filterDailyWrapper">
+          <label for="reportDailyInput">Date</label>
+          <input type="date" id="reportDailyInput" value="${todayStr}" />
         </div>
-        <div id="filterMonthlyWrapper" style="display:none; align-items:center; gap:8px;">
-          <label style="font-size:13px; font-weight:600; color:var(--ink);">Month:</label>
-          <input type="month" id="reportMonthlyInput" value="${thisMonthStr}" style="padding:6px 10px; border:1px solid var(--border); border-radius:6px; font-size:13px;" />
+        <div class="pay-report-field" id="filterMonthlyWrapper" hidden>
+          <label for="reportMonthlyInput">Month</label>
+          <input type="month" id="reportMonthlyInput" value="${thisMonthStr}" />
         </div>
-        <div id="filterYearlyWrapper" style="display:none; align-items:center; gap:8px;">
-          <label style="font-size:13px; font-weight:600; color:var(--ink);">Year:</label>
-          <select id="reportYearlyInput" style="padding:6px 10px; border:1px solid var(--border); border-radius:6px; font-size:13px;">
+        <div class="pay-report-field" id="filterYearlyWrapper" hidden>
+          <label for="reportYearlyInput">Year</label>
+          <select id="reportYearlyInput">
             ${sortedYears.map((y) => `<option value="${y}" ${y === currentYear ? 'selected' : ''}>${y}</option>`).join('')}
           </select>
         </div>
-        <button type="button" class="btn btn-primary btn-sm" id="btnRunReport"><i class="fa-solid fa-arrows-rotate"></i> Generate Report</button>
+        <button type="button" class="btn btn-secondary btn-sm pay-report-refresh" id="btnRunReport" title="Refresh report" aria-label="Refresh report"><i class="fa-solid fa-arrows-rotate" aria-hidden="true"></i></button>
       </div>
     </div>
 
@@ -1214,12 +1212,13 @@ function openPaymentReportsModal() {
 
   function setTab(type) {
     currentReportType = type;
-    tabDaily.className = `btn btn-sm ${type === 'daily' ? 'btn-primary' : 'btn-secondary'}`;
-    tabMonthly.className = `btn btn-sm ${type === 'monthly' ? 'btn-primary' : 'btn-secondary'}`;
-    tabYearly.className = `btn btn-sm ${type === 'yearly' ? 'btn-primary' : 'btn-secondary'}`;
-    filterDaily.style.display = type === 'daily' ? 'flex' : 'none';
-    filterMonthly.style.display = type === 'monthly' ? 'flex' : 'none';
-    filterYearly.style.display = type === 'yearly' ? 'flex' : 'none';
+    [[tabDaily, 'daily'], [tabMonthly, 'monthly'], [tabYearly, 'yearly']].forEach(([tab, tabType]) => {
+      tab.classList.toggle('is-active', type === tabType);
+      tab.setAttribute('aria-selected', String(type === tabType));
+    });
+    filterDaily.hidden = type !== 'daily';
+    filterMonthly.hidden = type !== 'monthly';
+    filterYearly.hidden = type !== 'yearly';
     generateReport();
   }
 
@@ -1306,39 +1305,42 @@ function openPaymentReportsModal() {
 
     const outputEl = document.getElementById('reportOutputArea');
     outputEl.innerHTML = `
-      <div style="margin-bottom:14px; display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px;">
+      <div class="pay-report-title">
         <div>
-          <h3 style="margin:0; font-size:16px; color:var(--ink);">${title}</h3>
-          <span style="font-size:13px; color:var(--ink-muted); font-weight:600;">${periodLabel}</span>
+          <h3>${title}</h3>
+          <span class="period">${periodLabel}</span>
         </div>
-        <span style="font-size:12px; color:var(--ink-muted);">Generated on: ${new Date().toLocaleTimeString('en-PH')}</span>
+        <span class="generated">Generated ${new Date().toLocaleString('en-PH', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
       </div>
 
       <!-- Stat Cards -->
-      <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:12px; margin-bottom:16px;">
-        <div style="background:#F0FDF4; border:1px solid #BBF7D0; border-radius:10px; padding:12px 16px;">
-          <div style="font-size:11px; text-transform:uppercase; font-weight:700; color:#15803D; letter-spacing:0.04em;">Total Collections</div>
-          <div style="font-size:18px; font-weight:800; color:#15803D; margin-top:2px;">${fmtMoney(totalCollected)}</div>
+      <div class="pay-report-stats">
+        <div class="pay-report-stat is-total">
+          <div class="label">Total Collections</div>
+          <div class="value">${fmtMoney(totalCollected)}</div>
         </div>
-        <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:10px; padding:12px 16px;">
-          <div style="font-size:11px; text-transform:uppercase; font-weight:700; color:var(--ink-muted); letter-spacing:0.04em;">Transactions</div>
-          <div style="font-size:18px; font-weight:800; color:var(--ink); margin-top:2px;">${activePayments.length} paid</div>
+        <div class="pay-report-stat">
+          <div class="label">Payments</div>
+          <div class="value">${activePayments.length}</div>
+          <div class="sub">${activePayments.length === 1 ? 'receipt issued' : 'receipts issued'}</div>
         </div>
-        <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:10px; padding:12px 16px;">
-          <div style="font-size:11px; text-transform:uppercase; font-weight:700; color:var(--ink-muted); letter-spacing:0.04em;">Unique Students</div>
-          <div style="font-size:18px; font-weight:800; color:var(--ink); margin-top:2px;">${uniqueStudents.size}</div>
+        <div class="pay-report-stat">
+          <div class="label">Students</div>
+          <div class="value">${uniqueStudents.size}</div>
+          <div class="sub">${uniqueStudents.size === 1 ? 'student paid' : 'students paid'}</div>
         </div>
-        <div style="background:${voidedPayments.length ? '#FEF2F2' : '#F8FAFC'}; border:1px solid ${voidedPayments.length ? '#FECACA' : '#E2E8F0'}; border-radius:10px; padding:12px 16px;">
-          <div style="font-size:11px; text-transform:uppercase; font-weight:700; color:${voidedPayments.length ? '#DC2626' : 'var(--ink-muted)'}; letter-spacing:0.04em;">Voided Payments</div>
-          <div style="font-size:18px; font-weight:800; color:${voidedPayments.length ? '#DC2626' : 'var(--ink)'}; margin-top:2px;">${voidedPayments.length} (${fmtMoney(voidedTotal)})</div>
+        <div class="pay-report-stat${voidedPayments.length ? ' is-void' : ''}">
+          <div class="label">Voided</div>
+          <div class="value">${voidedPayments.length}</div>
+          <div class="sub">${fmtMoney(voidedTotal)} voided</div>
         </div>
       </div>
 
       <!-- Report Transactions Table -->
       ${!filteredPayments.length ? `
-        <div class="empty-state" style="padding:28px 16px; border:1px solid #E2E8F0; border-radius:10px;">
-          <i class="fa-solid fa-receipt"></i>
-          <p>No payment records found for ${periodLabel}.</p>
+        <div class="pay-report-empty">
+          <i class="fa-solid fa-receipt" aria-hidden="true"></i>
+          <span>No payments were recorded for ${periodLabel}.</span>
         </div>
       ` : `
         <div style="max-height:320px; overflow-x:auto; overflow-y:auto; border:1px solid #E2E8F0; border-radius:10px; background:#fff;">
@@ -1365,7 +1367,7 @@ function openPaymentReportsModal() {
                     <td style="padding:10px 14px; white-space:nowrap;"><strong>${p.studentName}</strong></td>
                     <td style="padding:10px 14px; white-space:nowrap;">${p.feeDescription}</td>
                     <td style="padding:10px 14px; font-weight:700; text-align:right; color:${isVoid ? '#94A3B8' : '#15803D'}; white-space:nowrap;">${fmtMoney(p.amountPaid)}</td>
-                    <td style="padding:10px 14px; white-space:nowrap; color:#334155;">${p.loggedBy?.name || 'Admin'}</td>
+                    <td style="padding:10px 14px; white-space:nowrap; color:#334155;">${escapeDashboardHtml(p.loggedBy?.name || 'Admin')}</td>
                     <td style="padding:10px 14px; text-align:center; white-space:nowrap;"><span class="badge ${isVoid ? 'archived' : 'approved'}" style="font-size:11px; padding:2px 8px;">${isVoid ? 'Voided' : 'Issued'}</span></td>
                     <td style="padding:10px 14px; text-align:right; white-space:nowrap;">
                       <button class="btn btn-secondary btn-sm" data-rep-receipt="${p._id}" data-rep-fee="${p.feeId}" style="padding:3px 8px; font-size:12px; display:inline-flex; align-items:center; gap:4px;">
@@ -1443,7 +1445,7 @@ function printPaymentReport(reportData) {
       </div>
       <div style="text-align:right; font-size:12px; color:#64748b;">
         <div>Generated: ${new Date().toLocaleString('en-PH')}</div>
-        <div>Staff: ${user.name}</div>
+        <div>Staff: ${escapeDashboardHtml(user.name)}</div>
       </div>
     </div>
 
@@ -1573,7 +1575,7 @@ document.getElementById('addFeeBtn').addEventListener('click', async () => {
     <div id="modalMsg" class="form-msg"></div>
     <form id="feeForm">
       <div class="field"><label>Student</label>
-        <select id="fStudent" required>${students.map((s) => `<option value="${s._id}">${s.name}</option>`).join('')}</select>
+        <select id="fStudent" required>${students.map((s) => `<option value="${escapeDashboardHtml(s._id)}">${escapeDashboardHtml(s.name)}</option>`).join('')}</select>
       </div>
       <div class="field"><label>Description</label><input id="fDesc" placeholder="e.g. Tuition Fee — October" required /></div>
       <div class="grid-2">
@@ -2103,9 +2105,9 @@ async function loadLogs() {
   tbody.innerHTML = logs.length ? logs.map((l) => `
     <tr>
       <td style="white-space:nowrap; font-size:13px;"><i class="fa-regular fa-clock" style="color:var(--primary); margin-right:6px;"></i>${new Date(l.createdAt).toLocaleString()}</td>
-      <td><strong>${l.user ? `${l.user.name}` : 'System'}</strong> ${l.user ? `<span class="badge" style="background:#F1F5F9; color:var(--ink);">${l.user.role}</span>` : ''}</td>
-      <td><code>${l.action}</code></td>
-      <td>${l.details || '—'}</td>
+      <td><strong>${l.user ? escapeDashboardHtml(l.user.name) : 'System'}</strong> ${l.user ? `<span class="badge" style="background:#F1F5F9; color:var(--ink);">${escapeDashboardHtml(l.user.role)}</span>` : ''}</td>
+      <td><code>${escapeDashboardHtml(l.action)}</code></td>
+      <td>${l.details ? escapeDashboardHtml(l.details) : '—'}</td>
     </tr>
   `).join('') : `<tr><td colspan="4"><div class="empty-state"><i class="fa-solid fa-clock-rotate-left"></i><p>No activity recorded yet.</p></div></td></tr>`;
 }

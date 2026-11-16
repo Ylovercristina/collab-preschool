@@ -184,14 +184,28 @@ async function loadAdminEnrollment() {
       <span>${applicationCounts.pending || 0} pending</span>
       <span>${applicationCounts.approved || 0} approved</span>
       <span>${applicationCounts.rejected || 0} rejected</span>`;
+    const enrollmentNameKey = (name) => String(name || '').trim().replace(/s+/g, ' ').toLowerCase();
+    const nameCounts = applications
+      .filter((application) => ['pending', 'approving', 'approved'].includes(application.status))
+      .reduce((counts, application) => {
+        const key = enrollmentNameKey(application.studentName);
+        counts[key] = (counts[key] || 0) + 1;
+        return counts;
+      }, {});
+    const pendingCount = applicationCounts.pending || 0;
     container.innerHTML = applications.length ? `
+      ${pendingCount ? `<div class="enrollment-bulk-bar">
+        <span id="enrollmentSelectedCount">No applications selected</span>
+        <button type="button" class="btn btn-primary btn-sm" id="enrollmentBulkApprove" disabled><i class="fa-solid fa-check-double" aria-hidden="true"></i> Approve selected</button>
+      </div>` : ''}
       <table>
-        <thead><tr><th>Student</th><th>Parent / Guardian</th><th>Submitted by</th><th>Term</th><th>Class requested</th><th>Submitted</th><th>Status</th><th>Actions</th></tr></thead>
+        <thead><tr><th class="enrollment-select-cell">${pendingCount ? '<input type="checkbox" id="enrollmentSelectAll" aria-label="Select all pending applications" />' : ''}</th><th>Student</th><th>Parent / Guardian</th><th>Submitted by</th><th>Term</th><th>Class requested</th><th>Submitted</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>${applications.map((application) => `
           <tr>
+            <td class="enrollment-select-cell">${application.status === 'pending' ? `<input type="checkbox" data-enrollment-select="${enrollmentEscape(application._id)}" aria-label="Select ${enrollmentEscape(application.studentName)}" />` : ''}</td>
             <td><span class="student-name-cell">${application.studentPhoto
               ? `<button type="button" class="student-photo student-photo-sm student-photo-button" data-photo-open aria-label="View photo of ${enrollmentEscape(application.studentName)}"><img data-protected-src="/enrollment/applications/${enrollmentEscape(application._id)}/photo" alt="Photo of ${enrollmentEscape(application.studentName)}" /></button>`
-              : `<span class="student-photo student-photo-sm"><span class="student-photo-initials" aria-hidden="true">${enrollmentEscape(studentInitials(application.studentName))}</span></span>`}<span><strong>${enrollmentEscape(application.studentName)}</strong><div style="font-size:12px;color:var(--ink-muted);">Born ${fmtDate(application.birthdate)}</div></span></span></td>
+              : `<span class="student-photo student-photo-sm"><span class="student-photo-initials" aria-hidden="true">${enrollmentEscape(studentInitials(application.studentName))}</span></span>`}<span><strong>${enrollmentEscape(application.studentName)}</strong><div style="font-size:12px;color:var(--ink-muted);">Born ${fmtDate(application.birthdate)}</div>${application.status === 'pending' && nameCounts[enrollmentNameKey(application.studentName)] > 1 ? '<span class="badge archived enrollment-duplicate-flag" title="Another application or enrolled student has this name"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> Duplicate name</span>' : ''}</span></span></td>
             <td>${enrollmentEscape(application.guardianName || application.parent?.name || '—')}<div style="font-size:12px;color:var(--ink-muted);">${enrollmentEscape(application.guardianPhone || application.parent?.phone || '')}</div></td>
             <td>${enrollmentEscape(application.applicant?.name || application.parent?.name || '—')}<div style="font-size:12px;color:var(--ink-muted);">${enrollmentEscape(application.submittedRole || 'parent')}</div></td>
             <td>${enrollmentEscape(application.term)} ${enrollmentEscape(application.schoolYear)}</td>
@@ -200,7 +214,7 @@ async function loadAdminEnrollment() {
             <td><span class="badge ${application.status === 'approved' ? 'approved' : application.status === 'rejected' ? 'archived' : 'pending'}">${enrollmentEscape(application.status === 'approving' ? 'approval in progress' : application.status)}</span></td>
             <td>${application.status === 'pending' ? `<div class="enrollment-review-actions"><button class="btn btn-primary btn-sm" data-enrollment-review="${application._id}" data-enrollment-status="approved">Approve</button><button class="btn btn-ghost btn-sm" data-enrollment-review="${application._id}" data-enrollment-status="rejected">Reject</button></div>` : application.status === 'approving' ? `<button class="btn btn-primary btn-sm" data-enrollment-review="${application._id}" data-enrollment-status="approved">Resume approval</button>` : application.student ? `Student: ${enrollmentEscape(application.student.studentId || application.student.name)}` : '—'}</td>
           </tr>
-          ${application.notes ? `<tr><td colspan="8" style="font-size:13px;color:var(--ink-muted);">Additional information: ${enrollmentEscape(application.notes)}</td></tr>` : ''}
+          ${application.notes ? `<tr><td colspan="9" style="font-size:13px;color:var(--ink-muted);">Additional information: ${enrollmentEscape(application.notes)}</td></tr>` : ''}
         `).join('')}</tbody>
       </table>
     ` : '<div class="empty-state"><i class="fa-solid fa-file-circle-question"></i><p>No enrollment applications have been submitted.</p></div>';
@@ -269,7 +283,64 @@ document.getElementById('cancelEnrollmentEdit')?.addEventListener('click', () =>
     : 'No enrollment period is configured yet.';
 });
 
+function enrollmentSelectedIds() {
+  return [...document.querySelectorAll('#adminEnrollmentApplications [data-enrollment-select]:checked')]
+    .map((box) => box.dataset.enrollmentSelect);
+}
+
+function updateEnrollmentSelection() {
+  const boxes = [...document.querySelectorAll('#adminEnrollmentApplications [data-enrollment-select]')];
+  const selected = boxes.filter((box) => box.checked).length;
+  const selectAll = document.getElementById('enrollmentSelectAll');
+  if (selectAll) {
+    selectAll.checked = boxes.length > 0 && selected === boxes.length;
+    selectAll.indeterminate = selected > 0 && selected < boxes.length;
+  }
+  const count = document.getElementById('enrollmentSelectedCount');
+  if (count) count.textContent = selected ? `${selected} selected` : 'No applications selected';
+  const approve = document.getElementById('enrollmentBulkApprove');
+  if (approve) {
+    approve.disabled = !selected;
+    approve.innerHTML = `<i class="fa-solid fa-check-double" aria-hidden="true"></i> Approve selected${selected ? ` (${selected})` : ''}`;
+  }
+}
+
+document.getElementById('adminEnrollmentApplications')?.addEventListener('change', (event) => {
+  if (event.target.id === 'enrollmentSelectAll') {
+    document.querySelectorAll('#adminEnrollmentApplications [data-enrollment-select]').forEach((box) => {
+      box.checked = event.target.checked;
+    });
+  }
+  if (event.target.id === 'enrollmentSelectAll' || event.target.matches('[data-enrollment-select]')) updateEnrollmentSelection();
+});
+
 document.getElementById('adminEnrollmentApplications')?.addEventListener('click', async (event) => {
+  const bulkButton = event.target.closest('#enrollmentBulkApprove');
+  if (bulkButton) {
+    const ids = enrollmentSelectedIds();
+    if (!ids.length) return;
+    if (!confirm(`Approve ${ids.length} selected application${ids.length === 1 ? '' : 's'} and add the students to the active roster?`)) return;
+    bulkButton.disabled = true;
+    bulkButton.textContent = 'Approving…';
+    const message = document.getElementById('adminEnrollmentMessage');
+    try {
+      const result = await api.post('/enrollment/applications/bulk-approve', { ids });
+      await loadAdminEnrollment();
+      if (result.failed && result.failed.length) {
+        const lines = result.failed.map((item) => `• ${item.studentName}: ${item.message}`);
+        showErrorPopup([`${result.message} These were not approved:`, '', ...lines].join('\n'), {
+          title: 'Some applications were not approved',
+        });
+      } else {
+        showMsg(message, result.message, 'success');
+      }
+    } catch (err) {
+      showMsg(message, err.message);
+      updateEnrollmentSelection();
+    }
+    return;
+  }
+
   const button = event.target.closest('[data-enrollment-review]');
   if (!button) return;
   const action = button.dataset.enrollmentStatus;

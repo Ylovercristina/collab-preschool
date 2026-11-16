@@ -4,6 +4,8 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { OAuth2Client } = require('google-auth-library');
 const User = require('../models/User');
+const RevokedToken = require('../models/RevokedToken');
+const { hashToken } = require('../middleware/auth');
 const AuthSettings = require('../models/AuthSettings');
 const GoogleOAuthClient = require('../models/GoogleOAuthClient');
 const RecaptchaClient = require('../models/RecaptchaClient');
@@ -384,7 +386,35 @@ function publicUser(user) {
   };
 }
 
-// POST /api/auth/signup  (admin or parent self-signup; teachers are added by an admin)
+// Checks the reCAPTCHA token sent with the password login and registration forms.
+// Only enforced while the admin's "CAPTCHA enabled" setting is on.
+// Returns null when the request may continue, otherwise { status, message }.
+async function checkFormCaptcha(req) {
+  let settings;
+  try {
+    settings = await loadAuthSettings();
+  } catch (err) {
+    console.error('[auth] Could not load authentication settings:', err.message);
+    return { status: 503, message: 'Authentication settings are temporarily unavailable.' };
+  }
+  if (settings.captchaEnabled !== true) return null;
+  let result;
+  try {
+    result = await verifyRecaptchaToken(req.body && req.body.captchaToken, req.ip, activeRecaptchaClientId(settings));
+  } catch (err) {
+    console.error('[CAPTCHA configuration error]:', err.message);
+    return { status: 503, message: 'CAPTCHA is not configured. Please contact the school admin.' };
+  }
+  if (result.ok) return null;
+  const messages = {
+    missing: 'Please complete the CAPTCHA verification first.',
+    invalid: 'CAPTCHA verification failed or expired. Please try again.',
+    verification: 'CAPTCHA verification could not be completed. Please try again.',
+  };
+  return { status: 400, message: messages[result.reason] || messages.invalid };
+}
+
+// POST /api/auth/signup  (parent self-signup; admin and teacher accounts are added by an admin)
 exports.signup = async (req, res) => {
   try {
     const { name, email, password, role, phone } = req.body;
@@ -393,28 +423,60 @@ exports.signup = async (req, res) => {
       return res.status(400).json({ message: 'Name, email, password and role are required.' });
     }
     if (!isValidEmail(normalizedEmail)) return res.status(400).json({ message: 'Enter a valid email address.' });
-    if (!['admin', 'parent'].includes(role)) {
-      return res.status(400).json({ message: 'Only admin and parent accounts can self-register. Ask an admin to create a teacher account.' });
+    // Public signup is for parents only. Admin and teacher accounts are created by an existing admin.
+    if (role !== 'parent') {
+      return res.status(400).json({ message: 'Only parent accounts can self-register. Ask the school admin to create staff accounts.' });
     }
+    if (typeof password !== 'string' || password.length < 8) {
+      return res.status(400).json({ message: 'Password must be at least 8 characters long.' });
+    }
+    const captchaProblem = await checkFormCaptcha(req);
+    if (captchaProblem) return res.status(captchaProblem.status).json({ message: captchaProblem.message });
     const exists = await User.findOne(googleEmailQuery(normalizedEmail));
     if (exists) return res.status(409).json({ message: 'An account with that email already exists.' });
 
-    const user = await User.create({ name, email: normalizedEmail, password, role, phone });
-    await logActivity(user._id, 'signup', `${role} account created`);
+    const user = await User.create({ name, email: normalizedEmail, password, role: 'parent', status: 'pending', phone });
+    await logActivity(user._id, 'signup', 'parent account created');
 
-    if (user.role === 'parent') {
-      return res.status(201).json({
-        message: 'Account created. An admin needs to approve it before you can log in.',
-        user: publicUser(user),
-      });
-    }
-
-    const token = signToken(user);
-    res.status(201).json({ message: 'Account created.', token, user: publicUser(user) });
+    res.status(201).json({
+      message: 'Account created. An admin needs to approve it before you can log in.',
+      user: publicUser(user),
+    });
   } catch (err) {
+    if (err.name === 'ValidationError') return res.status(400).json({ message: err.message });
     res.status(500).json({ message: 'Signup failed.', error: err.message });
   }
 };
+
+// Brute-force protection: after LOGIN_MAX_FAILURES wrong passwords for the same
+// email from the same IP within LOGIN_WINDOW_MS, block further attempts until the window ends.
+const LOGIN_MAX_FAILURES = 5;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const loginFailures = new Map();
+
+function loginAttemptKey(req, email) {
+  return `${req.ip || ''}|${email}`;
+}
+
+function loginLockedSeconds(key) {
+  const entry = loginFailures.get(key);
+  if (!entry) return 0;
+  if (entry.resetAt <= Date.now()) {
+    loginFailures.delete(key);
+    return 0;
+  }
+  return entry.count >= LOGIN_MAX_FAILURES ? Math.ceil((entry.resetAt - Date.now()) / 1000) : 0;
+}
+
+function recordLoginFailure(key) {
+  const now = Date.now();
+  const entry = loginFailures.get(key);
+  if (!entry || entry.resetAt <= now) loginFailures.set(key, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
+  else entry.count += 1;
+  if (loginFailures.size > 10000) {
+    for (const [k, v] of loginFailures) if (v.resetAt <= now) loginFailures.delete(k);
+  }
+}
 
 // POST /api/auth/login
 exports.login = async (req, res) => {
@@ -424,18 +486,32 @@ exports.login = async (req, res) => {
     const normalizedEmail = resetEmail(email);
     if (!isValidEmail(normalizedEmail)) return res.status(400).json({ message: 'Enter a valid email address.' });
 
+    const attemptKey = loginAttemptKey(req, normalizedEmail);
+    const lockedFor = loginLockedSeconds(attemptKey);
+    if (lockedFor > 0) {
+      res.set('Retry-After', String(lockedFor));
+      return res.status(429).json({ message: `Too many failed login attempts. Try again in ${Math.ceil(lockedFor / 60)} minute(s).` });
+    }
+    const captchaProblem = await checkFormCaptcha(req);
+    if (captchaProblem) return res.status(captchaProblem.status).json({ message: captchaProblem.message });
+
     const user = await User.findOne(googleEmailQuery(normalizedEmail)).select('+password');
     if (user && !user.password && user.googleId) {
       return res.status(401).json({ message: 'This account uses Google sign-in.' });
     }
-    if (!user || !user.password || !(await user.comparePassword(password))) {
+    if (!user || !user.password || typeof password !== 'string' || !(await user.comparePassword(password))) {
+      recordLoginFailure(attemptKey);
       return res.status(401).json({ message: 'Incorrect email or password.' });
     }
+    loginFailures.delete(attemptKey);
     if (user.status === 'pending') {
       return res.status(403).json({ message: 'Your account is awaiting admin approval.' });
     }
     if (user.status === 'archived') {
       return res.status(403).json({ message: 'This account has been archived. Contact the school admin.' });
+    }
+    if (user.status === 'rejected') {
+      return res.status(403).json({ message: 'Your registration was not approved. Contact the school admin if you think this is a mistake.' });
     }
 
     const token = signToken(user);
@@ -448,8 +524,22 @@ exports.login = async (req, res) => {
 
 // POST /api/auth/logout  (JWTs are stateless; client just discards the token)
 exports.logout = async (req, res) => {
+  try {
+    if (req.authToken) {
+      // Revoke this token on the server so a copied token stops working after logout.
+      const expiresAt = req.authTokenExpiresAt || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+      await RevokedToken.updateOne(
+        { tokenHash: hashToken(req.authToken) },
+        { $setOnInsert: { tokenHash: hashToken(req.authToken), user: req.user._id, expiresAt } },
+        { upsert: true }
+      );
+    }
+  } catch (err) {
+    console.error('[auth] Could not revoke token on logout:', err.message);
+    return res.status(500).json({ message: 'Could not log out on the server. Please try again.' });
+  }
   if (req.user) await logActivity(req.user._id, 'logout');
-  res.json({ message: 'Logged out. Please discard your access token.' });
+  res.json({ message: 'Logged out.' });
 };
 
 // GET /api/auth/me
@@ -1333,6 +1423,7 @@ exports.googleCallback = async (req, res) => {
     await user.save();
 
     if (user.status === 'archived') return redirectGoogleError(res, 'archived');
+    if (user.status === 'rejected') return redirectGoogleError(res, 'rejected');
     if (user.status === 'pending') return redirectGoogleNotice(res, 'approval');
 
     await redirectWithGoogleHandoff(
@@ -1390,6 +1481,7 @@ exports.googleExchange = async (req, res) => {
     await user.save();
     if (user.status === 'pending') return res.status(403).json({ message: 'Your account is awaiting admin approval.' });
     if (user.status === 'archived') return res.status(403).json({ message: 'This account has been archived.' });
+    if (user.status === 'rejected') return res.status(403).json({ message: 'Your registration was not approved. Contact the school admin if you think this is a mistake.' });
 
     const token = signToken(user);
     await logActivity(user._id, 'login', 'Google sign-in');

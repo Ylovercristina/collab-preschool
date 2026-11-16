@@ -5,6 +5,7 @@ const logActivity = require('../utils/logActivity');
 const { resolveClassAssignment } = require('../utils/classAssignment');
 const crypto = require('crypto');
 const mongoose = require('mongoose');
+const { escapeRegex } = require('../utils/validation');
 const {
   removeStudentPhotoFile,
   copyStudentPhoto,
@@ -14,6 +15,30 @@ const {
 
 function normalizeStudentName(studentName) {
   return studentName.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+// Matches the same child's name ignoring capital letters and extra spaces.
+function sameNameRegex(studentName) {
+  const words = normalizeStudentName(String(studentName || '')).split(' ').map(escapeRegex);
+  return new RegExp(`^\\s*${words.join('\\s+')}\\s*$`, 'i');
+}
+
+// Finds an enrolled student or an open/approved application with the same child name.
+async function findSameNameEnrollment(studentName, excludeApplicationId = null) {
+  const nameFilter = sameNameRegex(studentName);
+  const applicationFilter = { studentName: nameFilter, status: { $in: ['pending', 'approving', 'approved'] } };
+  if (excludeApplicationId) applicationFilter._id = { $ne: excludeApplicationId };
+  const [student, application] = await Promise.all([
+    Student.findOne({ name: nameFilter, status: 'active' }).select('name studentId'),
+    EnrollmentApplication.findOne(applicationFilter).select('studentName status'),
+  ]);
+  if (student) return `A student named "${student.name}" is already enrolled (${student.studentId || 'existing record'}). Use a different name or contact the school.`;
+  if (application) {
+    return application.status === 'pending'
+      ? `An enrollment application for "${application.studentName}" is already waiting for review.`
+      : `"${application.studentName}" has already been enrolled.`;
+  }
+  return '';
 }
 
 function studentIdentityKey(studentName, birthdate) {
@@ -154,6 +179,9 @@ async function submitApplicationWithPhoto(req, res, markPhotoSaved) {
     if (applicationExists || studentExists) {
       return res.status(409).json({ message: 'An enrollment application or student record already exists for this student.' });
     }
+    // The same child name is treated as a duplicate even with a different birthdate.
+    const sameNameMessage = await findSameNameEnrollment(studentName);
+    if (sameNameMessage) return res.status(409).json({ message: sameNameMessage });
 
     const application = await EnrollmentApplication.create({
       applicant: req.user._id,
@@ -199,6 +227,93 @@ exports.getApplicationPhoto = async (req, res) => {
   }
 };
 
+// Approves one pending application and creates its student record.
+// Returns { code, body } so the single and bulk approve routes share the same rules.
+async function approveApplication(applicationId, reviewerId) {
+  const result = (code, payload) => ({ code, body: payload });
+  let application = await EnrollmentApplication.findOne({ _id: applicationId, status: 'pending' })
+    .populate('parent', 'name email phone');
+  if (application) {
+    const existingStudent = await Student.findOne({
+      name: sameNameRegex(application.studentName),
+      status: 'active',
+      enrollmentApplication: { $ne: application._id },
+    }).select('name studentId');
+    if (existingStudent) {
+      return result(409, { message: `A student named "${existingStudent.name}" is already enrolled (${existingStudent.studentId || 'existing record'}). This application was not approved.` });
+    }
+
+    application = await EnrollmentApplication.findOneAndUpdate(
+      { _id: application._id, status: 'pending' },
+      { $set: { status: 'approving', reviewedBy: reviewerId, reviewedAt: new Date() } },
+      { new: true }
+    ).populate('parent', 'name email phone');
+  } else {
+    application = await EnrollmentApplication.findOne({ _id: applicationId, status: 'approving' })
+      .populate('parent', 'name email phone');
+  }
+  if (!application) return result(404, { message: 'Pending enrollment application not found.' });
+
+  let student = await Student.findOne({ enrollmentApplication: application._id });
+  if (!student) {
+    const studentData = {
+      name: application.studentName,
+      birthdate: application.birthdate,
+      className: application.requestedClass || 'Unassigned',
+      enrollmentDate: new Date(),
+      guardianName: application.guardianName || application.parent?.name || '',
+      guardianPhone: application.guardianPhone || application.parent?.phone || '',
+      parent: application.parent?._id,
+      teacher: application.teacher,
+      enrollmentApplication: application._id,
+    };
+    // The student record gets its own copy, so replacing it later never affects the application.
+    if (application.studentPhoto) {
+      try {
+        studentData.photo = await copyStudentPhoto(application.studentPhoto);
+      } catch (err) {
+        console.error('[enrollment] Could not copy the application photo:', err.message);
+      }
+    }
+    // A requested class that is set up under Classes brings its teacher.
+    const resolvedClass = await resolveClassAssignment(studentData.className);
+    if (!resolvedClass.error) {
+      studentData.className = resolvedClass.className;
+      if (resolvedClass.teacher) studentData.teacher = resolvedClass.teacher;
+    }
+    try {
+      student = await Student.findOneAndUpdate(
+        { enrollmentApplication: application._id },
+        { $setOnInsert: studentData },
+        { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+      );
+      // Another approval created the student first: drop the unused photo copy.
+      if (studentData.photo && student.photo?.filename !== studentData.photo.filename) {
+        await removeStudentPhotoFile(studentData.photo.filename);
+      }
+    } catch (err) {
+      if (studentData.photo) await removeStudentPhotoFile(studentData.photo.filename);
+      if (err.code !== 11000) throw err;
+      student = await Student.findOne({ enrollmentApplication: application._id });
+      if (!student) throw err;
+    }
+  }
+
+  const approvedApplication = await EnrollmentApplication.findOneAndUpdate(
+    { _id: application._id, status: 'approving' },
+    { $set: { status: 'approved', student: student._id } },
+    { new: true }
+  );
+  if (approvedApplication) {
+    await logActivity(reviewerId, 'enrollment-application-approved', application.studentName);
+    return result(200, { application: approvedApplication });
+  }
+
+  const completedApplication = await EnrollmentApplication.findById(application._id);
+  if (completedApplication?.status === 'approved') return result(200, { application: completedApplication });
+  return result(409, { message: 'This enrollment application changed while it was being reviewed. Refresh and try again.' });
+}
+
 exports.reviewApplication = async (req, res) => {
   const { status } = req.body;
   if (!['approved', 'rejected'].includes(status)) {
@@ -226,90 +341,45 @@ exports.reviewApplication = async (req, res) => {
       return res.json({ application });
     }
 
-    let application = await EnrollmentApplication.findOne({ _id: req.params.id, status: 'pending' })
-      .populate('parent', 'name email phone');
-    if (application) {
-      const existingStudents = await Student.find({
-        birthdate: application.birthdate,
-        enrollmentApplication: { $ne: application._id },
-      }).select('name');
-      if (existingStudents.some((student) => (
-        normalizeStudentName(student.name) === normalizeStudentName(application.studentName)
-      ))) {
-        return res.status(409).json({ message: 'A student record already exists for this student. Review the existing student record before approving.' });
-      }
-
-      application = await EnrollmentApplication.findOneAndUpdate(
-        { _id: application._id, status: 'pending' },
-        { $set: { status: 'approving', reviewedBy: req.user._id, reviewedAt: new Date() } },
-        { new: true }
-      ).populate('parent', 'name email phone');
-    } else {
-      application = await EnrollmentApplication.findOne({ _id: req.params.id, status: 'approving' })
-        .populate('parent', 'name email phone');
-    }
-    if (!application) return res.status(404).json({ message: 'Pending enrollment application not found.' });
-
-    let student = await Student.findOne({ enrollmentApplication: application._id });
-    if (!student) {
-      const studentData = {
-        name: application.studentName,
-        birthdate: application.birthdate,
-        className: application.requestedClass || 'Unassigned',
-        enrollmentDate: new Date(),
-        guardianName: application.guardianName || application.parent?.name || '',
-        guardianPhone: application.guardianPhone || application.parent?.phone || '',
-        parent: application.parent?._id,
-        teacher: application.teacher,
-        enrollmentApplication: application._id,
-      };
-      // The student record gets its own copy, so replacing it later never affects the application.
-      if (application.studentPhoto) {
-        try {
-          studentData.photo = await copyStudentPhoto(application.studentPhoto);
-        } catch (err) {
-          console.error('[enrollment] Could not copy the application photo:', err.message);
-        }
-      }
-      // A requested class that is set up under Classes brings its teacher.
-      const resolvedClass = await resolveClassAssignment(studentData.className);
-      if (!resolvedClass.error) {
-        studentData.className = resolvedClass.className;
-        if (resolvedClass.teacher) studentData.teacher = resolvedClass.teacher;
-      }
-      try {
-        student = await Student.findOneAndUpdate(
-          { enrollmentApplication: application._id },
-          { $setOnInsert: studentData },
-          { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
-        );
-        // Another approval created the student first: drop the unused photo copy.
-        if (studentData.photo && student.photo?.filename !== studentData.photo.filename) {
-          await removeStudentPhotoFile(studentData.photo.filename);
-        }
-      } catch (err) {
-        if (studentData.photo) await removeStudentPhotoFile(studentData.photo.filename);
-        if (err.code !== 11000) throw err;
-        student = await Student.findOne({ enrollmentApplication: application._id });
-        if (!student) throw err;
-      }
-    }
-
-    const approvedApplication = await EnrollmentApplication.findOneAndUpdate(
-      { _id: application._id, status: 'approving' },
-      { $set: { status: 'approved', student: student._id } },
-      { new: true }
-    );
-    if (approvedApplication) {
-      await logActivity(req.user._id, 'enrollment-application-approved', application.studentName);
-      return res.json({ application: approvedApplication });
-    }
-
-    const completedApplication = await EnrollmentApplication.findById(application._id);
-    if (completedApplication?.status === 'approved') return res.json({ application: completedApplication });
-    return res.status(409).json({ message: 'This enrollment application changed while it was being reviewed. Refresh and try again.' });
+    const outcome = await approveApplication(req.params.id, req.user._id);
+    return res.status(outcome.code).json(outcome.body);
   } catch (err) {
     console.error(`Could not ${status} enrollment application:`, err);
     return res.status(500).json({ message: `Could not ${status} enrollment application.` });
   }
+};
+
+// POST /api/enrollment/applications/bulk-approve   { ids: [...] }   (admin)
+// Approves each selected application in turn with the same checks as a single approval.
+// Duplicates (including two selected applications for the same child name) are reported, not approved.
+exports.bulkApproveApplications = async (req, res) => {
+  const ids = Array.isArray(req.body && req.body.ids) ? [...new Set(req.body.ids.map(String))] : [];
+  if (!ids.length) return res.status(400).json({ message: 'Select at least one application to approve.' });
+  if (ids.length > 100) return res.status(400).json({ message: 'Approve at most 100 applications at a time.' });
+  if (ids.some((id) => !mongoose.isObjectIdOrHexString(id))) {
+    return res.status(400).json({ message: 'One or more selected applications are invalid.' });
+  }
+
+  const approved = [];
+  const failed = [];
+  for (const id of ids) {
+    const application = await EnrollmentApplication.findById(id).select('studentName status');
+    const name = application ? application.studentName : 'Unknown application';
+    try {
+      const outcome = await approveApplication(id, req.user._id);
+      if (outcome.code === 200) approved.push({ id, studentName: name });
+      else failed.push({ id, studentName: name, message: outcome.body.message });
+    } catch (err) {
+      console.error('[enrollment] Bulk approval failed for', id, err.message);
+      failed.push({ id, studentName: name, message: 'Could not approve this application. Try again.' });
+    }
+  }
+  if (approved.length) {
+    await logActivity(req.user._id, 'enrollment-applications-bulk-approved', `${approved.length} approved, ${failed.length} not approved`);
+  }
+  return res.json({
+    message: `${approved.length} approved${failed.length ? `, ${failed.length} not approved` : ''}.`,
+    approved,
+    failed,
+  });
 };
