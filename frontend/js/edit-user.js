@@ -81,6 +81,13 @@ async function loadEditUser() {
     return;
   }
 
+  // Only one person may edit an account at a time; others are told who is editing.
+  const editLock = await EditLocks.acquire('user', editUserId);
+  if (!editLock) {
+    showEditError('Someone else is editing this account right now. Please wait for them to save their changes, then refresh this page.', true);
+    return;
+  }
+
   try {
     const { user } = await api.get(`/users/${encodeURIComponent(editUserId)}`);
     populateEditUser(user);
@@ -151,7 +158,7 @@ editUserForm.addEventListener('submit', async (event) => {
   const submitButton = editUserForm.querySelector('[type="submit"]');
   submitButton.disabled = true;
   try {
-    await api.putFormData(`/users/${encodeURIComponent(editUserId)}`, formData);
+    await api.putFormData(`/users/${encodeURIComponent(editUserId)}`, formData, { version: loadedEditUser && loadedEditUser.updatedAt });
     showMsg(document.getElementById('editUserMessage'), 'User updated. Returning to Accounts...', 'success');
     window.setTimeout(() => { window.location.href = accountsUrl; }, 900);
   } catch (err) {

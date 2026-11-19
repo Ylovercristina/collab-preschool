@@ -5,7 +5,7 @@ async function connectDB() {
   try {
     await mongoose.connect(uri);
     const databaseTarget = uri.startsWith('mongodb+srv://') ? 'MongoDB Atlas' : 'MongoDB';
-    console.log(`[db] connected -> ${databaseTarget}`);
+    console.log(`[db] connected -> ${databaseTarget} (database: ${mongoose.connection.name})`);
   } catch (err) {
     console.error('[db] connection failed:', err.message);
     process.exit(1);

@@ -174,7 +174,7 @@ document.getElementById('markAllTeacherNotificationsRead')?.addEventListener('cl
   if (!unreadTeacherNotificationIds.length) return;
   button.disabled = true;
   try {
-    await Promise.all(unreadTeacherNotificationIds.map((id) => api.patch(`/notifications/${id}/read`, {})));
+    await api.patch('/notifications/read-all', {});
     await loadTeacherNotifications({ silent: true });
     showToast('All notifications marked as read.');
   } catch (error) {
@@ -1159,7 +1159,13 @@ document.getElementById('doneAssessmentDetails').addEventListener('click', close
 assessmentBackdrop.addEventListener('click', (event) => { if (event.target === assessmentBackdrop) closeAssessmentDetails(); });
 document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeAssessmentDetails(); });
 
+let progressEditLock = null;
+
 function resetProgressEdit() {
+  if (progressEditLock) {
+    progressEditLock.release();
+    progressEditLock = null;
+  }
   editingProgressEntry = null;
   selectedDrivePhotos = [];
   removedProgressPhotoIds = new Set();
@@ -1174,8 +1180,15 @@ function resetProgressEdit() {
   renderProgressPhotoPreview();
 }
 
-function editProgressEntry(entry) {
+async function editProgressEntry(entry) {
+  // Only one person may edit a progress record at a time; others are told who is editing.
+  const lock = await EditLocks.acquire('progress', entry._id, {
+    isActive: () => Boolean(editingProgressEntry && editingProgressEntry._id === entry._id
+      && document.getElementById('panel-progress')?.classList.contains('active')),
+  });
+  if (!lock) return;
   resetProgressEdit();
+  progressEditLock = lock;
   editingProgressEntry = entry;
   const type = entry.entryType || 'activity';
   setProgressEntryType(type);
@@ -1205,9 +1218,13 @@ function renderProgressStudentOptions() {
   const studentSelect = document.getElementById('progStudentSelect');
   const previousStudent = studentSelect.value;
   const students = activeProgressStudents().filter((student) => !classSelect.value || (student.className || 'Unassigned') === classSelect.value);
-  studentSelect.innerHTML = students.length
+  const studentOptionsHtml = students.length
     ? students.map((student) => `<option value="${escapeTeacherHtml(student._id)}">${escapeTeacherHtml(student.name)}</option>`).join('')
     : '<option value="">No students in this class</option>';
+  if (studentSelect.dataset.optionsHtml !== studentOptionsHtml) {
+    studentSelect.innerHTML = studentOptionsHtml;
+    studentSelect.dataset.optionsHtml = studentOptionsHtml;
+  }
   if (students.some((student) => student._id === previousStudent)) studentSelect.value = previousStudent;
 }
 
@@ -1232,7 +1249,12 @@ async function loadProgressPanel() {
   const previousClass = classSelect.value;
   // Teachers see only the classes of students assigned to them.
   const classes = [...new Set(activeProgressStudents().map((student) => student.className || 'Unassigned'))].sort();
-  classSelect.innerHTML = `<option value="">All my classes</option>${classes.map((name) => `<option value="${escapeTeacherHtml(name)}">${escapeTeacherHtml(name)}</option>`).join('')}`;
+  const classOptionsHtml = `<option value="">All my classes</option>${classes.map((name) => `<option value="${escapeTeacherHtml(name)}">${escapeTeacherHtml(name)}</option>`).join('')}`;
+  // Only rebuild when the options changed, so background refreshes don't redraw the form.
+  if (classSelect.dataset.optionsHtml !== classOptionsHtml) {
+    classSelect.innerHTML = classOptionsHtml;
+    classSelect.dataset.optionsHtml = classOptionsHtml;
+  }
   if (classes.includes(previousClass)) classSelect.value = previousClass;
   renderProgressStudentOptions();
   if (!editingProgressEntry && !document.getElementById('pDate').value) resetProgressEdit();
@@ -1241,7 +1263,10 @@ async function loadProgressPanel() {
     if (openDrivePickerAfterRedirect) await chooseProgressPhotosFromDrive(document.getElementById('pChooseDrivePhotos'));
   } else {
     document.getElementById('progressStudentHeader').innerHTML = '';
-    document.getElementById('progressList').innerHTML = '<div class="empty-state"><i class="fa-solid fa-chart-simple"></i><p>No students are assigned to you.</p></div>';
+    const list = document.getElementById('progressList');
+    delete list.dataset.renderKey;
+    delete list.dataset.studentId;
+    list.innerHTML = '<div class="empty-state"><i class="fa-solid fa-chart-simple"></i><p>No students are assigned to you.</p></div>';
   }
 }
 
@@ -1250,16 +1275,24 @@ async function renderProgressList() {
   const list = document.getElementById('progressList');
   const header = document.getElementById('progressStudentHeader');
   if (!sid) {
+    delete list.dataset.renderKey;
+    delete list.dataset.studentId;
     header.innerHTML = '';
     list.innerHTML = '<div class="empty-state"><i class="fa-solid fa-chart-simple"></i><p>Choose a student to see their records.</p></div>';
     return;
   }
   const student = myStudents.find((item) => item._id === sid);
-  list.innerHTML = '<div class="empty-state"><p>Loading records…</p></div>';
+  // Show the loading placeholder only when switching students, not on background refreshes.
+  if (list.dataset.studentId !== sid) list.innerHTML = '<div class="empty-state"><p>Loading records…</p></div>';
   try {
     const { progress } = await api.get(`/progress/student/${sid}`);
     if (document.getElementById('progStudentSelect').value !== sid) return;
     progressEntriesForStudent = progress;
+    // Skip the redraw when nothing changed since the last render.
+    const renderKey = `${sid}:${JSON.stringify(progress)}:${student?.name || ''}`;
+    if (list.dataset.renderKey === renderKey) return;
+    list.dataset.renderKey = renderKey;
+    list.dataset.studentId = sid;
     header.innerHTML = studentProgressHeaderHtml(student || { name: 'Student' }, progress);
     hydrateProtectedImages(header);
     list.innerHTML = progress.length
@@ -1275,10 +1308,444 @@ async function renderProgressList() {
       if (entry) button.addEventListener('click', () => editProgressEntry(entry));
     });
   } catch (err) {
+    delete list.dataset.renderKey;
+    delete list.dataset.studentId;
     list.innerHTML = '<div class="empty-state"><p>Progress records could not be loaded.</p></div>';
     showMsg(document.getElementById('progressFormMessage'), err.message);
   }
 }
+
+// ---------- Yearly academic report ----------
+const YEARLY_REPORT_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const YEARLY_REPORT_EVALUATION_FIELDS = [
+  ['overallDevelopment', 'Overall development'],
+  ['strengths', 'Strengths'],
+  ['areasForImprovement', 'Areas for improvement'],
+  ['evaluation', 'Evaluation'],
+  ['assessment', 'Assessment'],
+];
+let generatedYearlyReport = null;
+
+// Weekly/monthly milestones belong to their period; activities to their date (stored as UTC days).
+function progressEntryReportDate(entry) {
+  return new Date(entry.entryType !== 'activity' && entry.periodStart ? entry.periodStart : entry.date);
+}
+
+function openYearlyProgressReport() {
+  Modal.open(document.getElementById('yearlyProgressReportTemplate').innerHTML, true);
+  Modal.body.classList.add('modal-attendance-report');
+  const studentSelect = Modal.body.querySelector('#yearlyReportStudent');
+  const students = activeProgressStudents();
+  studentSelect.innerHTML = students.length
+    ? students.map((student) => `<option value="${escapeTeacherHtml(student._id)}">${escapeTeacherHtml(student.name)}${student.className ? ` — ${escapeTeacherHtml(student.className)}` : ''}</option>`).join('')
+    : '<option value="">No assigned students</option>';
+  const currentStudent = document.getElementById('progStudentSelect').value;
+  if (students.some((student) => student._id === currentStudent)) studentSelect.value = currentStudent;
+  const thisYear = new Date().getFullYear();
+  Modal.body.querySelector('#yearlyReportYear').innerHTML = Array.from({ length: 6 }, (_, index) => thisYear - index)
+    .map((year) => `<option value="${year}">${year}</option>`).join('');
+  Modal.body.querySelector('#yearlyReportForm').addEventListener('submit', generateYearlyProgressReport);
+  Modal.body.querySelector('#downloadYearlyReport').addEventListener('click', downloadYearlyProgressReport);
+  generatedYearlyReport = null;
+}
+
+function buildYearlyReport(student, entries, attendance, year) {
+  const inYear = entries
+    .filter((entry) => progressEntryReportDate(entry).getUTCFullYear() === year)
+    .sort((left, right) => progressEntryReportDate(left) - progressEntryReportDate(right));
+  const months = YEARLY_REPORT_MONTHS.map((name) => ({ name, activity: 0, weekly: 0, monthly: 0, titles: [] }));
+  const areas = new Map();
+  inYear.forEach((entry) => {
+    const month = months[progressEntryReportDate(entry).getUTCMonth()];
+    const type = entry.entryType || 'activity';
+    month[type] = (month[type] || 0) + 1;
+    const title = entry.milestone || entry.activity;
+    if (title) month.titles.push(title);
+    const area = (entry.learningArea || '').trim() || 'Uncategorized';
+    areas.set(area, (areas.get(area) || 0) + 1);
+  });
+  // Most recent non-empty text for each evaluation field in the year.
+  const evaluation = YEARLY_REPORT_EVALUATION_FIELDS
+    .map(([key, label]) => {
+      const latest = [...inYear].reverse().find((entry) => entry[key] && String(entry[key]).trim());
+      return latest ? { label, text: String(latest[key]).trim(), period: progressPeriodLabel(latest) } : null;
+    })
+    .filter(Boolean);
+  const attendanceCounts = { present: 0, absent: 0, tardy: 0, excused: 0 };
+  attendance
+    .filter((record) => new Date(record.date).getUTCFullYear() === year)
+    .forEach((record) => {
+      const status = record.status === 'late' ? 'tardy' : record.status;
+      if (Object.prototype.hasOwnProperty.call(attendanceCounts, status)) attendanceCounts[status] += 1;
+    });
+  const attendanceDays = Object.values(attendanceCounts).reduce((sum, count) => sum + count, 0);
+  const attendedDays = attendanceCounts.present + attendanceCounts.tardy;
+  return {
+    student,
+    year,
+    entries: inYear,
+    counts: {
+      total: inYear.length,
+      activity: inYear.filter((entry) => (entry.entryType || 'activity') === 'activity').length,
+      weekly: inYear.filter((entry) => entry.entryType === 'weekly').length,
+      monthly: inYear.filter((entry) => entry.entryType === 'monthly').length,
+      photos: inYear.reduce((sum, entry) => sum + (entry.attachments || []).length, 0),
+    },
+    months,
+    areas: [...areas.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0])),
+    milestones: inYear.filter((entry) => entry.entryType === 'weekly' || entry.entryType === 'monthly'),
+    evaluation,
+    attendance: {
+      ...attendanceCounts,
+      days: attendanceDays,
+      rate: attendanceDays ? Math.round((attendedDays / attendanceDays) * 100) : null,
+    },
+  };
+}
+
+async function generateYearlyProgressReport(event) {
+  event.preventDefault();
+  const modal = Modal.body;
+  const studentId = modal.querySelector('#yearlyReportStudent').value;
+  const year = Number(modal.querySelector('#yearlyReportYear').value);
+  const results = modal.querySelector('#yearlyReportResults');
+  const summary = modal.querySelector('#yearlyReportSummary');
+  const body = modal.querySelector('#yearlyReportBody');
+  const downloadButton = modal.querySelector('#downloadYearlyReport');
+  downloadButton.disabled = true;
+  generatedYearlyReport = null;
+  results.hidden = false;
+  summary.className = 'attendance-report-summary';
+  summary.textContent = '';
+  const student = myStudents.find((item) => item._id === studentId);
+  if (!student || !Number.isInteger(year)) {
+    showMsg(summary, 'Choose a student and a year.');
+    body.innerHTML = '';
+    return;
+  }
+  body.innerHTML = '<div class="empty-state"><p>Building yearly report…</p></div>';
+  try {
+    const [{ progress }, attendanceResult] = await Promise.all([
+      api.get(`/progress/student/${encodeURIComponent(studentId)}`),
+      api.get(`/attendance/student/${encodeURIComponent(relatedUserId(student))}`).catch(() => ({ attendance: [] })),
+    ]);
+    const report = buildYearlyReport(student, progress || [], attendanceResult.attendance || [], year);
+    generatedYearlyReport = report;
+    summary.className = 'yearly-report-title';
+    summary.innerHTML = `<i class="fa-solid fa-file-lines" aria-hidden="true"></i> Report for <strong>${escapeTeacherHtml(student.name)}</strong> · ${year}`;
+    body.innerHTML = yearlyReportHtml(report);
+    downloadButton.disabled = false;
+  } catch (err) {
+    showMsg(summary, err.message || 'The yearly report could not be generated.');
+    body.innerHTML = '';
+  }
+}
+
+function yearlyReportHtml(report) {
+  const esc = escapeTeacherHtml;
+  if (!report.counts.total && !report.attendance.days) {
+    return `<div class="empty-state"><i class="fa-solid fa-chart-simple"></i><p>No progress or attendance records for ${esc(report.student.name)} in ${report.year}.</p></div>`;
+  }
+  const { student, counts, attendance } = report;
+  const empty = (text) => `<p class="yearly-report-empty">${esc(text)}</p>`;
+  const card = (icon, title, content, extraClass = '') => `
+    <section class="yearly-report-card ${extraClass}">
+      <h4><i class="fa-solid ${icon}" aria-hidden="true"></i> ${esc(title)}</h4>
+      ${content}
+    </section>`;
+  const stat = (value, label) => `<div class="yearly-report-stat"><strong>${value}</strong><span>${esc(label)}</span></div>`;
+  const pct = (count) => (attendance.days ? (count / attendance.days) * 100 : 0);
+  const maxArea = report.areas.length ? report.areas[0][1] : 1;
+  const maxMonth = Math.max(1, ...report.months.map((month) => month.activity + month.weekly + month.monthly));
+
+  const studentCard = card('fa-user', 'Student', `
+    <dl class="yearly-report-details">
+      <dt>Name</dt><dd>${esc(student.name)}</dd>
+      <dt>Class</dt><dd>${esc(student.className || 'Unassigned')}</dd>
+      ${student.studentId ? `<dt>Student ID</dt><dd>${esc(student.studentId)}</dd>` : ''}
+      <dt>Teacher</dt><dd>${esc(user.name || '')}</dd>
+      <dt>Year</dt><dd>${report.year}</dd>
+    </dl>`);
+
+  const attendanceCard = card('fa-clipboard-user', 'Attendance', attendance.days ? `
+    <div class="yearly-attendance-bar" role="img" aria-label="${attendance.present} present, ${attendance.tardy} tardy, ${attendance.excused} excused, ${attendance.absent} absent">
+      <span class="is-present" style="width:${pct(attendance.present)}%"></span>
+      <span class="is-tardy" style="width:${pct(attendance.tardy)}%"></span>
+      <span class="is-excused" style="width:${pct(attendance.excused)}%"></span>
+      <span class="is-absent" style="width:${pct(attendance.absent)}%"></span>
+    </div>
+    <ul class="yearly-attendance-legend">
+      <li><i class="is-present"></i>Present <strong>${attendance.present}</strong></li>
+      <li><i class="is-tardy"></i>Tardy <strong>${attendance.tardy}</strong></li>
+      <li><i class="is-excused"></i>Excused <strong>${attendance.excused}</strong></li>
+      <li><i class="is-absent"></i>Absent <strong>${attendance.absent}</strong></li>
+    </ul>
+    <p class="yearly-report-note">${attendance.days} recorded school days</p>` : empty('No attendance recorded this year.'));
+
+  const areasCard = card('fa-shapes', 'Learning areas', report.areas.length ? `
+    <ul class="yearly-bar-list">${report.areas.map(([area, count]) => `
+      <li><span class="yearly-bar-label">${esc(area)}</span>
+        <span class="yearly-bar-track"><span style="width:${(count / maxArea) * 100}%"></span></span>
+        <strong>${count}</strong></li>`).join('')}</ul>` : empty('No progress records this year.'), 'is-wide');
+
+  const monthsCard = card('fa-calendar-days', 'Month by month', counts.total ? `
+    <div class="table-responsive attendance-table-wrap"><table class="attendance-table yearly-month-table">
+      <thead><tr><th>Month</th><th>Activities</th><th>Milestones</th><th>Highlights</th></tr></thead>
+      <tbody>${report.months.map((month) => {
+        const total = month.activity + month.weekly + month.monthly;
+        return `<tr class="${total ? '' : 'is-empty'}">
+          <td><strong>${esc(month.name)}</strong><span class="yearly-month-spark"><span style="width:${(total / maxMonth) * 100}%"></span></span></td>
+          <td>${month.activity || '—'}</td>
+          <td>${month.weekly + month.monthly || '—'}</td>
+          <td>${total ? esc(month.titles.slice(0, 3).join(', ') + (month.titles.length > 3 ? ` +${month.titles.length - 3} more` : '')) : '<span class="yearly-report-note">No records</span>'}</td>
+        </tr>`;
+      }).join('')}</tbody></table></div>` : empty('No progress records this year.'), 'is-wide');
+
+  const milestonesCard = card('fa-flag-checkered', `Milestones achieved (${report.milestones.length})`, report.milestones.length ? `
+    <ol class="yearly-timeline">${report.milestones.map((entry) => `
+      <li>
+        <span class="badge progress-badge-${esc(entry.entryType)}">${esc(PROGRESS_TYPE_LABELS[entry.entryType] || '')}</span>
+        <strong>${esc(entry.milestone)}</strong>
+        <span class="yearly-report-note">${esc(progressPeriodLabel(entry))}${entry.learningArea ? ` · ${esc(entry.learningArea)}` : ''}</span>
+      </li>`).join('')}</ol>` : empty('No weekly or monthly milestones this year.'), 'is-wide');
+
+  const evaluationCard = card('fa-star', 'Teacher evaluation', report.evaluation.length ? `
+    <div class="yearly-eval-grid">${report.evaluation.map((item) => `
+      <div class="yearly-eval-item">
+        <h5>${esc(item.label)}</h5>
+        <p>${esc(item.text)}</p>
+        <span class="yearly-report-note">From ${esc(item.period)}</span>
+      </div>`).join('')}</div>` : empty('No assessment details were recorded this year.'), 'is-wide');
+
+  return `
+    <div class="yearly-report-stats">
+      ${stat(counts.total, 'Records')}
+      ${stat(counts.activity, 'Activities')}
+      ${stat(counts.weekly + counts.monthly, 'Milestones')}
+      ${stat(counts.photos, 'Photos')}
+      ${stat(attendance.rate === null ? '—' : `${attendance.rate}%`, 'Attendance')}
+    </div>
+    <div class="yearly-report-grid">
+      ${studentCard}
+      ${attendanceCard}
+      ${areasCard}
+      ${monthsCard}
+      ${milestonesCard}
+      ${evaluationCard}
+    </div>`;
+}
+
+async function downloadYearlyProgressReport() {
+  const report = generatedYearlyReport;
+  if (!report) return;
+  const { jsPDF } = window.jspdf || {};
+  if (!jsPDF) {
+    showToast('PDF generation is unavailable. Refresh the page and try again.', 'error');
+    return;
+  }
+  const downloadButton = Modal.body.querySelector('#downloadYearlyReport');
+  const remarks = Modal.body.querySelector('#yearlyReportRemarks').value.trim();
+  downloadButton.disabled = true;
+  try {
+    let logoDataUrl = null;
+    try {
+      const logoResponse = await fetch('../img/logocollab.jpg');
+      if (logoResponse.ok) {
+        const logoBlob = await logoResponse.blob();
+        logoDataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(logoBlob);
+        });
+      }
+    } catch { logoDataUrl = null; }
+
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const margin = 14;
+    const contentWidth = pageWidth - margin * 2;
+    const bottomLimit = pageHeight - 18;
+    const green = [39, 103, 73];
+    const ink = [30, 41, 59];
+    const muted = [100, 116, 139];
+    let y = 0;
+
+    const drawHeader = () => {
+      pdf.setFillColor(...green);
+      pdf.rect(0, 0, pageWidth, 4, 'F');
+      if (logoDataUrl) pdf.addImage(logoDataUrl, 'JPEG', margin, 10, 18, 18);
+      pdf.setTextColor(...green);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(17);
+      pdf.text('Play-is-School', margin + 22, 17);
+      pdf.setTextColor(...muted);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(9);
+      pdf.text('Learning through Play', margin + 22, 23);
+      pdf.setTextColor(...ink);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(12);
+      pdf.text('Yearly Academic Report', pageWidth - margin, 15, { align: 'right' });
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(9);
+      pdf.text(`School year: ${report.year}`, pageWidth - margin, 21, { align: 'right' });
+      y = 36;
+    };
+    const ensureSpace = (height) => {
+      if (y + height > bottomLimit) {
+        pdf.addPage();
+        drawHeader();
+      }
+    };
+    const heading = (text) => {
+      ensureSpace(14);
+      y += 3;
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(11);
+      pdf.setTextColor(...green);
+      pdf.text(text, margin, y);
+      pdf.setDrawColor(...green);
+      pdf.setLineWidth(0.3);
+      pdf.line(margin, y + 1.5, pageWidth - margin, y + 1.5);
+      y += 7;
+    };
+    const paragraph = (text, { bold = false, size = 9, color = ink, indent = 0 } = {}) => {
+      pdf.setFont('helvetica', bold ? 'bold' : 'normal');
+      pdf.setFontSize(size);
+      pdf.setTextColor(...color);
+      pdf.splitTextToSize(String(text), contentWidth - indent).forEach((line) => {
+        ensureSpace(5);
+        pdf.text(line, margin + indent, y);
+        y += size * 0.45;
+      });
+      y += 1.5;
+    };
+    const table = (columns, rows) => {
+      const drawTableHeader = () => {
+        pdf.setFillColor(...green);
+        pdf.rect(margin, y, contentWidth, 7, 'F');
+        pdf.setTextColor(255, 255, 255);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setFontSize(8);
+        let x = margin;
+        columns.forEach((column) => { pdf.text(column.title, x + 2, y + 4.8); x += column.width; });
+        y += 7;
+      };
+      ensureSpace(16);
+      drawTableHeader();
+      rows.forEach((row) => {
+        pdf.setFont('helvetica', 'normal');
+        pdf.setFontSize(8);
+        const lines = row.map((value, index) => pdf.splitTextToSize(String(value), columns[index].width - 4));
+        const rowHeight = Math.max(7, ...lines.map((cell) => cell.length * 3.6 + 3));
+        if (y + rowHeight > bottomLimit) {
+          pdf.addPage();
+          drawHeader();
+          drawTableHeader();
+        }
+        let x = margin;
+        pdf.setDrawColor(226, 232, 240);
+        pdf.setLineWidth(0.2);
+        pdf.setTextColor(51, 65, 85);
+        pdf.setFont('helvetica', 'normal');
+        columns.forEach((column, index) => {
+          pdf.rect(x, y, column.width, rowHeight);
+          pdf.text(lines[index], x + 2, y + 4.5, { lineHeightFactor: 1.15 });
+          x += column.width;
+        });
+        y += rowHeight;
+      });
+      y += 4;
+    };
+
+    drawHeader();
+    const { student } = report;
+    heading('Student information');
+    paragraph(`Name: ${student.name}`, { bold: true, size: 10 });
+    paragraph(`Class: ${student.className || 'Unassigned'}${student.studentId ? `    Student ID: ${student.studentId}` : ''}`);
+    paragraph(`Teacher: ${user.name || ''}`);
+
+    heading('Year at a glance');
+    paragraph(`${report.counts.total} progress records: ${report.counts.activity} activities, ${report.counts.weekly} weekly milestones, ${report.counts.monthly} monthly milestones, ${report.counts.photos} photos.`);
+    paragraph(report.attendance.days
+      ? `Attendance: ${report.attendance.days} recorded days. ${report.attendance.present} present, ${report.attendance.tardy} tardy, ${report.attendance.excused} excused, ${report.attendance.absent} absent (${report.attendance.rate}% attended).`
+      : 'Attendance: no attendance recorded this year.');
+
+    heading('Learning areas');
+    if (report.areas.length) {
+      table([{ title: 'Learning area', width: contentWidth - 35 }, { title: 'Records', width: 35 }], report.areas.map(([area, count]) => [area, count]));
+    } else paragraph('No progress records this year.', { color: muted });
+
+    heading('Month by month');
+    const activeMonths = report.months.filter((month) => month.activity || month.weekly || month.monthly);
+    if (activeMonths.length) {
+      table([
+        { title: 'Month', width: 28 },
+        { title: 'Activities', width: 22 },
+        { title: 'Milestones', width: 22 },
+        { title: 'Highlights', width: contentWidth - 72 },
+      ], activeMonths.map((month) => [month.name, month.activity, month.weekly + month.monthly, month.titles.join(', ') || '-']));
+    } else paragraph('No progress records this year.', { color: muted });
+
+    heading('Milestones achieved');
+    if (report.milestones.length) {
+      table([
+        { title: 'Period', width: 52 },
+        { title: 'Milestone', width: contentWidth - 97 },
+        { title: 'Learning area', width: 45 },
+      ], report.milestones.map((entry) => [progressPeriodLabel(entry), entry.milestone || '-', entry.learningArea || '-']));
+    } else paragraph('No weekly or monthly milestones this year.', { color: muted });
+
+    heading('Teacher evaluation');
+    if (report.evaluation.length) {
+      report.evaluation.forEach((item) => {
+        paragraph(`${item.label} (${item.period})`, { bold: true });
+        paragraph(item.text, { indent: 3 });
+      });
+    } else paragraph('No assessment details were recorded this year.', { color: muted });
+
+    if (remarks) {
+      heading("Teacher's remarks");
+      paragraph(remarks);
+    }
+
+    ensureSpace(24);
+    y += 14;
+    pdf.setDrawColor(...muted);
+    pdf.setLineWidth(0.2);
+    pdf.line(margin, y, margin + 70, y);
+    pdf.line(pageWidth - margin - 70, y, pageWidth - margin, y);
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(8);
+    pdf.setTextColor(...muted);
+    pdf.text("Teacher's signature", margin, y + 4);
+    pdf.text("Parent / guardian's signature", pageWidth - margin - 70, y + 4);
+
+    const generatedAt = new Date().toLocaleString();
+    const pageCount = pdf.internal.getNumberOfPages();
+    for (let page = 1; page <= pageCount; page += 1) {
+      pdf.setPage(page);
+      pdf.setDrawColor(...green);
+      pdf.setLineWidth(0.5);
+      pdf.line(margin, pageHeight - 12, pageWidth - margin, pageHeight - 12);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(8);
+      pdf.setTextColor(...muted);
+      pdf.text(`Play-is-School  |  Generated ${generatedAt}`, margin, pageHeight - 7);
+      pdf.text(`Page ${page} of ${pageCount}`, pageWidth - margin, pageHeight - 7, { align: 'right' });
+    }
+    const fileName = student.name.trim().replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'student';
+    pdf.save(`yearly-academic-report-${fileName}-${report.year}.pdf`);
+  } catch (error) {
+    showToast(error.message || 'The yearly report PDF could not be generated.', 'error');
+  } finally {
+    downloadButton.disabled = false;
+  }
+}
+
+document.getElementById('openYearlyProgressReport').addEventListener('click', openYearlyProgressReport);
 
 function confirmDiscardProgressEdit() {
   if (!editingProgressEntry && !selectedDrivePhotos.length) return true;
@@ -1343,7 +1810,7 @@ document.getElementById('progressForm').addEventListener('submit', async (e) => 
   try {
     if (editingProgressEntry) {
       form.append('removeAttachments', JSON.stringify([...removedProgressPhotoIds]));
-      await api.patch(`/progress/${editingProgressEntry._id}`, form);
+      await api.patch(`/progress/${editingProgressEntry._id}`, form, { version: editingProgressEntry.updatedAt });
       showToast('Progress record updated.');
     } else {
       form.append('student', sid);
@@ -1735,8 +2202,8 @@ async function loadEvents() {
         await api.del(`/events/${eventId}`);
         await loadEvents();
       },
-      onEventUpdated: async (eventId, updates) => {
-        await api.patch(`/events/${eventId}`, updates);
+      onEventUpdated: async (eventId, updates, version) => {
+        await api.patch(`/events/${eventId}`, updates, { version });
         await loadEvents();
       },
       canEditEvent: (event) => {

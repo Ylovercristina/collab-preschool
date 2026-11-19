@@ -285,10 +285,9 @@ function bindFullNotificationControls(container, notifications, renderList) {
   });
   container.querySelector('[data-mark-all-read]')?.addEventListener('click', async (event) => {
     const button = event.currentTarget;
-    const unread = notifications.filter((notification) => !notification.readAt);
     button.disabled = true;
     try {
-      await Promise.all(unread.map((notification) => api.patch(`/notifications/${notification._id}/read`, {})));
+      await api.patch('/notifications/read-all', {});
       await loadPaymentNotifications({ silent: true });
       showToast('All notifications marked as read.');
     } catch (error) {

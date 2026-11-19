@@ -9,6 +9,8 @@ const feeSchema = new mongoose.Schema(
     dueDate: { type: Date, required: true },
     status: { type: String, enum: ['unpaid', 'partial', 'paid'], default: 'unpaid' },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    // Short-lived lock taken while a payment is recorded/changed (see middleware/concurrency.js).
+    paymentLock: { type: mongoose.Schema.Types.Mixed, default: null, select: false },
   },
   { timestamps: true }
 );

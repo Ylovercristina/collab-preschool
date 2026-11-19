@@ -1,5 +1,5 @@
 {
-    "envWatcher.enabled": true,
+    "envWatcher.enabled": false,
     "python.terminal.useEnvFile": true,
     "liveServer.settings.ignoreFiles": [
         ".vscode/**",

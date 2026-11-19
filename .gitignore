@@ -16,3 +16,6 @@ backend/mongod.lock
 backend/journal/
 backend/diagnostic.data/
 backend/_tmp/
+
+# Database backups contain every record (including password hashes): never commit them
+backend/backups/

@@ -3,6 +3,8 @@ const mongoose = require('mongoose');
 const logActivity = require('../utils/logActivity');
 const { isValidEmail } = require('../utils/validation');
 const { sendAccountApprovalEmail } = require('./authController');
+const { ARCHIVE_RETENTION_DAYS, deletionDate, permanentlyDeleteUser } = require('../utils/accountPurge');
+const { positionInfo, positionForUser } = require('../config/permissions');
 const fs = require('fs');
 const path = require('path');
 
@@ -14,10 +16,12 @@ function publicUser(u) {
     role: u.role,
     status: u.status,
     phone: u.phone,
+    position: positionForUser(u),
     emailVerified: u.emailVerified === true && Boolean(u.emailVerifiedBy),
     emailVerifiedAt: u.emailVerifiedAt || null,
     emailVerifiedBy: u.emailVerifiedBy || null,
     createdAt: u.createdAt,
+    updatedAt: u.updatedAt,
   };
 }
 
@@ -40,6 +44,7 @@ function profileUser(user) {
     address: user.address || '',
     avatar: user.avatar || null,
     childrenNames: user.role === 'parent' ? user.childrenNames || [] : [],
+    updatedAt: user.updatedAt, // record version for optimistic locking
   };
 }
 
@@ -240,6 +245,25 @@ exports.updateUserProfile = async (req, res) => {
       return res.status(400).json({ message: 'Profile image must be a valid JPG, PNG or WEBP file.' });
     }
 
+    // Changing the account type is a System Administrator decision (never on your own account).
+    if (role !== user.role) {
+      const requesterIsSystemAdmin = req.user.role === 'admin' && positionForUser(req.user) === 'system_admin';
+      if (!requesterIsSystemAdmin || user._id.equals(req.user._id)) {
+        await discardUploadedImage(req.file);
+        return res.status(403).json({
+          code: 'PERMISSION_DENIED',
+          message: user._id.equals(req.user._id)
+            ? 'You cannot change your own account type.'
+            : 'Only a System Administrator can change an account type.',
+        });
+      }
+      // A new account type starts from that type's default role and permissions, and the person
+      // signs in again so their session matches the new type.
+      user.position = null;
+      user.customPermissions = null;
+      user.sessionsValidAfter = new Date(Math.floor(Date.now() / 1000) * 1000);
+    }
+
     if (user.role === 'admin' && role !== 'admin') {
       if (user._id.equals(req.user._id)) {
         await discardUploadedImage(req.file);
@@ -326,8 +350,16 @@ exports.createUser = async (req, res) => {
     const exists = await User.findOne({ email: String(email || '').trim().toLowerCase() });
     if (exists) return res.status(409).json({ message: 'Email already registered.' });
 
-    const user = await User.create({ name, email, password, role, phone, status: 'approved' });
-    await logActivity(req.user._id, 'user-created', `${role} ${email} created by admin`);
+    // Optional position (job role) chosen when creating the account; it must fit the account type.
+    const requestedPosition = positionInfo(req.body.position);
+    if (req.body.position && (!requestedPosition || requestedPosition.accountType !== role)) {
+      return res.status(400).json({ message: 'Choose a role that fits this account type.' });
+    }
+    const user = await User.create({
+      name, email, password, role, phone, status: 'approved',
+      position: requestedPosition ? requestedPosition.key : null,
+    });
+    await logActivity(req.user._id, 'user-created', `${role} ${email} created by admin${requestedPosition ? ` as ${requestedPosition.label}` : ''}`);
     res.status(201).json({ user: publicUser(user) });
   } catch (err) {
     if (err.name === 'ValidationError') return res.status(400).json({ message: err.message });
@@ -357,6 +389,14 @@ exports.updateUser = async (req, res) => {
       update.role = role;
     }
 
+    // A new account type starts from that type's default role and permissions.
+    const current = await User.findById(req.params.id).select('role');
+    if (update.role && current && update.role !== current.role) {
+      update.position = null;
+      update.customPermissions = null;
+      update.sessionsValidAfter = new Date(Math.floor(Date.now() / 1000) * 1000);
+    }
+
     const existing = await User.findById(req.params.id);
     if (!existing) return res.status(404).json({ message: 'User not found.' });
     if (existing.role === 'admin' && update.role && update.role !== 'admin') {
@@ -384,15 +424,67 @@ exports.archiveUser = async (req, res) => {
   if (String(req.params.id) === String(req.user._id)) {
     return res.status(400).json({ message: 'You cannot archive your own account.' });
   }
-  const target = await User.findById(req.params.id).select('role');
+  const target = await User.findById(req.params.id).select('role status');
   if (!target) return res.status(404).json({ message: 'User not found.' });
+  if (target.status === 'archived') return res.status(409).json({ message: 'This account is already archived.' });
   if (target.role === 'admin' && await isLastActiveAdmin(target._id)) {
     return res.status(400).json({ message: 'At least one active admin account is required.' });
   }
-  const user = await User.findByIdAndUpdate(req.params.id, { status: 'archived' }, { new: true });
+  const user = await User.findByIdAndUpdate(req.params.id, {
+    status: 'archived',
+    archivedAt: new Date(),
+    archivedBy: req.user._id,
+    statusBeforeArchive: target.status,
+  }, { new: true });
   if (!user) return res.status(404).json({ message: 'User not found.' });
   await logActivity(req.user._id, 'user-archived', user.email);
-  res.json({ user: publicUser(user) });
+  res.json({
+    user: publicUser(user),
+    deleteAfter: deletionDate(user.archivedAt),
+    message: `Account archived. It will be permanently deleted in ${ARCHIVE_RETENTION_DAYS} days unless restored from Settings → Archived accounts.`,
+  });
+};
+
+// GET /api/users/archived  (archived accounts and when each will be permanently deleted)
+exports.listArchivedUsers = async (req, res) => {
+  const users = await User.find({ status: 'archived' })
+    .populate('archivedBy', 'name')
+    .sort({ archivedAt: 1, updatedAt: 1 });
+  const now = Date.now();
+  res.json({
+    retentionDays: ARCHIVE_RETENTION_DAYS,
+    users: users.map((user) => {
+      const archivedAt = user.archivedAt || user.updatedAt;
+      const deleteAfter = deletionDate(archivedAt);
+      return {
+        ...publicUser(user),
+        archivedAt,
+        archivedBy: user.archivedBy ? user.archivedBy.name : null,
+        deleteAfter,
+        daysLeft: Math.max(0, Math.ceil((deleteAfter.getTime() - now) / (24 * 60 * 60 * 1000))),
+      };
+    }),
+  });
+};
+
+// DELETE /api/users/:id  (permanently delete an archived account now)
+exports.deleteArchivedUser = async (req, res) => {
+  if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(404).json({ message: 'User not found.' });
+  if (String(req.params.id) === String(req.user._id)) {
+    return res.status(400).json({ message: 'You cannot delete your own account.' });
+  }
+  const user = await User.findById(req.params.id).select('status email');
+  if (!user) return res.status(404).json({ message: 'User not found.' });
+  if (user.status !== 'archived') {
+    return res.status(409).json({ message: 'Only archived accounts can be permanently deleted. Archive it first.' });
+  }
+  try {
+    await permanentlyDeleteUser(user._id, req.user._id);
+    res.json({ message: `${user.email} was permanently deleted.` });
+  } catch (err) {
+    console.error('[users] Permanent delete failed:', err.message);
+    res.status(500).json({ message: 'Could not delete this account.' });
+  }
 };
 
 // PATCH /api/users/:id/approve
@@ -505,7 +597,19 @@ exports.rejectUser = async (req, res) => {
 
 // PATCH /api/users/:id/reactivate
 exports.reactivateUser = async (req, res) => {
-  const user = await User.findByIdAndUpdate(req.params.id, { status: 'approved' }, { new: true });
+  if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(404).json({ message: 'User not found.' });
+  const existing = await User.findById(req.params.id).select('status statusBeforeArchive');
+  if (!existing) return res.status(404).json({ message: 'User not found.' });
+  // A restored account goes back to how it was before archiving (e.g. a pending parent stays pending).
+  const restoredStatus = existing.status === 'archived' && ['pending', 'approved', 'rejected'].includes(existing.statusBeforeArchive)
+    ? existing.statusBeforeArchive
+    : 'approved';
+  const user = await User.findByIdAndUpdate(req.params.id, {
+    status: restoredStatus,
+    archivedAt: null,
+    archivedBy: null,
+    statusBeforeArchive: null,
+  }, { new: true });
   if (!user) return res.status(404).json({ message: 'User not found.' });
   await logActivity(req.user._id, 'user-reactivated', user.email);
   res.json({ user: publicUser(user) });

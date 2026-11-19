@@ -1,14 +1,16 @@
 const router = require('express').Router();
-const { protect, allowRoles } = require('../middleware/auth');
+const { protect, allowRoles, requirePermission: P } = require('../middleware/auth');
 const ctrl = require('../controllers/eventController');
+const Event = require('../models/Event');
+const { versionGuard } = require('../middleware/concurrency');
 
 router.use(protect);
-router.get('/', ctrl.listEvents);
-router.post('/', allowRoles('admin', 'teacher'), ctrl.createEvent);
-router.get('/:id/email-summary', allowRoles('admin', 'teacher'), ctrl.emailSummary);
-router.patch('/:id/review', allowRoles('admin'), ctrl.reviewEvent);
-router.put('/:id/approve', allowRoles('admin'), ctrl.approveEvent);
-router.patch('/:id', allowRoles('admin', 'teacher'), ctrl.updateEvent);
-router.delete('/:id', allowRoles('admin', 'teacher'), ctrl.deleteEvent);
+router.get('/', P('events', 'view'), ctrl.listEvents);
+router.post('/', allowRoles('admin', 'teacher'), P('events', 'manage'), ctrl.createEvent);
+router.get('/:id/email-summary', allowRoles('admin', 'teacher'), P('events', 'view'), ctrl.emailSummary);
+router.patch('/:id/review', allowRoles('admin'), P('events', 'approve'), ctrl.reviewEvent);
+router.put('/:id/approve', allowRoles('admin'), P('events', 'approve'), ctrl.approveEvent);
+router.patch('/:id', allowRoles('admin', 'teacher'), P('events', 'manage'), versionGuard(Event, { label: 'event', lock: 'event' }), ctrl.updateEvent);
+router.delete('/:id', allowRoles('admin', 'teacher'), P('events', 'manage'), ctrl.deleteEvent);
 
 module.exports = router;

@@ -42,6 +42,9 @@ function clearEnrollmentPeriodForm() {
   ['enrollmentTerm', 'enrollmentSchoolYear', 'enrollmentOpensAt', 'enrollmentClosesAt'].forEach((id) => {
     document.getElementById(id).value = '';
   });
+  ['enrollmentOpensAt', 'enrollmentClosesAt'].forEach((id) => {
+    delete document.getElementById(id).dataset.originalValue;
+  });
   document.getElementById('enrollmentEnabled').checked = true;
   document.getElementById('enrollmentSubmitButton').innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save changes';
   document.getElementById('cancelEnrollmentEdit').hidden = true;
@@ -53,6 +56,10 @@ function editAdminSavedPeriod() {
   document.getElementById('enrollmentSchoolYear').value = adminSavedEnrollmentPeriod.schoolYear;
   document.getElementById('enrollmentOpensAt').value = enrollmentDateValue(adminSavedEnrollmentPeriod.opensAt);
   document.getElementById('enrollmentClosesAt').value = enrollmentDateValue(adminSavedEnrollmentPeriod.closesAt);
+  ['enrollmentOpensAt', 'enrollmentClosesAt'].forEach((id) => {
+    const input = document.getElementById(id);
+    input.dataset.originalValue = input.value;
+  });
   document.getElementById('enrollmentEnabled').checked = adminSavedEnrollmentPeriod.enabled;
   document.getElementById('enrollmentSubmitButton').innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Update availability';
   document.getElementById('cancelEnrollmentEdit').hidden = false;
@@ -230,6 +237,8 @@ document.getElementById('enrollmentPeriodForm')?.addEventListener('submit', asyn
   window.clearTimeout(enrollmentSavedMessageTimeout);
   message.textContent = '';
   message.className = 'form-msg';
+  if (typeof rejectPastDateInput === 'function'
+    && ['enrollmentOpensAt', 'enrollmentClosesAt'].some((id) => rejectPastDateInput(document.getElementById(id)))) return;
   try {
     await api.put('/enrollment/period', {
       term: document.getElementById('enrollmentTerm').value.trim(),

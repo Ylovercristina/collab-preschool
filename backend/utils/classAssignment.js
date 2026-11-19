@@ -1,4 +1,6 @@
+const mongoose = require('mongoose');
 const Classroom = require('../models/Classroom');
+const User = require('../models/User');
 
 const UNASSIGNED = 'Unassigned';
 
@@ -42,4 +44,15 @@ async function applyClassToStudentData(data, currentClassName = '') {
   return '';
 }
 
-module.exports = { UNASSIGNED, escapeRegex, resolveClassAssignment, applyClassToStudentData };
+// Archived teachers can't be newly assigned. Keeping an already-assigned teacher unchanged is allowed.
+// Returns an error message, or '' when the choice is fine.
+async function archivedTeacherError(teacherId, currentTeacherId = '') {
+  if (!teacherId || String(teacherId) === String(currentTeacherId || '')) return '';
+  if (!mongoose.isObjectIdOrHexString(String(teacherId))) return '';
+  const teacher = await User.findOne({ _id: teacherId, role: 'teacher' }).select('name status');
+  return teacher && teacher.status === 'archived'
+    ? `${teacher.name} is archived and can't be assigned. Choose an active teacher.`
+    : '';
+}
+
+module.exports = { UNASSIGNED, escapeRegex, resolveClassAssignment, applyClassToStudentData, archivedTeacherError };

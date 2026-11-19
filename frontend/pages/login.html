@@ -55,7 +55,7 @@
             <div class="auth-label-row">
               <label class="auth-label" for="email">EMAIL ADDRESS</label>
             </div>
-            <input type="email" id="email" placeholder="example@gmail.com" required autocomplete="email" />
+            <input type="email" id="email" placeholder="example@gmail.com" required autocomplete="username" readonly data-no-autofill />
           </div>
 
           <div class="auth-field">
@@ -64,7 +64,7 @@
               <a href="forgot-password.html" class="auth-forgot-link">Forgot Password?</a>
             </div>
             <div class="input-with-icon">
-              <input type="password" id="password" placeholder="••••••••" required autocomplete="current-password" />
+              <input type="password" id="password" placeholder="••••••••" required autocomplete="current-password" readonly data-no-autofill />
               <button type="button" class="toggle-password-btn" id="togglePasswordBtn"
                 aria-label="Toggle password visibility">
                 <i class="fa-regular fa-eye" id="passwordEyeIcon"></i>
@@ -98,6 +98,26 @@
 
   <script src="../js/api.js"></script>
   <script>
+    // The sign-in fields start read-only so the browser can't fill in saved text on its own.
+    // They unlock the moment the person clicks, taps or tabs into them; saved logins can still be
+    // picked from the browser's suggestion list.
+    document.querySelectorAll('[data-no-autofill]').forEach((field) => {
+      const unlock = () => {
+        if (!field.readOnly) return;
+        field.readOnly = false;
+        if (document.activeElement !== field) field.focus();
+      };
+      ['focus', 'pointerdown', 'touchstart', 'keydown'].forEach((type) => field.addEventListener(type, unlock));
+    });
+    // Anything a browser filled in anyway before the person touched the page is cleared.
+    window.addEventListener('load', () => {
+      setTimeout(() => {
+        document.querySelectorAll('[data-no-autofill]').forEach((field) => {
+          if (field.readOnly && document.activeElement !== field) field.value = '';
+        });
+      }, 300);
+    });
+
     // Eye toggle password visibility
     const toggleBtn = document.getElementById('togglePasswordBtn');
     const passwordInput = document.getElementById('password');

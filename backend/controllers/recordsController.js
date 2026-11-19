@@ -6,7 +6,8 @@ const Student = require('../models/Student');
 const User = require('../models/User');
 const { uploadDirectory } = require('../middleware/recordUpload');
 const logActivity = require('../utils/logActivity');
-const { applyClassToStudentData } = require('../utils/classAssignment');
+const { applyClassToStudentData, archivedTeacherError } = require('../utils/classAssignment');
+const { normalizeStudentNameField, syncStudentNameCopies } = require('../utils/studentName');
 const { studentFieldError, findDuplicateStudent } = require('../utils/validation');
 
 const studentFields = ['name', 'className', 'birthdate', 'enrollmentDate', 'guardianName', 'guardianPhone', 'parent', 'teacher', 'notes'];
@@ -68,9 +69,12 @@ exports.listStudents = async (req, res) => {
 exports.createStudent = async (req, res) => {
   try {
     const data = selectedFields(req.body, studentFields);
+    normalizeStudentNameField(data);
     if (!data.name || !data.className) return res.status(400).json({ message: 'Student name and class or section are required.' });
     const fieldError = studentFieldError(data);
     if (fieldError) return res.status(400).json({ message: fieldError });
+    const archivedError = await archivedTeacherError(data.teacher);
+    if (archivedError) return res.status(400).json({ message: archivedError });
     const classError = await applyClassToStudentData(data);
     if (classError) return res.status(400).json({ message: classError });
     const referenceError = await validateStudentReferences(data);
@@ -93,10 +97,14 @@ exports.updateStudent = async (req, res) => {
     const student = await Student.findById(req.params.id);
     if (!student) return res.status(404).json({ message: 'Student not found.' });
     const data = selectedFields(req.body, studentFields);
-    if (data.name === '' || (data.name === undefined && !student.name)) return res.status(400).json({ message: 'Student name is required.' });
+    const nameError = normalizeStudentNameField(data);
+    if (nameError) return res.status(400).json({ message: nameError });
+    if (data.name === undefined && !student.name) return res.status(400).json({ message: 'Student name is required.' });
     if (data.className === '' || (data.className === undefined && !student.className)) return res.status(400).json({ message: 'Student class or section is required.' });
     const fieldError = studentFieldError(data);
     if (fieldError) return res.status(400).json({ message: fieldError });
+    const archivedError = await archivedTeacherError(data.teacher, student.teacher);
+    if (archivedError) return res.status(400).json({ message: archivedError });
     const classError = await applyClassToStudentData(data, student.className);
     if (classError) return res.status(400).json({ message: classError });
     const referenceError = await validateStudentReferences(data);
@@ -110,8 +118,10 @@ exports.updateStudent = async (req, res) => {
       }, student._id);
       if (duplicate) return res.status(409).json({ message: `Another student record for ${duplicate.name} already exists.` });
     }
+    const previousName = student.name;
     Object.assign(student, data);
     await student.save();
+    await syncStudentNameCopies(student, previousName);
     await logActivity(req.user._id, 'student-record-updated', student.name);
     res.json({ student: await populatedStudent(student._id) });
   } catch (err) {
@@ -164,6 +174,10 @@ exports.updateTeacher = async (req, res) => {
     if (!phoneIsValid(data.phone === undefined ? teacher.phone : data.phone)) return res.status(400).json({ message: 'Enter a valid contact number.' });
     if (!(data.employmentType === undefined ? teacher.employmentType : data.employmentType)) return res.status(400).json({ message: 'Employment type is required.' });
     if (!(data.employmentStartDate === undefined ? teacher.employmentStartDate : data.employmentStartDate)) return res.status(400).json({ message: 'Employment start date is required.' });
+    if (teacher.status === 'archived' && data.assignedClass !== undefined
+      && String(data.assignedClass || '').toLowerCase() !== String(teacher.assignedClass || '').toLowerCase()) {
+      return res.status(400).json({ message: `${teacher.name} is archived and can't be assigned to a class.` });
+    }
     Object.assign(teacher, data);
     await teacher.save();
     await logActivity(req.user._id, 'teacher-record-updated', teacher.name);

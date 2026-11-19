@@ -8,6 +8,9 @@ const ensureSeedAdmin = require('./utils/seed');
 const authController = require('./controllers/authController');
 const authRoutes = require('./routes/authRoutes');
 const emailService = require('./services/emailService');
+const { startArchivedAccountPurge } = require('./utils/accountPurge');
+const { startAutomaticBackups } = require('./services/backupService');
+const { limits } = require('./middleware/rateLimit');
 
 const app = express();
 
@@ -17,6 +20,8 @@ app.use(cors({
   exposedHeaders: ['X-Integration-Access-Refresh'],
 }));
 app.use(express.json());
+// Rate limiting: a general limit per session/IP, and a tighter one for saves.
+app.use('/api', limits.api, limits.writes);
 app.use(morgan('dev'));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
@@ -29,6 +34,9 @@ app.get('/api/config/maps', (req, res) => {
 
 app.use('/api/auth', authRoutes);
 app.use('/api/users', require('./routes/userRoutes'));
+app.use('/api/permissions', require('./routes/permissionRoutes'));
+app.use('/api/backups', require('./routes/backupRoutes'));
+app.use('/api/locks', require('./routes/editLockRoutes'));
 app.use('/api/students', require('./routes/studentRoutes'));
 app.use('/api/classes', require('./routes/classRoutes'));
 app.use('/api/enrollment', require('./routes/enrollmentRoutes'));
@@ -88,5 +96,9 @@ connectDB().then(async () => {
     console.error('[email] SMTP verification failed:', emailService.emailTransportError(err));
   }
   logRegisteredAuthRoutes();
+  // Archived accounts not restored within 30 days are deleted permanently (checked hourly).
+  startArchivedAccountPurge();
+  // Daily automatic database backup (newest 14 kept).
+  startAutomaticBackups();
   app.listen(PORT, () => console.log(`[server] Play-is-School API running on port ${PORT}`));
 });

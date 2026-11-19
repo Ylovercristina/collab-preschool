@@ -58,7 +58,7 @@ function renderClasses() {
   const body = document.getElementById('classesTbody');
   body.innerHTML = rows.length ? rows.map((item) => `<tr>
       <td><strong>${escapeClassHtml(item.name)}</strong>${item.description ? `<div class="class-description">${escapeClassHtml(item.description)}</div>` : ''}</td>
-      <td>${item.teacher ? escapeClassHtml(item.teacher.name) : '<span class="badge pending">No teacher</span>'}</td>
+      <td>${item.teacher ? `${escapeClassHtml(item.teacher.name)}${item.teacher.status === 'archived' ? ' <span class="badge archived">Archived</span>' : ''}` : '<span class="badge pending">No teacher</span>'}</td>
       <td>${item.activeStudents}</td>
       <td><span class="badge ${item.status === 'active' ? 'approved' : 'archived'}">${item.status === 'active' ? 'Active' : 'Archived'}</span></td>
       <td><div class="record-actions">
@@ -77,8 +77,10 @@ function renderClasses() {
   body.querySelectorAll('[data-class-restore]').forEach((button) => button.addEventListener('click', () => changeClassStatus(find(button.dataset.classRestore), 'restore', button)));
 }
 
-function openClassForm(classroom = {}) {
+async function openClassForm(classroom = {}) {
   const isEdit = Boolean(classroom._id);
+  const editLock = isEdit ? await EditLocks.acquire('class', classroom._id, { isActive: whileElementOpen('classForm') }) : null;
+  if (isEdit && !editLock) return;
   const currentTeacher = classroom.teacher ? String(classroom.teacher._id || classroom.teacher) : '';
   const leading = new Map();
   managedClasses
@@ -94,6 +96,9 @@ function openClassForm(classroom = {}) {
       <div class="field"><label for="classTeacherInput">Teacher</label>
         <select id="classTeacherInput">
           <option value="">No teacher yet</option>
+          ${classroom.teacher && classroom.teacher.status === 'archived'
+    ? `<option value="${escapeClassHtml(currentTeacher)}" disabled>${escapeClassHtml(classroom.teacher.name)} (archived — choose another teacher)</option>`
+    : ''}
           ${classTeachers.map((teacher) => {
     const busy = leading.get(String(teacher._id));
     return `<option value="${escapeClassHtml(teacher._id)}" ${String(teacher._id) === currentTeacher ? 'selected' : ''}>${escapeClassHtml(teacher.name)}${busy ? ` (also leads ${escapeClassHtml(busy.join(', '))})` : ''}</option>`;
@@ -106,6 +111,7 @@ function openClassForm(classroom = {}) {
       <div id="classFormMessage" class="form-msg" role="alert"></div>
       <div class="event-form-actions"><button type="button" class="btn btn-ghost" id="classFormCancel">Cancel</button><button type="submit" class="btn btn-primary">${isEdit ? 'Save changes' : 'Create class'}</button></div>
     </form>`);
+  if (editLock) Modal.onClose(() => editLock.release());
   document.getElementById('classFormCancel').addEventListener('click', () => Modal.close());
   document.getElementById('classForm').addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -123,7 +129,7 @@ function openClassForm(classroom = {}) {
       description: document.getElementById('classDescriptionInput').value.trim(),
     };
     try {
-      if (isEdit) await api.patch(`/classes/${classroom._id}`, body);
+      if (isEdit) await api.patch(`/classes/${classroom._id}`, body, { version: classroom.updatedAt });
       else await api.post('/classes', body);
       Modal.close();
       showToast(isEdit ? 'Class updated.' : 'Class created.');

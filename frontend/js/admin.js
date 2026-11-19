@@ -41,6 +41,125 @@ function authorizeSettingsSection(section, button) {
 
 function onSettingsSectionShown(section) {
   if (section !== 'integrations') onSettingsAccessRevoked();
+  if (section === 'archived') {
+    loadArchivedAccounts();
+    loadArchivedStudents();
+  }
+  if (section === 'backup') loadBackups();
+}
+
+function archivedDaysLeftHtml(item) {
+  const urgent = item.daysLeft <= 7;
+  return `<span class="badge ${urgent ? 'archived' : 'pending'}">${item.daysLeft === 0 ? 'Today' : `${item.daysLeft} day${item.daysLeft === 1 ? '' : 's'}`}</span><div class="archived-account-email">${fmtDate(item.deleteAfter)}</div>`;
+}
+
+async function loadArchivedStudents() {
+  const tbody = document.getElementById('archivedStudentsTbody');
+  const message = document.getElementById('archivedAccountsMessage');
+  if (!tbody) return;
+  try {
+    const { students } = await api.get('/students/archived');
+    tbody.innerHTML = students.length ? students.map((student) => `<tr>
+        <td><strong>${escapeDashboardHtml(student.name)}</strong><div class="archived-account-email">${escapeDashboardHtml([student.studentId, student.parentName ? `Parent: ${student.parentName}` : ''].filter(Boolean).join(' · '))}</div></td>
+        <td>${escapeDashboardHtml(student.className || 'Unassigned')}</td>
+        <td>${fmtDate(student.archivedAt)}${student.archivedBy ? `<div class="archived-account-email">by ${escapeDashboardHtml(student.archivedBy)}</div>` : ''}</td>
+        <td>${archivedDaysLeftHtml(student)}</td>
+        <td style="text-align:right; white-space:nowrap;">
+          <button type="button" class="btn btn-secondary btn-sm" data-restore-student="${escapeDashboardHtml(student.id)}"><i class="fa-solid fa-rotate-left"></i> Restore</button>
+          <button type="button" class="btn btn-ghost btn-sm archived-delete-button" data-delete-student="${escapeDashboardHtml(student.id)}"><i class="fa-solid fa-trash"></i> Delete now</button>
+        </td>
+      </tr>`).join('') : '<tr><td colspan="5"><div class="empty-state"><i class="fa-solid fa-user-graduate"></i><p>No archived students.</p></div></td></tr>';
+
+    tbody.querySelectorAll('[data-restore-student]').forEach((button) => button.addEventListener('click', async () => {
+      button.disabled = true;
+      try {
+        const result = await api.patch(`/students/${button.dataset.restoreStudent}/restore`);
+        showToast(result.message || 'Student restored.');
+        await loadArchivedStudents();
+        loadStudents().catch(() => {});
+      } catch (err) {
+        showMsg(message, err.message);
+        button.disabled = false;
+      }
+    }));
+
+    tbody.querySelectorAll('[data-delete-student]').forEach((button) => button.addEventListener('click', async () => {
+      const student = students.find((item) => String(item.id) === button.dataset.deleteStudent);
+      if (!student) return;
+      const typed = prompt(`Permanently delete ${student.name}'s record, including attendance, progress and photos? This cannot be undone.\n\nType DELETE to confirm.`);
+      if (typed !== 'DELETE') return;
+      button.disabled = true;
+      try {
+        const result = await api.del(`/students/${student.id}`);
+        showToast(result.message || 'Student permanently deleted.', 'info');
+        await loadArchivedStudents();
+      } catch (err) {
+        showMsg(message, err.message);
+        button.disabled = false;
+      }
+    }));
+  } catch (err) {
+    tbody.innerHTML = '<tr><td colspan="5">Archived students could not be loaded.</td></tr>';
+    showMsg(message, err.message);
+  }
+}
+
+// ---------- Archived accounts (Settings) ----------
+async function loadArchivedAccounts() {
+  const tbody = document.getElementById('archivedAccountsTbody');
+  const message = document.getElementById('archivedAccountsMessage');
+  if (!tbody) return;
+  message.textContent = '';
+  message.className = 'form-msg';
+  try {
+    const { users } = await api.get('/users/archived');
+    const roleLabels = { admin: 'Administrator', teacher: 'Teacher', parent: 'Parent' };
+    tbody.innerHTML = users.length ? users.map((account) => {
+      return `<tr>
+        <td><strong>${escapeDashboardHtml(account.name)}</strong><div class="archived-account-email">${escapeDashboardHtml(account.email)}</div></td>
+        <td>${escapeDashboardHtml(roleLabels[account.role] || account.role)}</td>
+        <td>${fmtDate(account.archivedAt)}${account.archivedBy ? `<div class="archived-account-email">by ${escapeDashboardHtml(account.archivedBy)}</div>` : ''}</td>
+        <td>${archivedDaysLeftHtml(account)}</td>
+        <td style="text-align:right; white-space:nowrap;">
+          <button type="button" class="btn btn-secondary btn-sm" data-restore-account="${escapeDashboardHtml(account.id)}"><i class="fa-solid fa-rotate-left"></i> Restore</button>
+          <button type="button" class="btn btn-ghost btn-sm archived-delete-button" data-delete-account="${escapeDashboardHtml(account.id)}"><i class="fa-solid fa-trash"></i> Delete now</button>
+        </td>
+      </tr>`;
+    }).join('') : '<tr><td colspan="5"><div class="empty-state"><i class="fa-solid fa-box-archive"></i><p>No archived accounts.</p></div></td></tr>';
+
+    tbody.querySelectorAll('[data-restore-account]').forEach((button) => button.addEventListener('click', async () => {
+      const account = users.find((item) => String(item.id) === button.dataset.restoreAccount);
+      button.disabled = true;
+      try {
+        await api.patch(`/users/${button.dataset.restoreAccount}/reactivate`);
+        showToast(`${account ? account.name : 'Account'} was restored.`);
+        await loadArchivedAccounts();
+        if (typeof loadUsers === 'function') loadUsers().catch(() => {});
+      } catch (err) {
+        showMsg(message, err.message);
+        button.disabled = false;
+      }
+    }));
+
+    tbody.querySelectorAll('[data-delete-account]').forEach((button) => button.addEventListener('click', async () => {
+      const account = users.find((item) => String(item.id) === button.dataset.deleteAccount);
+      if (!account) return;
+      const typed = prompt(`Permanently delete ${account.name} (${account.email})? This cannot be undone.\n\nType DELETE to confirm.`);
+      if (typed !== 'DELETE') return;
+      button.disabled = true;
+      try {
+        const result = await api.del(`/users/${account.id}`);
+        showToast(result.message || 'Account permanently deleted.', 'info');
+        await loadArchivedAccounts();
+      } catch (err) {
+        showMsg(message, err.message);
+        button.disabled = false;
+      }
+    }));
+  } catch (err) {
+    tbody.innerHTML = '<tr><td colspan="5">Archived accounts could not be loaded.</td></tr>';
+    showMsg(message, err.message);
+  }
 }
 
 function onSettingsAccessRevoked() {
@@ -393,34 +512,41 @@ initIntegrationPinDialog();
 // ---------- Overview ----------
 async function loadOverview() {
   try {
-    const [students, fees, users] = await Promise.all([
+    // Each card only appears when the account may see that data (Role-based access control).
+    const [studentsResult, feesResult, usersResult] = await Promise.allSettled([
       api.get('/reports/students'),
-      api.get('/reports/fees'),
-      api.get('/users'),
+      hasPermission('fees') || hasPermission('reports') ? api.get('/reports/fees') : Promise.reject(new Error('no access')),
+      hasPermission('users') ? api.get('/users') : Promise.reject(new Error('no access')),
     ]);
-    const pendingParents = users.users.filter((u) => u.status === 'pending').length;
-    const teachersCount = users.users.filter((u) => u.role === 'teacher').length;
+    const students = studentsResult.status === 'fulfilled' ? studentsResult.value : { active: 0, byClass: [] };
+    const fees = feesResult.status === 'fulfilled' ? feesResult.value : null;
+    const users = usersResult.status === 'fulfilled' ? usersResult.value : null;
+    const pendingParents = users ? users.users.filter((u) => u.status === 'pending').length : 0;
+    const teachersCount = users ? users.users.filter((u) => u.role === 'teacher').length : 0;
 
     document.getElementById('statRow').innerHTML = `
-      <div class="stat-card overview-clickable" data-overview-panel="students" role="button" tabindex="0" aria-label="View ${students.active} active students">
+      ${studentsResult.status === 'fulfilled' ? `<div class="stat-card overview-clickable" data-overview-panel="students" role="button" tabindex="0" aria-label="View ${students.active} active students">
         <div class="stat-icon"><i class="fa-solid fa-user-graduate"></i></div>
         <div class="stat-content"><div class="num">${students.active}</div><div class="label">Active Students</div></div>
-      </div>
-      <div class="stat-card overview-clickable" data-overview-panel="fees" role="button" tabindex="0" aria-label="View outstanding fees">
+      </div>` : ''}
+      ${fees ? `<div class="stat-card overview-clickable" data-overview-panel="fees" role="button" tabindex="0" aria-label="View outstanding fees">
         <div class="stat-icon"><i class="fa-solid fa-receipt"></i></div>
         <div class="stat-content"><div class="num">${fmtMoney(fees.outstanding)}</div><div class="label">Outstanding Fees</div></div>
-      </div>
-      <div class="stat-card overview-clickable" data-overview-panel="users" role="button" tabindex="0" aria-label="View ${pendingParents} pending account approvals">
+      </div>` : ''}
+      ${users ? `<div class="stat-card overview-clickable" data-overview-panel="users" role="button" tabindex="0" aria-label="View ${pendingParents} pending account approvals">
         <div class="stat-icon"><i class="fa-solid fa-user-clock"></i></div>
         <div class="stat-content"><div class="num">${pendingParents}</div><div class="label">Pending Approvals</div></div>
       </div>
       <div class="stat-card overview-clickable" data-overview-panel="users" role="button" tabindex="0" aria-label="View ${teachersCount} teaching staff accounts">
         <div class="stat-icon"><i class="fa-solid fa-chalkboard-user"></i></div>
         <div class="stat-content"><div class="num">${teachersCount}</div><div class="label">Teaching Staff</div></div>
-      </div>
+      </div>` : ''}
     `;
 
-    document.getElementById('feeReport').innerHTML = `
+    const feeCard = document.getElementById('feeReport');
+    if (!fees) {
+      feeCard.innerHTML = '<p class="empty-state">Fee totals are not available for your role.</p>';
+    } else feeCard.innerHTML = `
       <p style="margin-bottom:8px;">Billed: <strong>${fmtMoney(fees.totalBilled)}</strong> &nbsp;|&nbsp; Collected: <strong>${fmtMoney(fees.totalCollected)}</strong></p>
       <div style="display:flex; gap:8px; flex-wrap:wrap;">
         <span class="badge approved"><i class="fa-solid fa-check"></i> Paid: ${fees.byStatus.paid || 0}</span>
@@ -524,7 +650,8 @@ function renderFilteredUsers() {
   };
   const currentRoleLabel = roleLabels[activeAccountRole] || 'User';
 
-  const roleUsers = cachedUsers.filter((u) => u.role === activeAccountRole);
+  // Archived accounts live in Settings → Archived accounts until restored or deleted.
+  const roleUsers = cachedUsers.filter((u) => u.role === activeAccountRole && u.status !== 'archived');
 
   const statusFilter = document.getElementById('userStatusFilter')?.value || '';
   const query = (document.getElementById('userSearchInput')?.value || '').trim().toLowerCase();
@@ -563,7 +690,7 @@ function renderFilteredUsers() {
 
     tbody.innerHTML = `
       <tr>
-        <td colspan="5">
+        <td colspan="6">
           <div class="empty-state" style="padding:36px 16px;">
             <i class="fa-solid fa-user-slash" style="font-size:28px; color:var(--ink-light); margin-bottom:8px;"></i>
             <p style="margin:0; font-size:14px; font-weight:600; color:var(--ink-muted);">${emptyMsg}</p>
@@ -602,6 +729,7 @@ function renderFilteredUsers() {
         <td>
           <span class="badge ${u.status}" style="font-size:11.5px; padding:3px 9px;">${displayStatus}</span>
         </td>
+        <td>${userRoleAccessCell(u)}</td>
         <td style="color:#64748B; font-size:12.5px; white-space:nowrap;">
           ${u.createdAt ? fmtDate(u.createdAt) : '—'}
         </td>
@@ -629,6 +757,11 @@ function renderFilteredUsers() {
                 <i class="fa-solid fa-rotate-left"></i> Reactivate
               </button>
             `}
+            ${!isArchived && currentAccess && currentAccess.isSystemAdmin && String(u.id) !== String(user.id) ? `
+              <button type="button" class="btn btn-ghost btn-sm" data-user-permissions="${u.id}" style="padding:4px 8px; font-size:12px;" title="Role &amp; permissions">
+                <i class="fa-solid fa-user-lock"></i> Permissions
+              </button>
+            ` : ''}
             ${u.status !== 'archived' ? `
               <a class="btn btn-ghost btn-sm" href="edit-user.html?id=${encodeURIComponent(u.id)}" style="padding:4px 7px; font-size:12px; text-decoration:none;" title="Edit user profile & photo">
                 <i class="fa-solid fa-pen-to-square"></i>
@@ -682,14 +815,19 @@ function renderFilteredUsers() {
 
   tbody.querySelectorAll('[data-archive]').forEach((b) => {
     b.addEventListener('click', async () => {
-      if (!confirm('Are you sure you want to archive this user account?')) return;
+      if (!confirm('Archive this user account?\n\nIt will move to Settings → Archived accounts and be permanently deleted after 30 days unless you restore it.')) return;
       try {
-        await api.patch(`/users/${b.dataset.archive}/archive`);
+        const result = await api.patch(`/users/${b.dataset.archive}/archive`);
+        showToast(result.message || 'Account archived.', 'info');
         await loadUsers();
       } catch (err) {
         alert(err.message);
       }
     });
+  });
+
+  tbody.querySelectorAll('[data-user-permissions]').forEach((button) => {
+    button.addEventListener('click', () => openUserPermissions(button.dataset.userPermissions));
   });
 
   tbody.querySelectorAll('[data-reactivate]').forEach((b) => {
@@ -715,21 +853,38 @@ document.getElementById('addUserBtn').addEventListener('click', () => {
         <select id="uRole">
           <option value="teacher" ${activeAccountRole === 'teacher' ? 'selected' : ''}>Teacher</option>
           <option value="parent" ${activeAccountRole === 'parent' ? 'selected' : ''}>Parent</option>
-          <option value="admin" ${activeAccountRole === 'admin' ? 'selected' : ''}>Administrator</option>
+          ${currentAccess && currentAccess.isSystemAdmin ? `<option value="admin" ${activeAccountRole === 'admin' ? 'selected' : ''}>Administrator</option>` : ''}
         </select>
       </div>
+      <div class="field">
+        <label for="uPosition">Role (permissions)</label>
+        <select id="uPosition"></select>
+        <div class="field-hint">Sets which modules the account can use. A System Administrator can fine-tune it later under Roles &amp; Permissions.</div>
+      </div>
       <div class="field"><label>Full Name</label><input id="uName" placeholder="e.g. Sarah Jenkins" required /></div>
-      <div class="field"><label>Email Address</label><input type="email" id="uEmail" placeholder="sarah@example.com" required /></div>
+      <div class="field"><label>Email Address</label><input type="email" id="uEmail" placeholder="sarah@example.com" required autocomplete="off" data-lpignore="true" data-1p-ignore /></div>
       <div class="field"><label>Phone Number</label><input id="uPhone" placeholder="Optional phone number" /></div>
-      <div class="field"><label>Temporary Password</label><input type="password" id="uPassword" minlength="8" placeholder="At least 8 characters" required /></div>
+      <div class="field"><label>Temporary Password</label><input type="password" id="uPassword" minlength="8" placeholder="At least 8 characters" required autocomplete="new-password" data-lpignore="true" data-1p-ignore /></div>
       <button class="btn btn-primary btn-block" type="submit" style="margin-top:14px;">Create Account</button>
     </form>
   `);
+  const roleSelect = document.getElementById('uRole');
+  const positionSelect = document.getElementById('uPosition');
+  const fillPositions = () => {
+    positionSelect.innerHTML = RBAC_POSITIONS
+      .filter((position) => position.accountType === roleSelect.value)
+      .map((position) => `<option value="${position.key}">${escapeDashboardHtml(position.label)}</option>`).join('');
+    // Only a System Administrator chooses a non-default role; others get the account type's default.
+    positionSelect.disabled = !(currentAccess && currentAccess.isSystemAdmin);
+  };
+  roleSelect.addEventListener('change', fillPositions);
+  fillPositions();
   document.getElementById('userForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const msg = document.getElementById('modalMsg');
     try {
       await api.post('/users', {
+        position: currentAccess && currentAccess.isSystemAdmin ? positionSelect.value : undefined,
         role: document.getElementById('uRole').value,
         name: document.getElementById('uName').value.trim(),
         email: document.getElementById('uEmail').value.trim(),
@@ -746,10 +901,11 @@ document.getElementById('addUserBtn').addEventListener('click', () => {
 
 // ---------- Students ----------
 async function loadStudents() {
-  const { students } = await api.get('/students');
+  // Archived students live in Settings → Archived until restored or deleted.
+  const { students } = await api.get('/students?status=active');
   const tbody = document.getElementById('studentsTbody');
   if (!students.length) {
-    tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state"><i class="fa-solid fa-user-graduate"></i><p>No students enrolled yet. Add your first student.</p></div></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state"><i class="fa-solid fa-user-graduate"></i><p>No active students. Add a student, or restore one from Settings → Archived.</p></div></td></tr>`;
     return;
   }
 
@@ -796,9 +952,10 @@ async function loadStudents() {
   // Bind Archive buttons
   tbody.querySelectorAll('[data-archive-student]').forEach((btn) => {
     btn.addEventListener('click', () => {
-      if (confirm('Archive this student record?')) {
-        api.patch(`/students/${btn.dataset.archiveStudent}/archive`).then(loadStudents);
-      }
+      if (!confirm('Archive this student record?\n\nIt will move to Settings → Archived and be permanently deleted after 30 days unless you restore it.')) return;
+      api.patch(`/students/${btn.dataset.archiveStudent}/archive`)
+        .then((result) => { showToast(result.message || 'Student archived.', 'info'); return loadStudents(); })
+        .catch((err) => alert(err.message));
     });
   });
 }
@@ -822,7 +979,7 @@ document.getElementById('addStudentBtn').addEventListener('click', async () => {
           <select id="sParent"><option value="">— Select parent —</option>${parents.map((p) => `<option value="${escapeDashboardHtml(p.id)}">${escapeDashboardHtml(p.name)} (${escapeDashboardHtml(p.email)})</option>`).join('')}</select>
         </div>
         <div class="field"><label>Assigned Teacher</label>
-          <select id="sTeacher"><option value="">— Select teacher —</option>${teachers.map((t) => `<option value="${escapeDashboardHtml(t.id)}">${escapeDashboardHtml(t.name)}</option>`).join('')}</select>
+          <select id="sTeacher"><option value="">— Select teacher —</option>${assignableTeacherOptions(teachers)}</select>
         </div>
       </div>
       <div class="field"><label>Notes / Dietary / Emergency</label><textarea id="sNotes" rows="2" placeholder="Optional notes…"></textarea></div>
@@ -1527,7 +1684,9 @@ function openPaymentModal(feeId, remainingBalance, totalFee) {
   });
 }
 
-function openEditPaymentModal(fee, payment, totalPaid) {
+async function openEditPaymentModal(fee, payment, totalPaid) {
+  const editLock = await EditLocks.acquire('payment', payment._id, { isActive: whileElementOpen('editPaymentForm') });
+  if (!editLock) return;
   const remainingBalance = Math.max(0, Number((fee.amount - (totalPaid - payment.amountPaid)).toFixed(2)));
   const dateReceived = new Date(payment.datePaid).toISOString().slice(0, 10);
   Modal.open(`
@@ -1541,6 +1700,7 @@ function openEditPaymentModal(fee, payment, totalPaid) {
       <button class="btn btn-primary btn-block" type="submit" style="margin-top:14px;">Save Changes</button>
     </form>
   `);
+  Modal.onClose(() => editLock.release());
   document.getElementById('editPaymentForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const msg = document.getElementById('editPaymentMsg');
@@ -1559,7 +1719,7 @@ function openEditPaymentModal(fee, payment, totalPaid) {
         amountPaid,
         datePaid: document.getElementById('editPaymentDate').value,
         remarks: document.getElementById('editPaymentRemarks').value.trim(),
-      });
+      }, { version: payment.updatedAt });
       await loadFees();
       Modal.close();
     } catch (err) {
@@ -1580,7 +1740,7 @@ document.getElementById('addFeeBtn').addEventListener('click', async () => {
       <div class="field"><label>Description</label><input id="fDesc" placeholder="e.g. Tuition Fee — October" required /></div>
       <div class="grid-2">
         <div class="field"><label>Amount (₱)</label><input type="number" min="0" step="0.01" id="fAmount" required /></div>
-        <div class="field"><label>Due Date</label><input type="date" id="fDue" required /></div>
+        <div class="field"><label>Due Date</label><input type="date" id="fDue" data-no-past min="${localTodayValue()}" required /></div>
       </div>
       <button class="btn btn-primary btn-block" type="submit" style="margin-top:14px;">Create Fee Statement</button>
     </form>
@@ -1588,6 +1748,7 @@ document.getElementById('addFeeBtn').addEventListener('click', async () => {
   document.getElementById('feeForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const msg = document.getElementById('modalMsg');
+    if (rejectPastDateInput(document.getElementById('fDue'))) return;
     try {
       await api.post('/fees', {
         student: document.getElementById('fStudent').value,
@@ -1624,8 +1785,8 @@ async function loadEvents() {
         await api.del(`/events/${eventId}`);
         await loadEvents();
       },
-      onEventUpdated: async (eventId, updates) => {
-        await api.patch(`/events/${eventId}`, updates);
+      onEventUpdated: async (eventId, updates, version) => {
+        await api.patch(`/events/${eventId}`, updates, { version });
         await loadEvents();
       },
     });

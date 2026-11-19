@@ -4,6 +4,7 @@ const ctrl = require('../controllers/notificationController');
 
 router.use(protect, allowRoles('parent', 'teacher'));
 router.get('/', ctrl.listMyNotifications);
+router.patch('/read-all', ctrl.markAllRead);
 router.patch('/:id/read', ctrl.markRead);
 
 module.exports = router;

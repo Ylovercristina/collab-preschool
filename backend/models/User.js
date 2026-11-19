@@ -51,6 +51,21 @@ const userSchema = new mongoose.Schema(
       },
     },
 
+    // Role-based access control: the account's job in the school (see config/permissions.js).
+    // null = the default position for the account type.
+    position: { type: String, trim: true, default: null },
+    // Per-user permission overrides set by a System Administrator; null = use the position's defaults.
+    customPermissions: { type: mongoose.Schema.Types.Mixed, default: null },
+
+    // Sign-in tokens issued before this moment are no longer accepted (set when the password is
+    // reset or the account type changes), so older sessions must sign in again.
+    sessionsValidAfter: { type: Date, default: null },
+
+    // Archived accounts are permanently deleted ARCHIVE_RETENTION_DAYS after archivedAt unless restored.
+    archivedAt: { type: Date, default: null, index: true },
+    archivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    statusBeforeArchive: { type: String, enum: ['pending', 'approved', 'rejected', null], default: null },
+
     passwordResetOtpHash: { type: String, select: false },
     passwordResetOtpExpires: { type: Date, select: false },
     passwordResetOtpAttempts: { type: Number, default: 0, select: false },

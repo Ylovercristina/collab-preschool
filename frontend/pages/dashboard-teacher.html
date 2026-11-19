@@ -207,7 +207,7 @@
         <div id="attendanceDailySummary" class="attendance-summary" aria-live="polite"></div>
         <div class="attendance-saveall-bar" role="region" aria-label="Save attendance">
           <span id="attendanceUnsavedCount" aria-live="polite">No unsaved changes</span>
-          <button class="btn btn-primary" id="attendanceSaveAll" type="button" disabled><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i> Save All</button>
+          <button class="btn btn-primary" id="attendanceSaveAll" data-requires="attendance:manage" type="button" disabled><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i> Save All</button>
         </div>
         <div class="table-responsive attendance-table-wrap">
           <table class="attendance-table">
@@ -227,10 +227,45 @@
         <div class="progress-pickers">
           <div class="field"><label for="progClassSelect">Class</label><select id="progClassSelect"></select></div>
           <div class="field"><label for="progStudentSelect">Student</label><select id="progStudentSelect"></select></div>
+          <button class="btn btn-secondary" id="openYearlyProgressReport" type="button">
+            <i class="fa-solid fa-file-lines" aria-hidden="true"></i> Yearly report
+          </button>
         </div>
       </div>
+      <template id="yearlyProgressReportTemplate">
+        <div class="attendance-report-modal yearly-report-modal">
+          <div class="attendance-report-heading">
+            <div>
+              <h3>Yearly academic report</h3>
+              <p>A full-year summary of a student's activities, milestones, learning areas, evaluation and attendance.</p>
+            </div>
+          </div>
+          <form id="yearlyReportForm" class="attendance-report-filters yearly-report-filters">
+            <div class="field">
+              <label for="yearlyReportStudent">Student</label>
+              <select id="yearlyReportStudent" required></select>
+            </div>
+            <div class="field">
+              <label for="yearlyReportYear">Year</label>
+              <select id="yearlyReportYear" required></select>
+            </div>
+            <button class="btn btn-primary" type="submit"><i class="fa-solid fa-magnifying-glass-chart" aria-hidden="true"></i> View report</button>
+          </form>
+          <div id="yearlyReportResults" class="attendance-report-results yearly-report-results" hidden>
+            <div id="yearlyReportSummary" class="yearly-report-title" aria-live="polite"></div>
+            <div id="yearlyReportBody" class="yearly-report-body"></div>
+            <div class="yearly-report-footer">
+              <div class="field">
+                <label for="yearlyReportRemarks">Teacher's remarks <span>(optional, added to the PDF)</span></label>
+                <textarea id="yearlyReportRemarks" rows="3" maxlength="1500" placeholder="Overall comments for the year"></textarea>
+              </div>
+              <button class="btn btn-primary" id="downloadYearlyReport" type="button" disabled><i class="fa-solid fa-download" aria-hidden="true"></i> Download PDF</button>
+            </div>
+          </div>
+        </div>
+      </template>
       <div id="progressStudentHeader"></div>
-      <div class="card progress-form-card" style="margin-bottom:20px;">
+      <div class="card progress-form-card" data-requires="progress:manage" style="margin-bottom:20px;">
         <h3 id="progressFormTitle" style="margin-bottom:14px;"><i class="fa-solid fa-plus-circle" style="color:var(--primary); margin-right:6px;"></i>Add Progress Record</h3>
         <form id="progressForm" novalidate>
           <fieldset class="progress-type-picker">
@@ -330,7 +365,7 @@
               <label class="messenger-compose-label" for="teacherGroupFirstMessage">Message</label>
               <div class="chat-input-row">
                 <textarea id="teacherGroupFirstMessage" rows="1" maxlength="2000" placeholder="Write your first message…" required></textarea>
-                <button class="btn btn-primary messenger-send-button" id="createTeacherGroupBtn" type="submit" aria-label="Create group and send message"><i class="fa-solid fa-paper-plane"></i></button>
+                <button class="btn btn-primary messenger-send-button" id="createTeacherGroupBtn" data-requires="messages:manage" type="submit" aria-label="Create group and send message"><i class="fa-solid fa-paper-plane"></i></button>
               </div>
               <div id="teacherGroupMessage" class="messenger-status" role="status" aria-live="polite" hidden></div>
             </form>
@@ -368,7 +403,7 @@
         </div>
         <div class="panel-header-actions">
           <button type="button" class="gcal-status-btn" id="personalGoogleCalendarStatusBtn" hidden></button>
-          <button class="btn btn-primary btn-sm" id="addEventBtn"><i class="fa-solid fa-bullhorn"></i> Send Notice / Event</button>
+          <button class="btn btn-primary btn-sm" id="addEventBtn" data-requires="events:manage"><i class="fa-solid fa-bullhorn"></i> Send Notice / Event</button>
         </div>
       </div>
       <div id="eventEmailSummary" class="form-msg" aria-live="polite"></div>

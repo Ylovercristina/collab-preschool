@@ -64,11 +64,58 @@ const Auth = {
   isLoggedIn: () => !!storageGet(sessionStorage, SESSION_TOKEN_KEY),
 };
 
-async function apiRequest(path, { method = 'GET', body, auth = true, headers: additionalHeaders = {} } = {}) {
+// Reads the expiry from the sign-in token (no secret needed: the server still verifies it).
+function tokenExpiresAt(token) {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+    return payload && payload.exp ? payload.exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+function showSessionExpired(message) {
+  showErrorPopup(`${message}\n\nYour changes were not saved. Sign in again in a new tab, then come back and save.`, {
+    title: 'Please sign in again',
+    action: { label: 'Sign in', href: getLoginUrl() },
+  });
+}
+
+// Writes (saving, deleting, uploading) are checked before they are sent: an expired or missing
+// session is caught here, so the form keeps what was typed instead of failing on the server.
+function validateTokenBeforeSaving() {
+  const token = Auth.getToken();
+  if (!token || token.split('.').length !== 3) {
+    return 'You are not signed in.';
+  }
+  const expiresAt = tokenExpiresAt(token);
+  if (!expiresAt) return 'Your session is not valid.';
+  if (expiresAt - Date.now() < 10 * 1000) return 'Your session has expired.';
+  return '';
+}
+
+// `version` = the updatedAt of the record that was loaded for editing. The server refuses the
+// change (409) if someone else saved the record in the meantime (optimistic locking).
+async function apiRequest(path, { method = 'GET', body, auth = true, headers: additionalHeaders = {}, version } = {}) {
+  const isWrite = !['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase());
+  if (auth && isWrite && path !== '/auth/logout') {
+    const problem = validateTokenBeforeSaving();
+    if (problem) {
+      showSessionExpired(problem);
+      const error = new Error(`${problem} Sign in again to save your changes.`);
+      error.status = 401;
+      error.code = 'TOKEN_EXPIRED';
+      throw error;
+    }
+  }
   const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
   const headers = {};
   if (!isFormData) headers['Content-Type'] = 'application/json';
   if (auth && Auth.getToken()) headers.Authorization = `Bearer ${Auth.getToken()}`;
+  if (version) {
+    const parsed = new Date(version);
+    if (!Number.isNaN(parsed.getTime())) headers['X-Record-Version'] = parsed.toISOString();
+  }
   Object.assign(headers, additionalHeaders);
 
   let res;
@@ -93,10 +140,22 @@ async function apiRequest(path, { method = 'GET', body, auth = true, headers: ad
 
   if (!res.ok) {
     if (res.status === 401 && auth) {
-      Auth.clear();
-      window.location.href = getLoginUrl();
+      if (isWrite) {
+        // Don't leave the page during a save: the person would lose what they typed.
+        showSessionExpired((data && data.message) || 'Your session is no longer valid.');
+      } else {
+        Auth.clear();
+        window.location.href = getLoginUrl();
+      }
     }
-    throw new Error((data && data.message) || `Request failed (${res.status})`);
+    if (res.status === 429 && data && data.retryAfterSeconds && typeof showToast === 'function') {
+      showToast(data.message, 'error');
+    }
+    const error = new Error((data && data.message) || `Request failed (${res.status})`);
+    error.status = res.status;
+    error.code = data && data.code;
+    error.data = data;
+    throw error;
   }
   return data;
 }
@@ -106,9 +165,95 @@ const api = {
   post: (path, body, opts = {}) => apiRequest(path, { method: 'POST', body, ...opts }),
   patch: (path, body, opts = {}) => apiRequest(path, { method: 'PATCH', body, ...opts }),
   put: (path, body, opts = {}) => apiRequest(path, { method: 'PUT', body, ...opts }),
-  putFormData: (path, body) => apiRequest(path, { method: 'PUT', body }),
+  putFormData: (path, body, opts = {}) => apiRequest(path, { method: 'PUT', body, ...opts }),
   del: (path) => apiRequest(path, { method: 'DELETE' }),
 };
+
+// ---------- Edit locks ("X is currently editing this") ----------
+// Opening a record for editing locks it to you. Anyone else who tries to edit it sees who is
+// editing and is asked to wait. The lock is kept alive while the form is open and released on
+// save, cancel, close or leaving the page; if a browser closes, it expires on its own.
+const EDIT_LOCK_HEARTBEAT_MS = 30 * 1000;
+
+const EditLocks = {
+  held: new Map(), // "resource:id" -> handle
+
+  lockedMessage(error) {
+    const holder = error.data && error.data.lockedBy;
+    if (!holder) return error.message;
+    const since = holder.since ? new Date(holder.since).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+    return `${error.message}${since ? `\n\nEditing since ${since}.` : ''}`;
+  },
+
+  showLocked(error) {
+    const holder = (error.data && error.data.lockedBy) || {};
+    showErrorPopup(this.lockedMessage(error), { title: `${holder.name || 'Someone'} is editing this` });
+  },
+
+  // Returns a handle, or null when someone else is editing (the pop-up is shown for you).
+  // `isActive` (optional) lets the lock release itself once the form is no longer open.
+  async acquire(resource, id, { isActive } = {}) {
+    if (!resource || !id) return { release() {} };
+    const key = `${resource}:${id}`;
+    if (this.held.has(key)) this.held.get(key).release();
+    try {
+      await api.post('/locks', { resource, id: String(id) });
+    } catch (error) {
+      if (error.status === 423) {
+        this.showLocked(error);
+        return null;
+      }
+      // Lock service unavailable: let the person edit; the server still checks versions on save.
+      console.warn('[edit-lock] Could not lock record:', error.message);
+      return { release() {} };
+    }
+    let released = false;
+    const handle = {
+      resource,
+      id: String(id),
+      release: () => {
+        if (released) return;
+        released = true;
+        clearInterval(timer);
+        this.held.delete(key);
+        sendLockRelease(resource, id);
+      },
+    };
+    const timer = setInterval(() => {
+      if (isActive && !isActive()) {
+        handle.release();
+        return;
+      }
+      api.post('/locks', { resource, id: String(id) }).catch((error) => {
+        if (error.status === 423) {
+          // Our lock lapsed (e.g. the computer slept) and someone else took the record.
+          handle.release();
+          this.showLocked(error);
+        }
+      });
+    }, EDIT_LOCK_HEARTBEAT_MS);
+    this.held.set(key, handle);
+    return handle;
+  },
+
+  releaseAll() {
+    Array.from(this.held.values()).forEach((handle) => handle.release());
+  },
+};
+
+// keepalive lets the release reach the server even while the page is closing.
+function sendLockRelease(resource, id) {
+  const token = Auth.getToken();
+  if (!token) return;
+  fetch(`${API_BASE}/locks?resource=${encodeURIComponent(resource)}&id=${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+    credentials: 'include',
+    keepalive: true,
+  }).catch(() => { /* the lock expires on its own */ });
+}
+
+window.addEventListener('pagehide', () => EditLocks.releaseAll());
 
 // Guards a dashboard page: redirect to login if not authenticated,
 // or to the correct dashboard if the role doesn't match this page.

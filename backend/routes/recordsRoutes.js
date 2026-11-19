@@ -1,8 +1,11 @@
 const router = require('express').Router();
 const fs = require('fs');
-const { protect, allowRoles } = require('../middleware/auth');
+const { protect, allowRoles, requirePermission: P, requireAnyPermission } = require('../middleware/auth');
 const { upload } = require('../middleware/recordUpload');
 const ctrl = require('../controllers/recordsController');
+const Student = require('../models/Student');
+const User = require('../models/User');
+const { versionGuard } = require('../middleware/concurrency');
 
 router.use(protect, allowRoles('admin'));
 
@@ -21,14 +24,15 @@ function uploadDocuments(req, res, next) {
   });
 }
 
-router.get('/students', ctrl.listStudents);
-router.post('/students', ctrl.createStudent);
-router.patch('/students/:id', ctrl.updateStudent);
-router.get('/teachers', ctrl.listTeachers);
-router.post('/teachers', ctrl.createTeacher);
-router.patch('/teachers/:id', ctrl.updateTeacher);
-router.post('/:type/:id/documents', uploadDocuments, ctrl.uploadDocuments);
-router.get('/:type/:id/documents/:documentId', ctrl.downloadDocument);
-router.delete('/:type/:id/documents/:documentId', ctrl.deleteDocument);
+router.get('/students', P('records', 'view'), ctrl.listStudents);
+router.post('/students', P('records', 'manage'), ctrl.createStudent);
+router.patch('/students/:id', P('records', 'manage'), versionGuard(Student, { label: 'student record', lock: 'student' }), ctrl.updateStudent);
+// The Classes form uses this teacher list as well.
+router.get('/teachers', requireAnyPermission(['records', 'view'], ['classes', 'view']), ctrl.listTeachers);
+router.post('/teachers', P('records', 'manage'), ctrl.createTeacher);
+router.patch('/teachers/:id', P('records', 'manage'), versionGuard(User, { label: 'teacher record', lock: 'user' }), ctrl.updateTeacher);
+router.post('/:type/:id/documents', P('records', 'manage'), uploadDocuments, ctrl.uploadDocuments);
+router.get('/:type/:id/documents/:documentId', P('records', 'view'), ctrl.downloadDocument);
+router.delete('/:type/:id/documents/:documentId', P('records', 'manage'), ctrl.deleteDocument);
 
 module.exports = router;

@@ -19,9 +19,196 @@ async function pollEmailSummary(path, initial, target) {
   return summary;
 }
 
+// ---------- Role-based access control (frontend side) ----------
+// The server enforces every permission; this hides what the account can't use and blocks
+// opening those pages, including through ?panel= links.
+let currentAccess = null; // { position, isSystemAdmin, permissions }
+
+const PANEL_MODULES = {
+  admin: {
+    overview: 'dashboard', users: 'users', students: 'students', classes: 'classes', enrollment: 'enrollment',
+    'academic-progress': 'progress', records: 'records', fees: 'fees', events: 'events', alerts: 'alerts', logs: 'logs',
+  },
+  teacher: {
+    overview: 'dashboard', enrollment: 'enrollment', students: 'students', fees: 'fees', attendance: 'attendance',
+    progress: 'progress', messages: 'messages', events: 'events', pickup: 'pickup', alerts: 'alerts',
+  },
+  parent: {
+    overview: 'dashboard', enrollment: 'enrollment', progress: 'progress', attendance: 'attendance', fees: 'fees',
+    messages: 'messages', events: 'events', pickup: 'pickup',
+  },
+};
+// Settings sections that need a module permission (Profile is always available).
+const SETTINGS_SECTION_MODULES = { integrations: ['settings'], archived: ['users', 'students'], backup: ['settings'] };
+
+function hasPermission(moduleKey, action = 'view') {
+  if (!currentAccess) return true; // not loaded yet: the server still enforces
+  const entry = currentAccess.permissions && currentAccess.permissions[moduleKey];
+  return Boolean(entry && entry[action]);
+}
+
+function panelAllowed(panel) {
+  const role = (Auth.getUser() || {}).role;
+  const moduleKey = (PANEL_MODULES[role] || {})[panel];
+  return !moduleKey || hasPermission(moduleKey, 'view');
+}
+
+function applyPermissionVisibility() {
+  if (!currentAccess) return;
+  document.querySelectorAll('.nav-item[data-panel]').forEach((button) => {
+    if (button.dataset.panel === 'settings') return;
+    button.hidden = !panelAllowed(button.dataset.panel);
+  });
+  document.querySelectorAll('.settings-subnav[data-settings-section]').forEach((button) => {
+    const modules = SETTINGS_SECTION_MODULES[button.dataset.settingsSection];
+    if (modules) button.hidden = !modules.some((moduleKey) => hasPermission(moduleKey, 'view'));
+  });
+  // Buttons and sections marked data-requires="module:action" (or "sysadmin").
+  document.querySelectorAll('[data-requires]').forEach((element) => {
+    const [moduleKey, action] = element.dataset.requires.split(':');
+    element.hidden = moduleKey === 'sysadmin' ? !currentAccess.isSystemAdmin : !hasPermission(moduleKey, action || 'view');
+  });
+  document.body.classList.toggle('rbac-system-admin', Boolean(currentAccess.isSystemAdmin));
+  // If the open page is no longer allowed, move to the first page that is.
+  const active = document.querySelector('.nav-item[data-panel].active');
+  if (active && active.dataset.panel !== 'settings' && !panelAllowed(active.dataset.panel)) {
+    const fallback = Array.from(document.querySelectorAll('.nav-item[data-panel]'))
+      .find((button) => button.dataset.panel !== 'settings' && panelAllowed(button.dataset.panel));
+    (fallback || document.querySelector('.settings-button[data-panel="settings"]'))?.click();
+  }
+}
+
+async function loadMyPermissions() {
+  try {
+    currentAccess = await api.get('/permissions/me');
+    applyPermissionVisibility();
+    document.dispatchEvent(new CustomEvent('permissions-loaded', { detail: currentAccess }));
+  } catch (err) {
+    console.error('[rbac] Could not load permissions:', err.message);
+  }
+  return currentAccess;
+}
+
+// ---------- Responsive layout: mobile top bar + slide-out sidebar ----------
+const MOBILE_LAYOUT_QUERY = window.matchMedia('(max-width: 900px)');
+
+function initMobileShell() {
+  const shell = document.querySelector('.app-shell');
+  const sidebar = document.querySelector('.app-shell > .sidebar');
+  if (!shell || !sidebar || document.querySelector('.mobile-topbar')) return;
+  sidebar.id = sidebar.id || 'appSidebar';
+  const logo = sidebar.querySelector('.brand img');
+
+  const bar = document.createElement('header');
+  bar.className = 'mobile-topbar';
+  bar.innerHTML = `
+    <button type="button" class="mobile-menu-btn" aria-controls="${sidebar.id}" aria-expanded="false" aria-label="Open menu">
+      <i class="fa-solid fa-bars" aria-hidden="true"></i>
+    </button>
+    <span class="mobile-topbar-title" aria-live="polite"></span>
+    ${logo ? `<a class="mobile-topbar-brand" href="../index.html" aria-label="Play-is-School home"><img src="${logo.getAttribute('src')}" alt="" /></a>` : ''}`;
+  shell.parentNode.insertBefore(bar, shell);
+  const overlay = document.createElement('div');
+  overlay.className = 'sidebar-overlay';
+  overlay.setAttribute('aria-hidden', 'true');
+  document.body.appendChild(overlay);
+
+  const menuButton = bar.querySelector('.mobile-menu-btn');
+  const title = bar.querySelector('.mobile-topbar-title');
+
+  const setOpen = (open, { focus = true } = {}) => {
+    document.body.classList.toggle('sidebar-open', open);
+    menuButton.setAttribute('aria-expanded', String(open));
+    menuButton.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+    menuButton.innerHTML = `<i class="fa-solid ${open ? 'fa-xmark' : 'fa-bars'}" aria-hidden="true"></i>`;
+    if (!focus) return;
+    if (open) sidebar.querySelector('.nav-item[data-panel].active, .nav-item[data-panel]')?.focus();
+    else menuButton.focus();
+  };
+
+  menuButton.addEventListener('click', () => setOpen(!document.body.classList.contains('sidebar-open')));
+  overlay.addEventListener('click', () => setOpen(false));
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && document.body.classList.contains('sidebar-open')) setOpen(false);
+  });
+  // Choosing a page closes the drawer (the Settings gear stays open so a section can be picked).
+  sidebar.addEventListener('click', (event) => {
+    if (!MOBILE_LAYOUT_QUERY.matches) return;
+    const item = event.target.closest('.nav-item[data-panel], .settings-subnav, .logout');
+    if (item && !item.classList.contains('settings-button')) setOpen(false, { focus: false });
+  });
+  // Back to the wide layout: make sure the drawer state is cleared.
+  MOBILE_LAYOUT_QUERY.addEventListener('change', (event) => {
+    if (!event.matches) setOpen(false, { focus: false });
+  });
+
+  // The top bar shows the page that is open.
+  const updateTitle = () => {
+    const active = sidebar.querySelector('.nav-item[data-panel].active');
+    if (!active) return;
+    let text = '';
+    if (active.dataset.panel === 'settings') {
+      const section = sidebar.querySelector('.settings-subnav.active');
+      text = section ? `Settings · ${section.textContent.trim()}` : 'Settings';
+    } else {
+      const copy = active.cloneNode(true);
+      copy.querySelectorAll('.badge, .nav-badge, [aria-hidden="true"]').forEach((node) => node.remove());
+      text = copy.textContent.replace(/\s+/g, ' ').trim() || active.getAttribute('aria-label') || '';
+    }
+    title.textContent = text;
+  };
+  new MutationObserver(updateTitle).observe(sidebar, { subtree: true, attributes: true, attributeFilter: ['class'] });
+  updateTitle();
+}
+
+// Tables that can't scroll sideways get a scrolling wrapper, so wide tables never push the page
+// wider than the screen. Tables with their own mobile card layout (fees) are left alone.
+function ensureScrollableTables(root = document) {
+  root.querySelectorAll('table').forEach((table) => {
+    if (table.classList.contains('fee-table') || table.closest('.calendar, .calendar-grid')) return;
+    const parent = table.parentElement;
+    if (!parent || parent.classList.contains('table-responsive') || parent.classList.contains('table-scroll')) return;
+    const overflow = window.getComputedStyle(parent).overflowX;
+    if (overflow === 'auto' || overflow === 'scroll') return;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'table-scroll';
+    parent.insertBefore(wrapper, table);
+    wrapper.appendChild(table);
+  });
+}
+
+function initResponsiveTables() {
+  let scheduled = false;
+  const run = () => {
+    scheduled = false;
+    ensureScrollableTables(document.querySelector('.main-pane') || document);
+    const modal = document.getElementById('modalBody');
+    if (modal) ensureScrollableTables(modal);
+  };
+  run();
+  new MutationObserver(() => {
+    if (scheduled) return;
+    scheduled = true;
+    requestAnimationFrame(run);
+  }).observe(document.body, { childList: true, subtree: true });
+}
+
+// Hides the Settings pop-up menu after a section is chosen.
+function closeSettingsMenu() {
+  const menu = document.querySelector('.settings-menu');
+  if (!menu) return;
+  menu.classList.remove('open');
+  menu.classList.add('dismissed');
+  if (menu.contains(document.activeElement)) document.activeElement.blur();
+}
+
 function initSidebarNav() {
   document.querySelectorAll('.nav-item[data-panel]').forEach((btn) => {
     btn.addEventListener('click', () => {
+      if (!panelAllowed(btn.dataset.panel)) {
+        showToast('Your account does not have access to that page.', 'error');
+        return;
+      }
       if (btn.dataset.panel === 'settings') {
         if (typeof onSettingsAccessRevoked === 'function') onSettingsAccessRevoked();
         document.querySelectorAll('.settings-section').forEach((panel) => {
@@ -37,7 +224,10 @@ function initSidebarNav() {
       document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
       btn.classList.add('active');
       const settingsMenu = btn.closest('.settings-menu');
-      if (settingsMenu) settingsMenu.classList.add('open');
+      if (settingsMenu) {
+        settingsMenu.classList.add('open');
+        settingsMenu.classList.remove('dismissed');
+      }
       else document.querySelector('.settings-menu')?.classList.remove('open');
       const targetPanel = document.getElementById(`panel-${btn.dataset.panel}`);
       if (targetPanel) targetPanel.classList.add('active');
@@ -53,6 +243,11 @@ function initSidebarNav() {
   document.querySelectorAll('.settings-subnav[data-settings-section]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const section = btn.dataset.settingsSection;
+      const sectionModules = SETTINGS_SECTION_MODULES[section];
+      if (sectionModules && !sectionModules.some((moduleKey) => hasPermission(moduleKey, 'view'))) {
+        showToast('Your account does not have access to that setting.', 'error');
+        return;
+      }
       if (!document.getElementById('panel-settings')?.classList.contains('active')) {
         document.querySelector('.settings-button[data-panel="settings"]')?.click();
       }
@@ -66,6 +261,13 @@ function initSidebarNav() {
       if (section === 'calendar') loadPersonalGoogleCalendarSettings();
       if (typeof onSettingsSectionShown === 'function') onSettingsSectionShown(section);
     });
+    // Registered second so it runs after the section opens (even when Integrations asks for a code).
+    btn.addEventListener('click', closeSettingsMenu);
+  });
+
+  // The menu can open again once the pointer leaves it.
+  document.querySelectorAll('.settings-menu').forEach((menu) => {
+    menu.addEventListener('mouseleave', () => menu.classList.remove('dismissed'));
   });
 
   // A ?panel= link wins; otherwise reopen the page this tab was on before a reload.
@@ -636,6 +838,7 @@ const Modal = {
     if (!this.el) this.init();
     if (!this.el) return;
     if (!this.el.classList.contains('open')) this.previousFocus = document.activeElement;
+    this.runCloseCallbacks(); // the previous dialog's content is being replaced
     this.body.className = `modal ${isWide ? 'modal-wide' : ''}`;
     this.body.setAttribute('role', 'dialog');
     this.body.setAttribute('aria-modal', 'true');
@@ -647,7 +850,20 @@ const Modal = {
     this.el.classList.add('open');
     this.body.querySelector('.modal-close').focus();
   },
+  // Runs `callback` once when the current dialog closes or is replaced (e.g. to release an edit lock).
+  onClose(callback) {
+    this.closeCallbacks = this.closeCallbacks || [];
+    this.closeCallbacks.push(callback);
+  },
+  runCloseCallbacks() {
+    const callbacks = this.closeCallbacks || [];
+    this.closeCallbacks = [];
+    callbacks.forEach((callback) => {
+      try { callback(); } catch (err) { console.error('[modal] close callback failed:', err); }
+    });
+  },
   close() {
+    this.runCloseCallbacks();
     if (this.el) {
       this.el.classList.remove('open');
       this.body.innerHTML = '';
@@ -679,6 +895,114 @@ function showToast(message, type = 'success') {
   stack.appendChild(toast);
   window.setTimeout(() => toast.remove(), 5000);
 }
+
+// ---------- Teacher pickers ----------
+// <option>s for "assigned teacher" selects. Archived teachers can't be picked: they are left out,
+// except the currently assigned one, which is shown disabled so the admin can see why it's not selected.
+function assignableTeacherOptions(teachers, selectedId = '') {
+  const selected = String(selectedId || '');
+  return (teachers || []).map((teacher) => {
+    const id = String(teacher.id || teacher._id);
+    if (teacher.status === 'archived') {
+      return id === selected
+        ? `<option value="${escapeDashboardHtml(id)}" disabled>${escapeDashboardHtml(teacher.name)} (archived — choose another teacher)</option>`
+        : '';
+    }
+    return `<option value="${escapeDashboardHtml(id)}" ${id === selected ? 'selected' : ''}>${escapeDashboardHtml(teacher.name)}</option>`;
+  }).join('');
+}
+
+function isArchivedTeacher(teachers, teacherId) {
+  const id = String(teacherId || '');
+  return Boolean(id) && (teachers || []).some((teacher) => String(teacher.id || teacher._id) === id && teacher.status === 'archived');
+}
+
+// ---------- Past-date guard ----------
+// Any <input type="date" data-no-past> refuses dates before today and shows a pop-up error.
+function localTodayValue() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+
+function isPastDateValue(value) {
+  return Boolean(value) && value < localTodayValue();
+}
+
+function formatDateValueForDisplay(value) {
+  const [year, month, day] = String(value).split('-').map(Number);
+  if (!year || !month || !day) return value;
+  return new Date(year, month - 1, day).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+function showDateErrorPopup(value) {
+  document.getElementById('dateErrorPopup')?.remove();
+  const previousFocus = document.activeElement;
+  const overlay = document.createElement('div');
+  overlay.id = 'dateErrorPopup';
+  overlay.className = 'date-error-backdrop';
+  overlay.innerHTML = `
+    <div class="date-error-dialog" role="alertdialog" aria-modal="true" aria-labelledby="dateErrorTitle" aria-describedby="dateErrorText">
+      <div class="date-error-icon" aria-hidden="true"><i class="fa-solid fa-calendar-xmark"></i></div>
+      <h3 id="dateErrorTitle">Date not applicable</h3>
+      <p id="dateErrorText"></p>
+      <button type="button" class="btn btn-primary btn-block" id="dateErrorOk">OK</button>
+    </div>`;
+  overlay.querySelector('#dateErrorText').textContent =
+    `The selected date (${formatDateValueForDisplay(value)}) is in the past and is not applicable. Please choose today or a future date.`;
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener('keydown', onKey, true);
+    if (previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus();
+  };
+  const onKey = (event) => {
+    if (event.key === 'Escape' || event.key === 'Enter') {
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+    }
+  };
+  overlay.addEventListener('click', (event) => { if (event.target === overlay) close(); });
+  overlay.querySelector('#dateErrorOk').addEventListener('click', close);
+  document.addEventListener('keydown', onKey, true);
+  document.body.appendChild(overlay);
+  overlay.querySelector('#dateErrorOk').focus();
+}
+
+// Returns true when the input holds a past date (and shows the pop-up). Use in submit handlers.
+function rejectPastDateInput(input) {
+  if (!input || !isPastDateValue(input.value)) return false;
+  // An unchanged, previously saved date (e.g. editing an older record) is allowed through.
+  if (input.dataset.originalValue && input.value === input.dataset.originalValue) return false;
+  showDateErrorPopup(input.value);
+  return true;
+}
+
+function applyNoPastMin(input) {
+  if (!input.min || input.min < localTodayValue()) input.min = localTodayValue();
+}
+
+document.addEventListener('focusin', (event) => {
+  const input = event.target;
+  if (!(input instanceof HTMLInputElement) || input.type !== 'date' || !input.hasAttribute('data-no-past')) return;
+  if (!('originalValue' in input.dataset)) input.dataset.originalValue = input.value;
+  // Keep an already-saved past date submittable; only new picks are restricted.
+  if (!isPastDateValue(input.dataset.originalValue)) applyNoPastMin(input);
+  input.dataset.lastValidValue = isPastDateValue(input.value) && input.value !== input.dataset.originalValue ? '' : input.value;
+});
+
+document.addEventListener('change', (event) => {
+  const input = event.target;
+  if (!(input instanceof HTMLInputElement) || input.type !== 'date' || !input.hasAttribute('data-no-past')) return;
+  if (!input.value || !isPastDateValue(input.value)) {
+    input.dataset.lastValidValue = input.value;
+    return;
+  }
+  if (input.dataset.originalValue && input.value === input.dataset.originalValue) return;
+  const rejected = input.value;
+  input.value = input.dataset.lastValidValue || '';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  showDateErrorPopup(rejected);
+}, true);
 
 // ---------- New-message popups (teachers & parents) ----------
 // Polls the inbox and pops up a notification when someone else sends a message.
@@ -799,6 +1123,7 @@ function showMessagePopup(thread, sender) {
 }
 
 async function checkForNewMessages() {
+  if (!hasPermission('messages', 'view')) return;
   const me = Auth.getUser() || {};
   const myId = String(me.id || me._id || '');
   let threads;
@@ -1362,7 +1687,7 @@ function openEventComposer({ classes = [], onSave, onComplete, approvalRequired 
         <section class="event-composer-section">
           <h4>Schedule</h4>
           <div class="grid-2">
-            <div class="field" data-event-field="date"><label for="composerDate">Date <span class="required-mark" aria-hidden="true">*</span></label><input type="date" id="composerDate" min="${todayValue}" value="${escapeDashboardHtml(values.date || '')}" required aria-describedby="composerDateError" /><small class="field-error" id="composerDateError" data-event-error="date"></small></div>
+            <div class="field" data-event-field="date"><label for="composerDate">Date <span class="required-mark" aria-hidden="true">*</span></label><input type="date" id="composerDate" data-no-past min="${todayValue}" value="${escapeDashboardHtml(values.date || '')}" required aria-describedby="composerDateError" /><small class="field-error" id="composerDateError" data-event-error="date"></small></div>
             <div class="field" data-event-field="time"><label for="composerTime">Time <span class="required-mark" aria-hidden="true">*</span></label><input type="time" id="composerTime" value="${escapeDashboardHtml(values.time || '')}" required aria-describedby="composerTimeError" /><small class="field-error" id="composerTimeError" data-event-error="time"></small></div>
           </div>
         </section>
@@ -1415,6 +1740,7 @@ function openEventComposer({ classes = [], onSave, onComplete, approvalRequired 
         venue: data.venue ? '' : 'Venue is required.',
         classes: data.targetType === 'classes' && !data.targetClasses.length ? 'Choose at least one class.' : '',
       };
+      if (data.date && data.date < todayValue) showDateErrorPopup(data.date);
       Object.entries(errors).forEach(([field, message]) => {
         const errorNode = form.querySelector(`[data-event-error="${field}"]`);
         if (errorNode) errorNode.textContent = message;
@@ -1897,7 +2223,9 @@ class EventsCalendar {
       </div>`;
   }
 
-  showEditEvent(ev) {
+  async showEditEvent(ev) {
+    const editLock = await EditLocks.acquire('event', ev._id, { isActive: whileElementOpen('editEventForm') });
+    if (!editLock) return;
     const escapeValue = (value = '') => String(value).replace(/[&<>"']/g, (character) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
     })[character]);
@@ -1908,7 +2236,7 @@ class EventsCalendar {
       <div id="editEventMsg" class="form-msg"></div>
       <form id="editEventForm">
         <div class="field"><label>Event Title</label><input id="editEventTitle" value="${escapeValue(ev.title)}" required /></div>
-        <div class="field"><label>Event Date</label><input type="date" id="editEventDate" value="${dateValue}" required /></div>
+        <div class="field"><label>Event Date</label><input type="date" id="editEventDate" data-no-past data-original-value="${dateValue}" value="${dateValue}" required /></div>
         <div class="grid-2">
           <div class="field"><label for="editEventTime">Time</label><input type="time" id="editEventTime" value="${escapeValue(ev.time || '09:00')}" required /></div>
           <div class="field"><label for="editEventVenue">Venue</label><input id="editEventVenue" value="${escapeValue(ev.venue || '')}" required /></div>
@@ -1925,6 +2253,7 @@ class EventsCalendar {
         <button class="btn btn-primary btn-block" type="submit" style="margin-top:14px;">Save Changes</button>
       </form>
     `);
+    Modal.onClose(() => editLock.release());
     const venuePicker = createVenuePicker({
       root: document.getElementById('editEventVenueMap'),
       venueInput: document.getElementById('editEventVenue'),
@@ -1933,6 +2262,7 @@ class EventsCalendar {
     document.getElementById('editEventForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const msg = document.getElementById('editEventMsg');
+      if (rejectPastDateInput(document.getElementById('editEventDate'))) return;
       try {
         await this.onEventUpdated(ev._id, {
           title: document.getElementById('editEventTitle').value.trim(),
@@ -1942,7 +2272,7 @@ class EventsCalendar {
           location: venuePicker.getLocation(),
           audience: document.getElementById('editEventAudience').value,
           description: document.getElementById('editEventDescription').value.trim(),
-        });
+        }, ev.updatedAt);
         Modal.close();
       } catch (err) {
         showMsg(msg, err.message);
@@ -2443,8 +2773,16 @@ async function showStudentDetailsModal(studentId, { canEdit = true, onStudentUpd
   }
 }
 
+// Keeps an edit lock only while its form is on screen (a safety net if a dialog closes unexpectedly).
+function whileElementOpen(elementId) {
+  return () => Boolean(document.getElementById(elementId));
+}
+
 // Edit Student Modal (Used by both Admin and Teacher)
 async function openEditStudentModal(student, onSaved, { teacherMode = false } = {}) {
+  // Only one person may edit a student at a time; others are told who is editing.
+  const editLock = await EditLocks.acquire('student', student._id, { isActive: whileElementOpen('editStudentForm') });
+  if (!editLock) return;
   let parents = [];
   let teachers = [];
   if (!teacherMode) {
@@ -2527,11 +2865,7 @@ async function openEditStudentModal(student, onSaved, { teacherMode = false } = 
           <label for="esTeacher">Assigned Teacher</label>
           <select id="esTeacher">
             <option value="">— Unassigned —</option>
-            ${teachers.map((t) => `
-              <option value="${escapeStudentModalValue(t.id)}" ${student.teacher && String(student.teacher._id || student.teacher) === String(t.id) ? 'selected' : ''}>
-                ${escapeStudentModalValue(t.name)}
-              </option>
-            `).join('')}
+            ${assignableTeacherOptions(teachers, student.teacher ? (student.teacher._id || student.teacher) : '')}
           </select>
         </div>
       </div>
@@ -2560,6 +2894,7 @@ async function openEditStudentModal(student, onSaved, { teacherMode = false } = 
     </form>
   `, true);
   Modal.body.classList.add('modal-student-edit');
+  Modal.onClose(() => editLock.release());
 
   document.getElementById('cancelEditStudentBtn').addEventListener('click', () => Modal.close());
   hydrateProtectedImages(Modal.body);
@@ -2569,6 +2904,12 @@ async function openEditStudentModal(student, onSaved, { teacherMode = false } = 
   const photoPreview = document.getElementById('esPhotoPreview');
   const photoStatus = document.getElementById('esPhotoStatus');
   let selectedPhoto = null;
+
+  // Without a photo, the avatar shows the initials of the name being typed.
+  document.getElementById('esName').addEventListener('input', (event) => {
+    const initials = photoPreview.querySelector('span');
+    if (initials) initials.textContent = studentInitials(event.target.value.trim() || student.name);
+  });
   photoInput.addEventListener('change', () => {
     const file = photoInput.files && photoInput.files[0];
     if (!file) return;
@@ -2593,6 +2934,13 @@ async function openEditStudentModal(student, onSaved, { teacherMode = false } = 
     const msg = document.getElementById('modalEditMsg');
     const saveButton = e.currentTarget.querySelector('button[type="submit"]');
     msg.className = 'form-msg';
+    const nameInput = document.getElementById('esName');
+    nameInput.value = nameInput.value.trim().replace(/\s+/g, ' ');
+    if (!nameInput.value) {
+      showMsg(msg, 'Student full name is required.');
+      nameInput.focus();
+      return;
+    }
     saveButton.disabled = true;
     saveButton.textContent = 'Saving...';
 
@@ -2608,13 +2956,17 @@ async function openEditStudentModal(student, onSaved, { teacherMode = false } = 
       payload.guardianPhone = document.getElementById('esGuardianPhone').value.trim();
     } else {
       payload.parent = document.getElementById('esParent').value || null;
-      payload.teacher = document.getElementById('esTeacher').value || null;
+      const teacherValue = document.getElementById('esTeacher').value;
+      // Leave an archived current teacher untouched unless the admin picks a new one.
+      if (teacherValue || !isArchivedTeacher(teachers, student.teacher ? (student.teacher._id || student.teacher) : '')) {
+        payload.teacher = teacherValue || null;
+      }
       payload.status = document.getElementById('esStatus').value;
     }
 
     let updatedStudent;
     try {
-      ({ student: updatedStudent } = await api.patch(`/students/${student._id}`, payload));
+      ({ student: updatedStudent } = await api.patch(`/students/${student._id}`, payload, { version: student.updatedAt }));
     } catch (err) {
       showMsg(msg, err.message);
       saveButton.disabled = false;
@@ -2649,8 +3001,10 @@ async function openEditStudentModal(student, onSaved, { teacherMode = false } = 
 }
 
 // Add or Edit Pickup Form Modal
-function openPickupFormModal({ studentId, pickup = null }, onSaved) {
+async function openPickupFormModal({ studentId, pickup = null }, onSaved) {
   const isEditing = !!pickup;
+  const editLock = isEditing ? await EditLocks.acquire('pickup', pickup._id, { isActive: whileElementOpen('pickupPersonForm') }) : null;
+  if (isEditing && !editLock) return;
 
   Modal.open(`
     <h3>${isEditing ? 'Edit Authorized Pickup Person' : 'Add Authorized Pickup Person'}</h3>
@@ -2677,6 +3031,7 @@ function openPickupFormModal({ studentId, pickup = null }, onSaved) {
       </div>
     </form>
   `);
+  if (editLock) Modal.onClose(() => editLock.release());
 
   document.getElementById('cancelPickupBtn').addEventListener('click', () => Modal.close());
 
@@ -2692,7 +3047,7 @@ function openPickupFormModal({ studentId, pickup = null }, onSaved) {
 
     try {
       if (isEditing) {
-        await api.patch(`/pickup/${pickup._id}`, payload);
+        await api.patch(`/pickup/${pickup._id}`, payload, { version: pickup.updatedAt });
       } else {
         await api.post('/pickup', { student: studentId, ...payload });
       }
@@ -2711,6 +3066,11 @@ function initDashboardSync() {
     const activePanel = document.querySelector('.panel.active');
     if (!activePanel || typeof onPanelShown !== 'function') return;
     if (activePanel.id === 'panel-settings') return;
+    if (!panelAllowed(activePanel.id.replace(/^panel-/, ''))) return;
+    // Don't re-render while the user is using a field (e.g. an open date picker); it causes flicker.
+    const focused = document.activeElement;
+    if (focused && activePanel.contains(focused) && focused.matches('input, select, textarea')) return;
+    if (document.getElementById('dateErrorPopup')) return;
 
     refreshInProgress = true;
     try {
@@ -2721,6 +3081,11 @@ function initDashboardSync() {
       refreshInProgress = false;
     }
   }, 5000);
+
+  // Permission changes by an administrator reach an open dashboard within a minute.
+  window.setInterval(() => {
+    if (!document.hidden) loadMyPermissions();
+  }, 60000);
 
   // Recalculate event statuses (Done/Ongoing/Pending) every minute without re-fetching
   window.setInterval(() => {
@@ -2757,8 +3122,12 @@ function initOverviewNavigation() {
   });
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  // Load permissions first so the menu and the reopened page respect them.
+  initMobileShell();
+  if (Auth.isLoggedIn()) await loadMyPermissions();
   initSidebarNav();
+  initResponsiveTables();
   initOverviewNavigation();
   initLogout();
   initPersonalGoogleCalendarSettings();

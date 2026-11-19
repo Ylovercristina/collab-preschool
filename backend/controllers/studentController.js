@@ -1,6 +1,8 @@
 const Student = require('../models/Student');
 const logActivity = require('../utils/logActivity');
-const { applyClassToStudentData } = require('../utils/classAssignment');
+const { applyClassToStudentData, archivedTeacherError } = require('../utils/classAssignment');
+const { normalizeStudentNameField, syncStudentNameCopies } = require('../utils/studentName');
+const { ARCHIVE_RETENTION_DAYS, deletionDate, permanentlyDeleteStudent } = require('../utils/accountPurge');
 const mongoose = require('mongoose');
 const { studentFieldError, findDuplicateStudent } = require('../utils/validation');
 const { removeStudentPhotoFile, photoRecord, sendStudentPhoto } = require('../middleware/studentPhotoUpload');
@@ -38,9 +40,13 @@ exports.getStudent = async (req, res) => {
 exports.createStudent = async (req, res) => {
   try {
     const { name, birthdate, className, parent, teacher, notes } = req.body;
-    const data = { name, birthdate, className, parent, teacher, notes };
+    const data = { name: name ?? '', birthdate, className, parent, teacher, notes };
+    const nameError = normalizeStudentNameField(data);
+    if (nameError) return res.status(400).json({ message: nameError });
     const fieldError = studentFieldError(data);
     if (fieldError) return res.status(400).json({ message: fieldError });
+    const archivedError = await archivedTeacherError(data.teacher);
+    if (archivedError) return res.status(400).json({ message: archivedError });
     const classError = await applyClassToStudentData(data);
     if (classError) return res.status(400).json({ message: classError });
     const duplicate = await findDuplicateStudent(data);
@@ -76,6 +82,8 @@ exports.updateStudent = async (req, res) => {
     if (!Object.keys(update).length) {
       return res.status(400).json({ message: 'Provide at least one student field to update.' });
     }
+    const nameError = normalizeStudentNameField(update);
+    if (nameError) return res.status(400).json({ message: nameError });
 
     const fieldError = studentFieldError(update);
     if (fieldError) return res.status(400).json({ message: fieldError });
@@ -84,6 +92,8 @@ exports.updateStudent = async (req, res) => {
     if (req.user.role === 'teacher') filter.teacher = req.user._id;
     const student = await Student.findOne(filter);
     if (!student) return res.status(404).json({ message: 'Student not found.' });
+    const archivedError = await archivedTeacherError(update.teacher, student.teacher);
+    if (archivedError) return res.status(400).json({ message: archivedError });
     const classError = await applyClassToStudentData(update, student.className);
     if (classError) return res.status(400).json({ message: classError });
     if (update.name !== undefined || update.parent !== undefined || update.birthdate !== undefined) {
@@ -101,8 +111,11 @@ exports.updateStudent = async (req, res) => {
     if (req.user.role === 'teacher' && update.teacher !== undefined && String(update.teacher || '') !== String(req.user._id)) {
       return res.status(403).json({ message: 'You can only move students into a class you teach. Ask an admin to change their class.' });
     }
+    const previousName = student.name;
+    if (update.status === 'archived' && student.status !== 'archived') update.archivedBy = req.user._id;
     student.set(update);
     await student.save();
+    await syncStudentNameCopies(student, previousName);
     await student.populate('parent', 'name email phone status emailVerified emailVerifiedBy');
     await student.populate('teacher', 'name email');
     await logActivity(req.user._id, 'student-updated', student.name);
@@ -157,8 +170,78 @@ exports.updateStudentPhoto = async (req, res) => {
 // PATCH /api/students/:id/archive
 exports.archiveStudent = async (req, res) => {
   if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(404).json({ message: 'Student not found.' });
-  const student = await Student.findByIdAndUpdate(req.params.id, { status: 'archived' }, { new: true });
+  const student = await Student.findById(req.params.id);
   if (!student) return res.status(404).json({ message: 'Student not found.' });
-  await logActivity(req.user._id, 'student-archived', student.name);
-  res.json({ student });
+  if (student.status !== 'archived') {
+    student.status = 'archived';
+    student.archivedAt = new Date();
+    student.archivedBy = req.user._id;
+    await student.save();
+    await logActivity(req.user._id, 'student-archived', student.name);
+  }
+  res.json({
+    student,
+    message: `Student archived. The record will be permanently deleted in ${ARCHIVE_RETENTION_DAYS} days unless restored from Settings → Archived accounts.`,
+  });
+};
+
+// GET /api/students/archived  (admin: archived students and their deletion dates)
+exports.listArchivedStudents = async (req, res) => {
+  const students = await Student.find({ status: 'archived' })
+    .populate('archivedBy', 'name')
+    .populate('parent', 'name')
+    .sort({ archivedAt: 1, updatedAt: 1 });
+  const now = Date.now();
+  res.json({
+    students: students.map((student) => {
+      const archivedAt = student.archivedAt || student.updatedAt;
+      const deleteAfter = deletionDate(archivedAt);
+      return {
+        id: student._id,
+        name: student.name,
+        studentId: student.studentId,
+        className: student.className,
+        parentName: student.parent ? student.parent.name : '',
+        archivedAt,
+        archivedBy: student.archivedBy ? student.archivedBy.name : null,
+        deleteAfter,
+        daysLeft: Math.max(0, Math.ceil((deleteAfter.getTime() - now) / (24 * 60 * 60 * 1000))),
+      };
+    }),
+  });
+};
+
+// PATCH /api/students/:id/restore  (admin)
+exports.restoreStudent = async (req, res) => {
+  if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(404).json({ message: 'Student not found.' });
+  const student = await Student.findById(req.params.id);
+  if (!student) return res.status(404).json({ message: 'Student not found.' });
+  if (student.status !== 'archived') return res.status(409).json({ message: 'This student is not archived.' });
+  const duplicate = await findDuplicateStudent({
+    name: student.name, parent: student.parent, birthdate: student.birthdate, className: student.className,
+  }, student._id);
+  if (duplicate) {
+    return res.status(409).json({ message: `An active record for ${duplicate.name} already exists. Edit that record instead.` });
+  }
+  student.status = 'active';
+  await student.save();
+  await logActivity(req.user._id, 'student-restored', student.name);
+  res.json({ student, message: `${student.name} was restored.` });
+};
+
+// DELETE /api/students/:id  (admin: permanently delete an archived student now)
+exports.deleteArchivedStudent = async (req, res) => {
+  if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(404).json({ message: 'Student not found.' });
+  const student = await Student.findById(req.params.id).select('status name');
+  if (!student) return res.status(404).json({ message: 'Student not found.' });
+  if (student.status !== 'archived') {
+    return res.status(409).json({ message: 'Only archived students can be permanently deleted. Archive the student first.' });
+  }
+  try {
+    await permanentlyDeleteStudent(student._id, req.user._id);
+    res.json({ message: `${student.name} was permanently deleted.` });
+  } catch (err) {
+    console.error('[students] Permanent delete failed:', err.message);
+    res.status(500).json({ message: 'Could not delete this student.' });
+  }
 };

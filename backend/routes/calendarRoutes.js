@@ -1,5 +1,5 @@
 const router = require('express').Router();
-const { protect, allowRoles } = require('../middleware/auth');
+const { protect, allowRoles, requirePermission } = require('../middleware/auth');
 const ctrl = require('../controllers/calendarController');
 
 // Google redirects the browser here without a Bearer token; the one-time OAuth state identifies the admin.
@@ -13,7 +13,7 @@ router.post('/google/personal/events/:id', ctrl.addPersonalEvent);
 router.delete('/google/personal/events/:id', ctrl.removePersonalEvent);
 router.delete('/google/personal/connection', ctrl.disconnectPersonal);
 
-router.use(allowRoles('admin'));
+router.use(allowRoles('admin'), requirePermission('settings', 'manage'));
 router.get('/google/status', ctrl.status);
 router.post('/google/connect', ctrl.connect);
 router.patch('/google/settings', ctrl.updateSettings);

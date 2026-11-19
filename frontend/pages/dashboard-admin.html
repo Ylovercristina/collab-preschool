@@ -42,6 +42,8 @@
         <button class="nav-item settings-button" type="button" data-panel="settings" aria-label="Settings" title="Settings"><i class="fa-solid fa-gear"></i></button>
         <div class="settings-submenu" aria-label="Settings sections">
           <button class="settings-subnav active" type="button" data-settings-section="profile"><i class="fa-solid fa-user"></i> Profile</button>
+          <button class="settings-subnav" type="button" data-settings-section="archived"><i class="fa-solid fa-box-archive"></i> Archived</button>
+          <button class="settings-subnav" type="button" data-settings-section="backup" data-requires="sysadmin" hidden><i class="fa-solid fa-database"></i> Backup &amp; Restore</button>
           <button class="settings-subnav" type="button" data-settings-section="integrations"><i class="fa-solid fa-plug"></i> Integrations</button>
           <button class="settings-subnav" type="button" data-settings-section="calendar" hidden><i class="fa-regular fa-calendar"></i> Google Calendar</button>
         </div>
@@ -83,9 +85,65 @@
           <h1 style="margin:0; font-size:24px; font-weight:800; color:var(--ink);">User Accounts Management</h1>
           <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">View, search, and manage administrator, teaching staff, and parent accounts.</p>
         </div>
-        <button class="btn btn-primary btn-sm" id="addUserBtn"><i class="fa-solid fa-user-plus"></i> Add Staff / Admin</button>
+        <button class="btn btn-primary btn-sm" id="addUserBtn" data-requires="users:manage"><i class="fa-solid fa-user-plus"></i> Add Staff / Admin</button>
       </div>
 
+      <!-- Accounts / Roles & Permissions -->
+      <div class="record-category-tabs users-view-tabs" role="tablist" aria-label="User management views">
+        <button type="button" class="record-category-tab active" data-users-view="accounts" role="tab" aria-selected="true"><i class="fa-solid fa-users"></i> Accounts</button>
+        <button type="button" class="record-category-tab" data-users-view="permissions" role="tab" aria-selected="false" data-requires="sysadmin" hidden><i class="fa-solid fa-user-lock"></i> Roles &amp; Permissions</button>
+      </div>
+
+      <div id="usersPermissionsView" class="rbac-view" hidden>
+        <div class="rbac-legend">
+          <span><strong>Legend:</strong></span>
+          <span><span class="rbac-key">V</span> View — limited access: open the module and do its everyday actions</span>
+          <span><span class="rbac-key">M</span> Manage — full access: create, edit and delete</span>
+          <span><span class="rbac-key">A</span> Approve — review and approve</span>
+          <span>No box ticked = no access</span>
+        </div>
+
+        <section class="card rbac-card">
+          <div class="rbac-card-head">
+            <div>
+              <h2><i class="fa-solid fa-table-cells" aria-hidden="true"></i> Role permissions</h2>
+              <p>Default access for each role. Accounts without custom permissions follow these immediately.</p>
+            </div>
+            <div class="rbac-card-actions">
+              <span id="rbacRoleDirty" class="rbac-dirty" hidden>Unsaved changes</span>
+              <button type="button" class="btn btn-primary btn-sm" id="rbacSaveRoles" disabled><i class="fa-solid fa-floppy-disk"></i> Save role permissions</button>
+            </div>
+          </div>
+          <div id="rbacRoleMessage" class="form-msg" aria-live="polite"></div>
+          <div class="table-responsive rbac-matrix-wrap"><table class="rbac-matrix" id="rbacRoleMatrix"></table></div>
+        </section>
+
+        <section class="card rbac-card">
+          <div class="rbac-card-head">
+            <div>
+              <h2><i class="fa-solid fa-user-gear" aria-hidden="true"></i> User permissions</h2>
+              <p>Choose an account to set its role and, if needed, custom permissions that override the role.</p>
+            </div>
+          </div>
+          <div class="rbac-user-picker">
+            <div class="field"><label for="rbacUserSearch">Account</label><input id="rbacUserSearch" list="rbacUserOptions" placeholder="Type a name or email…" autocomplete="off" /><datalist id="rbacUserOptions"></datalist></div>
+          </div>
+          <div id="rbacUserMessage" class="form-msg" aria-live="polite"></div>
+          <div id="rbacUserEditor"></div>
+        </section>
+
+        <section class="card rbac-card">
+          <div class="rbac-card-head">
+            <div>
+              <h2><i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i> Permission change history</h2>
+              <p>Every change to roles and permissions, with who made it and when.</p>
+            </div>
+          </div>
+          <ul class="rbac-audit" id="rbacAudit"></ul>
+        </section>
+      </div>
+
+      <div id="usersAccountsView">
       <!-- Segmented Role Category Tabs -->
       <div class="account-role-tabs" style="display:flex; gap:8px; border-bottom:1px solid var(--border); margin-bottom:18px; overflow-x:auto;">
         <button type="button" class="account-tab active" data-account-role="teacher" style="padding:10px 18px; font-size:13.5px; font-weight:700; border:none; background:rgba(46,125,50,0.06); cursor:pointer; display:flex; align-items:center; gap:8px; border-bottom:3px solid var(--primary); color:var(--primary); border-radius:8px 8px 0 0; transition:all 0.15s ease;">
@@ -116,7 +174,6 @@
             <option value="">All Statuses</option>
             <option value="approved">Approved</option>
             <option value="pending">Pending</option>
-            <option value="archived">Archived</option>
             <option value="rejected">Rejected</option>
           </select>
           <button type="button" class="btn btn-ghost btn-sm" id="userResetFilterBtn" style="padding:7px 12px; font-size:12.5px;" title="Reset filters">
@@ -134,12 +191,14 @@
               <th style="min-width:180px;">Account Name</th>
               <th style="min-width:220px;">Email Address</th>
               <th style="min-width:110px;">Status</th>
+              <th style="min-width:160px;">Role &amp; access</th>
               <th style="min-width:120px;">Date Created</th>
               <th style="min-width:150px; text-align:right;">Actions</th>
             </tr>
           </thead>
           <tbody id="usersTbody"></tbody>
         </table>
+      </div>
       </div>
     </section>
 
@@ -149,7 +208,7 @@
           <h1 style="margin:0;">Students Management</h1>
           <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Manage student enrollments, profiles, and authorized pickup persons.</p>
         </div>
-        <button class="btn btn-primary btn-sm" id="addStudentBtn"><i class="fa-solid fa-plus"></i> Add Student</button>
+        <button class="btn btn-primary btn-sm" id="addStudentBtn" data-requires="students:manage"><i class="fa-solid fa-plus"></i> Add Student</button>
       </div>
       <div class="table-responsive">
         <table>
@@ -181,12 +240,12 @@
               <span id="adminEnrollmentAvailabilityBadge" class="enrollment-settings-status">Loading status</span>
             </div>
             <div id="adminEnrollmentMessage" class="form-msg" aria-live="polite"></div>
-            <form id="enrollmentPeriodForm">
+            <form id="enrollmentPeriodForm" data-requires="enrollment:manage">
               <div class="grid-2">
                 <div class="field"><label for="enrollmentTerm">Term / semester</label><input id="enrollmentTerm" maxlength="80" placeholder="e.g. First Semester" required /></div>
                 <div class="field"><label for="enrollmentSchoolYear">School year</label><input id="enrollmentSchoolYear" maxlength="40" placeholder="e.g. 2026–2027" required /></div>
-                <div class="field"><label for="enrollmentOpensAt">Opens on</label><input id="enrollmentOpensAt" type="date" required /></div>
-                <div class="field"><label for="enrollmentClosesAt">Closes on</label><input id="enrollmentClosesAt" type="date" required /></div>
+                <div class="field"><label for="enrollmentOpensAt">Opens on</label><input id="enrollmentOpensAt" type="date" data-no-past required /></div>
+                <div class="field"><label for="enrollmentClosesAt">Closes on</label><input id="enrollmentClosesAt" type="date" data-no-past required /></div>
               </div>
               <div class="enrollment-period-toggle">
                 <div>
@@ -242,7 +301,7 @@
           <h1 style="margin:0;">Classes</h1>
           <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Create classes, assign a teacher, and place students. Teachers can only see students in their class.</p>
         </div>
-        <button type="button" class="btn btn-primary btn-sm" id="addClassBtn"><i class="fa-solid fa-plus"></i> New Class</button>
+        <button type="button" class="btn btn-primary btn-sm" id="addClassBtn" data-requires="classes:manage"><i class="fa-solid fa-plus"></i> New Class</button>
       </div>
       <div id="classesMessage" class="form-msg" aria-live="polite"></div>
       <div id="classesNotices"></div>
@@ -290,7 +349,7 @@
           <h1 style="margin:0;">Records Management</h1>
           <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Securely organize student and teaching staff profiles and documents.</p>
         </div>
-        <button type="button" class="btn btn-primary btn-sm" id="addManagedRecordBtn"><i class="fa-solid fa-plus"></i> Add student record</button>
+        <button type="button" class="btn btn-primary btn-sm" id="addManagedRecordBtn" data-requires="records:manage"><i class="fa-solid fa-plus"></i> Add student record</button>
       </div>
       <div class="record-category-tabs" role="tablist" aria-label="Record category">
         <button type="button" class="record-category-tab active" data-record-category="students" role="tab" aria-selected="true"><i class="fa-solid fa-user-graduate"></i> Student Records</button>
@@ -319,7 +378,7 @@
         <div class="fee-toolbar-actions">
           <button class="btn btn-secondary btn-sm" id="remindAllFeesBtn"><i class="fa-solid fa-envelope"></i> Remind All Unpaid</button>
           <button class="btn btn-ghost btn-sm" id="paymentReportBtn"><i class="fa-solid fa-file-invoice-dollar"></i> Reports</button>
-          <button class="btn btn-primary btn-sm" id="addFeeBtn"><i class="fa-solid fa-plus"></i> New Fee</button>
+          <button class="btn btn-primary btn-sm" id="addFeeBtn" data-requires="fees:manage"><i class="fa-solid fa-plus"></i> New Fee</button>
         </div>
       </div>
       <div class="fee-search-row">
@@ -345,7 +404,7 @@
         </div>
         <div class="panel-header-actions">
           <button type="button" class="gcal-status-btn" id="googleCalendarStatusBtn" hidden aria-haspopup="dialog"></button>
-          <button class="btn btn-primary btn-sm" id="addEventBtn"><i class="fa-solid fa-calendar-plus"></i> New Event</button>
+          <button class="btn btn-primary btn-sm" id="addEventBtn" data-requires="events:manage"><i class="fa-solid fa-calendar-plus"></i> New Event</button>
         </div>
       </div>
       <div id="adminEventSummary" class="form-msg" aria-live="polite"></div>
@@ -366,7 +425,7 @@
         <div><h1 style="margin:0;">Emergency Alerts</h1><p style="margin:4px 0 0;">Urgent messages for families linked to affected pupils.</p></div>
       </div>
       <div class="card alert-form-card">
-        <form id="adminAlertForm" novalidate>
+        <form id="adminAlertForm" novalidate data-requires="alerts:manage">
           <section class="alert-section">
             <h3>Emergency Type and Severity</h3>
             <div class="grid-2">
@@ -453,6 +512,77 @@
           </div>
           <div class="profile-form-footer"><button class="btn btn-primary" type="submit"><i class="fa-solid fa-floppy-disk"></i> Save Changes</button></div>
         </form>
+        </div>
+      </div>
+      <div class="settings-section" id="settings-section-archived">
+        <div class="toolbar">
+          <div>
+            <h1 style="margin:0;">Archived accounts &amp; students</h1>
+            <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Restore within 30 days of archiving, or the record is permanently deleted.</p>
+          </div>
+        </div>
+        <div class="archived-accounts-notice">
+          <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
+          <p><strong>Deleting an account</strong> removes it with its messages, notifications, photo and documents, and unlinks it from students and classes.
+            <strong>Deleting a student</strong> removes their attendance, progress records and photos, pickup list, enrollment application, photo and documents.
+            Fees, payments, receipts and activity logs are kept.</p>
+        </div>
+        <div id="archivedAccountsMessage" class="form-msg" aria-live="polite"></div>
+        <h2 class="archived-table-heading"><i class="fa-solid fa-user-slash" aria-hidden="true"></i> User accounts</h2>
+        <div class="card" style="padding:0;">
+          <div class="table-responsive">
+            <table>
+              <thead><tr><th>Account</th><th>Role</th><th>Archived</th><th>Deleted in</th><th style="text-align:right;">Actions</th></tr></thead>
+              <tbody id="archivedAccountsTbody"><tr><td colspan="5">Loading archived accounts…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+        <h2 class="archived-table-heading"><i class="fa-solid fa-user-graduate" aria-hidden="true"></i> Students</h2>
+        <div class="card" style="padding:0;">
+          <div class="table-responsive">
+            <table>
+              <thead><tr><th>Student</th><th>Class</th><th>Archived</th><th>Deleted in</th><th style="text-align:right;">Actions</th></tr></thead>
+              <tbody id="archivedStudentsTbody"><tr><td colspan="5">Loading archived students…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="settings-section" id="settings-section-backup">
+        <div class="toolbar">
+          <div>
+            <h1 style="margin:0;">Backup &amp; Restore</h1>
+            <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Save a copy of the whole database, download it, or restore the school's data from a backup.</p>
+          </div>
+          <button type="button" class="btn btn-primary btn-sm" id="createBackupBtn"><i class="fa-solid fa-floppy-disk"></i> Back up now</button>
+        </div>
+        <div class="backup-info-grid">
+          <div class="backup-info"><i class="fa-solid fa-clock" aria-hidden="true"></i><div><strong>Automatic daily backups</strong><p>The system backs up once a day and keeps the newest <span id="backupKeepAuto">14</span>.</p></div></div>
+          <div class="backup-info"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i><div><strong>Safe restore</strong><p>A safety backup is taken right before every restore. If a restore fails, the data is put back automatically.</p></div></div>
+          <div class="backup-info"><i class="fa-solid fa-lock" aria-hidden="true"></i><div><strong>Keep downloads private</strong><p>Backups contain every record, including password hashes. Store downloaded files securely.</p></div></div>
+        </div>
+        <div id="backupMessage" class="form-msg" aria-live="polite"></div>
+        <div class="card" style="padding:0;">
+          <div class="table-responsive">
+            <table>
+              <thead><tr><th>Backup</th><th>Type</th><th>Records</th><th>Size</th><th style="text-align:right;">Actions</th></tr></thead>
+              <tbody id="backupsTbody"><tr><td colspan="5">Loading backups…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card backup-upload-card">
+          <h2><i class="fa-solid fa-upload" aria-hidden="true"></i> Upload a backup file</h2>
+          <p>Have a backup you downloaded earlier? Upload it here to add it back to the list above, then restore it from there. Uploading does not change any data.</p>
+          <form id="backupUploadForm" class="backup-upload-form">
+            <input class="profile-file-input" type="file" id="backupUploadFile" accept=".gz,.json,application/gzip,application/json" />
+            <label class="backup-dropzone" for="backupUploadFile" id="backupDropzone">
+              <i class="fa-solid fa-file-zipper" aria-hidden="true"></i>
+              <span>
+                <strong id="backupFileName">Choose a backup file</strong>
+                <small id="backupFileHint">or drag it here · .json.gz or .json, up to 250 MB</small>
+              </span>
+            </label>
+            <button type="submit" class="btn btn-primary btn-sm" id="backupUploadBtn" disabled><i class="fa-solid fa-upload"></i> Upload</button>
+          </form>
         </div>
       </div>
       <div class="settings-section" id="settings-section-integrations">
@@ -587,6 +717,8 @@
 <script src="../js/admin.js"></script>
 <script src="../js/admin-records.js"></script>
 <script src="../js/admin-classes.js"></script>
+<script src="../js/admin-permissions.js"></script>
+<script src="../js/admin-backup.js"></script>
 <script src="../js/enrollment.js"></script>
 </body>
 </html>

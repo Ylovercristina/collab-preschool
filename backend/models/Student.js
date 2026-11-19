@@ -43,10 +43,25 @@ const studentSchema = new mongoose.Schema(
     teacher: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     enrollmentApplication: { type: mongoose.Schema.Types.ObjectId, ref: 'EnrollmentApplication' },
     status: { type: String, enum: ['active', 'archived'], default: 'active' },
+    // Archived students are permanently deleted 30 days after archivedAt unless restored.
+    archivedAt: { type: Date, default: null, index: true },
+    archivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     notes: { type: String, trim: true },
   },
   { timestamps: true }
 );
+
+// Any save that archives or restores a student (e.g. the Edit Student status field) keeps archivedAt in step.
+studentSchema.pre('save', function syncArchivedAt(next) {
+  if (this.isModified('status')) {
+    if (this.status === 'archived' && !this.archivedAt) this.archivedAt = new Date();
+    if (this.status === 'active') {
+      this.archivedAt = null;
+      this.archivedBy = null;
+    }
+  }
+  next();
+});
 
 studentSchema.index({ enrollmentApplication: 1 }, { unique: true, sparse: true });
 

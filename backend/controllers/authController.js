@@ -667,6 +667,8 @@ exports.resetPassword = async (req, res) => {
     if (!user) return res.status(400).json({ message: 'Reset session is invalid or has expired. Please request a new OTP.' });
 
     user.password = newPassword;
+    // Sessions signed in with the old password stop working (whole seconds, matching token `iat`).
+    user.sessionsValidAfter = new Date(Math.floor(Date.now() / 1000) * 1000);
     user.resetPasswordToken = undefined;
     user.resetPasswordExpires = undefined;
     clearResetOtp(user);

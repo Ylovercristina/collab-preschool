@@ -396,6 +396,10 @@ window.loadManagedRecords = loadManagedRecords;
 async function openManagedRecordForm(record = null) {
   const isTeacher = managedRecordCategory === 'teachers';
   const isEditing = Boolean(record);
+  const editLock = isEditing
+    ? await EditLocks.acquire(isTeacher ? 'user' : 'student', record._id, { isActive: whileElementOpen('managedRecordForm') })
+    : null;
+  if (isEditing && !editLock) return;
   const dateValue = (value) => value ? new Date(value).toISOString().slice(0, 10) : '';
   const recordFormDate = isTeacher ? dateValue(record?.employmentStartDate) : dateValue(record?.enrollmentDate || record?.createdAt);
   let relatedOptions = '';
@@ -408,7 +412,7 @@ async function openManagedRecordForm(record = null) {
       relatedOptions = `
         <div class="grid-2">
           <div class="field"><label for="managedParent">Parent account</label><select id="managedParent"><option value="">— Select parent —</option>${parents.map((parent) => `<option value="${escapeRecordHtml(parent.id)}" ${record?.parent?._id === parent.id ? 'selected' : ''}>${escapeRecordHtml(parent.name)} (${escapeRecordHtml(parent.email)})</option>`).join('')}</select></div>
-          <div class="field"><label for="managedTeacher">Assigned teacher</label><select id="managedTeacher"><option value="">— Select teacher —</option>${teachers.map((teacher) => `<option value="${escapeRecordHtml(teacher.id)}" ${record?.teacher?._id === teacher.id ? 'selected' : ''}>${escapeRecordHtml(teacher.name)}</option>`).join('')}</select></div>
+          <div class="field"><label for="managedTeacher">Assigned teacher</label><select id="managedTeacher"><option value="">— Select teacher —</option>${assignableTeacherOptions(teachers, record?.teacher?._id)}</select></div>
         </div>`;
     } catch (err) {
       showMsg(document.getElementById('recordsMessage'), err.message);
@@ -427,9 +431,9 @@ async function openManagedRecordForm(record = null) {
           : `<div class="field"><label for="managedClass">Class / section</label><input id="managedClass" list="managedClassOptions" maxlength="80" value="${escapeRecordHtml(record?.className || '')}" required /></div>`}
       </div>
       ${isTeacher ? `
-        ${!isEditing ? '<div class="field"><label for="managedEmail">Email address (teacher sign-in)</label><input id="managedEmail" type="email" required /></div><div class="field"><label for="managedPassword">Temporary password</label><input id="managedPassword" type="password" minlength="8" required /></div>' : ''}
+        ${!isEditing ? '<div class="field"><label for="managedEmail">Email address (teacher sign-in)</label><input id="managedEmail" type="email" required autocomplete="off" data-lpignore="true" data-1p-ignore /></div><div class="field"><label for="managedPassword">Temporary password</label><input id="managedPassword" type="password" minlength="8" required autocomplete="new-password" data-lpignore="true" data-1p-ignore /></div>' : ''}
         <div class="grid-2">
-          <div class="field"><label for="managedClass">Assigned class / section</label><input id="managedClass" maxlength="80" value="${escapeRecordHtml(record?.assignedClass || '')}" /></div>
+          <div class="field"><label for="managedClass">Assigned class / section</label><input id="managedClass" maxlength="80" value="${escapeRecordHtml(record?.assignedClass || '')}" ${record?.status === 'archived' ? 'disabled' : ''} />${record?.status === 'archived' ? '<div class="field-hint">This teacher is archived and can\'t be assigned to a class.</div>' : ''}</div>
           <div class="field"><label for="managedEmploymentType">Employment type</label><select id="managedEmploymentType" required><option value="">Select type</option>${['Full-time', 'Part-time', 'Contract', 'Substitute'].map((type) => `<option value="${type}" ${record?.employmentType === type ? 'selected' : ''}>${type}</option>`).join('')}</select></div>
         </div>
         <div class="field"><label for="managedEmploymentDate">Employment start date</label><input id="managedEmploymentDate" type="date" value="${recordFormDate}" required /></div>
@@ -442,6 +446,7 @@ async function openManagedRecordForm(record = null) {
       <button class="btn btn-primary btn-block" type="submit" style="margin-top:12px;"><i class="fa-solid fa-floppy-disk"></i> Save record</button>
     </form>
   `, true);
+  if (editLock) Modal.onClose(() => editLock.release());
   document.getElementById('managedRecordForm').addEventListener('submit', async (event) => {
     event.preventDefault();
     const formMessage = document.getElementById('managedRecordFormMessage');
@@ -462,7 +467,7 @@ async function openManagedRecordForm(record = null) {
           values.password = document.getElementById('managedPassword').value;
         }
         const response = isEditing
-          ? await api.patch(`${endpoint}/${record._id}`, values)
+          ? await api.patch(`${endpoint}/${record._id}`, values, { version: record.updatedAt })
           : await api.post(endpoint, values);
         savedRecord = response.teacher;
       } else {
@@ -478,7 +483,7 @@ async function openManagedRecordForm(record = null) {
           notes: document.getElementById('managedNotes').value.trim(),
         };
         const response = isEditing
-          ? await api.patch(`${endpoint}/${record._id}`, values)
+          ? await api.patch(`${endpoint}/${record._id}`, values, { version: record.updatedAt })
           : await api.post(endpoint, values);
         savedRecord = response.student;
       }
