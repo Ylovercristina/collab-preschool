@@ -1,11 +1,12 @@
 const PickupAuthorization = require('../models/PickupAuthorization');
+const { isOfficeRole } = require('../config/permissions');
 const Student = require('../models/Student');
 const logActivity = require('../utils/logActivity');
 const mongoose = require('mongoose');
 const { phoneIsValid, escapeRegex } = require('../utils/validation');
 
 async function canManageStudent(req, studentId) {
-  if (req.user.role === 'admin') return true;
+  if (isOfficeRole(req.user.role)) return true;
   if (!['teacher', 'parent'].includes(req.user.role)) return false;
   const relationship = req.user.role === 'teacher' ? { teacher: req.user._id } : { parent: req.user._id };
   return Boolean(await Student.exists({ _id: studentId, ...relationship }));

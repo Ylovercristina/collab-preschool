@@ -12,6 +12,7 @@ const {
   photoRecord,
   sendStudentPhoto,
 } = require('../middleware/studentPhotoUpload');
+const { isOfficeRole } = require('../config/permissions');
 
 function normalizeStudentName(studentName) {
   return studentName.trim().replace(/\s+/g, ' ').toLowerCase();
@@ -217,7 +218,7 @@ exports.getApplicationPhoto = async (req, res) => {
   try {
     if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(404).json({ message: 'Photo not found.' });
     const filter = { _id: req.params.id };
-    if (req.user.role !== 'admin') filter.applicant = req.user._id;
+    if (!isOfficeRole(req.user.role)) filter.applicant = req.user._id;
     const application = await EnrollmentApplication.findOne(filter).select('studentPhoto');
     if (!application || !application.studentPhoto) return res.status(404).json({ message: 'Photo not found.' });
     sendStudentPhoto(res, application.studentPhoto);

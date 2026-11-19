@@ -29,6 +29,8 @@ const PANEL_MODULES = {
     overview: 'dashboard', users: 'users', students: 'students', classes: 'classes', enrollment: 'enrollment',
     'academic-progress': 'progress', records: 'records', fees: 'fees', events: 'events', alerts: 'alerts', logs: 'logs',
   },
+  // Staff accounts use the same office panels; their permissions decide which ones they see.
+  get staff() { return this.admin; },
   teacher: {
     overview: 'dashboard', enrollment: 'enrollment', students: 'students', fees: 'fees', attendance: 'attendance',
     progress: 'progress', messages: 'messages', events: 'events', pickup: 'pickup', alerts: 'alerts',

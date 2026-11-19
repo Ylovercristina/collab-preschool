@@ -96,6 +96,15 @@
     </div>
   </div>
 
+  <div class="modal-backdrop" id="idleSignOutPopup" hidden>
+    <div class="modal idle-signout-popup" role="alertdialog" aria-modal="true" aria-labelledby="idleSignOutTitle" aria-describedby="idleSignOutText">
+      <div class="idle-signout-icon" aria-hidden="true"><i class="fa-solid fa-clock-rotate-left"></i></div>
+      <h3 id="idleSignOutTitle">You were signed out</h3>
+      <p id="idleSignOutText">For your security, you were signed out after 30 minutes of inactivity. Please sign in again to continue.</p>
+      <button type="button" class="btn btn-primary btn-block" id="idleSignOutOk">OK, sign in again</button>
+    </div>
+  </div>
+
   <script src="../js/api.js"></script>
   <script>
     // The sign-in fields start read-only so the browser can't fill in saved text on its own.
@@ -284,7 +293,30 @@
     const loginMsg = document.getElementById('msg');
     const loginParams = new URLSearchParams(window.location.search);
     if (loginParams.get('reason') === 'idle') {
-      showMsg(loginMsg, 'You were signed out after 30 minutes of inactivity. Please sign in again.', 'success');
+      showIdleSignOutPopup();
+      // Drop ?reason=idle so refreshing the login page doesn't show the popup again.
+      loginParams.delete('reason');
+      const query = loginParams.toString();
+      history.replaceState(null, '', window.location.pathname + (query ? `?${query}` : '') + window.location.hash);
+    }
+
+    // Popup explaining the automatic sign-out. Closes with OK, Escape, or a click outside.
+    function showIdleSignOutPopup() {
+      const backdrop = document.getElementById('idleSignOutPopup');
+      const okButton = document.getElementById('idleSignOutOk');
+      const close = () => {
+        backdrop.classList.remove('open');
+        backdrop.hidden = true;
+        document.removeEventListener('keydown', onKey);
+        document.getElementById('email')?.focus();
+      };
+      const onKey = (event) => { if (event.key === 'Escape') close(); };
+      okButton.addEventListener('click', close);
+      backdrop.addEventListener('click', (event) => { if (event.target === backdrop) close(); });
+      document.addEventListener('keydown', onKey);
+      backdrop.hidden = false;
+      backdrop.classList.add('open');
+      okButton.focus();
     }
     const googleErrors = {
       cancelled: 'Google sign-in was cancelled.',

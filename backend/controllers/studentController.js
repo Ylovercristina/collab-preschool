@@ -1,4 +1,5 @@
 const Student = require('../models/Student');
+const { isOfficeRole } = require('../config/permissions');
 const logActivity = require('../utils/logActivity');
 const { applyClassToStudentData, archivedTeacherError } = require('../utils/classAssignment');
 const { normalizeStudentNameField, syncStudentNameCopies } = require('../utils/studentName');
@@ -9,7 +10,7 @@ const { removeStudentPhotoFile, photoRecord, sendStudentPhoto } = require('../mi
 
 // Helper: build a scope filter based on who's asking
 function scopeFilter(user) {
-  if (user.role === 'admin') return {};
+  if (isOfficeRole(user.role)) return {};
   if (user.role === 'teacher') return { teacher: user._id };
   if (user.role === 'parent') return { parent: user._id };
   return { _id: null };

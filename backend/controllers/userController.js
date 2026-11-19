@@ -4,7 +4,7 @@ const logActivity = require('../utils/logActivity');
 const { isValidEmail } = require('../utils/validation');
 const { sendAccountApprovalEmail } = require('./authController');
 const { ARCHIVE_RETENTION_DAYS, deletionDate, permanentlyDeleteUser } = require('../utils/accountPurge');
-const { positionInfo, positionForUser } = require('../config/permissions');
+const { positionInfo, positionForUser, ACCOUNT_TYPES } = require('../config/permissions');
 const fs = require('fs');
 const path = require('path');
 
@@ -228,7 +228,7 @@ exports.updateUserProfile = async (req, res) => {
       await discardUploadedImage(req.file);
       return res.status(400).json({ message: 'A name field or address is too long.' });
     }
-    if (!['admin', 'teacher', 'parent'].includes(role)) {
+    if (!ACCOUNT_TYPES.includes(role)) {
       await discardUploadedImage(req.file);
       return res.status(400).json({ message: 'Select a valid account role.' });
     }
@@ -338,11 +338,11 @@ exports.listUsers = async (req, res) => {
   res.json({ users: users.map(publicUser) });
 };
 
-// POST /api/users   (admin creates a teacher, or another admin)
+// POST /api/users   (admin creates a teacher or parent; a System Administrator also creates staff and admins)
 exports.createUser = async (req, res) => {
   try {
     const { name, email, password, role, phone } = req.body;
-    if (!['admin', 'teacher', 'parent'].includes(role)) {
+    if (!ACCOUNT_TYPES.includes(role)) {
       return res.status(400).json({ message: 'Invalid role.' });
     }
     if (!name || !String(name).trim()) return res.status(400).json({ message: 'Name is required.' });
@@ -383,7 +383,7 @@ exports.updateUser = async (req, res) => {
     if (name) update.name = name;
     if (phone) update.phone = phone;
     if (role) {
-      if (!['admin', 'teacher', 'parent'].includes(role)) {
+      if (!ACCOUNT_TYPES.includes(role)) {
         return res.status(400).json({ message: 'Select a valid account role.' });
       }
       update.role = role;

@@ -4,7 +4,7 @@ const ctrl = require('../controllers/classController');
 const Classroom = require('../models/Classroom');
 const { versionGuard } = require('../middleware/concurrency');
 
-router.use(protect, allowRoles('admin'));
+router.use(protect, allowRoles('admin', 'staff'));
 // Student forms also read the class list, so student managers may list classes too.
 router.get('/', requireAnyPermission(['classes', 'view'], ['students', 'manage'], ['records', 'manage']), ctrl.listClasses);
 router.post('/', P('classes', 'manage'), ctrl.createClass);

@@ -1,4 +1,5 @@
 const EmergencyAlert = require('../models/EmergencyAlert');
+const { isOfficeRole } = require('../config/permissions');
 const EmailLog = require('../models/EmailLog');
 const Notification = require('../models/Notification');
 const Student = require('../models/Student');
@@ -72,7 +73,7 @@ async function scopedAlert(alertId, user, { includeInactive = false } = {}) {
   const alert = await EmergencyAlert.findById(alertId);
   if (!alert) return null;
   if (!includeInactive && ['archived', 'deleted'].includes(alert.status)) return null;
-  if (user.role === 'admin') return alert;
+  if (isOfficeRole(user.role)) return alert;
   if (user.role === 'teacher') {
     const count = await Student.countDocuments({ _id: { $in: alert.students }, teacher: user._id });
     if (String(alert.createdBy) === String(user._id) || count === alert.students.length) return alert;
@@ -237,7 +238,7 @@ exports.addUpdate = async (req, res) => {
     const message = String(req.body.message || '').trim();
     const status = req.body.status === 'all-clear' ? 'all-clear' : 'update';
     if (!message) return res.status(400).json({ message: 'Enter an update message.' });
-    if (status === 'all-clear' && req.user.role !== 'admin' && String(alert.createdBy) !== String(req.user._id)) {
+    if (status === 'all-clear' && !isOfficeRole(req.user.role) && String(alert.createdBy) !== String(req.user._id)) {
       return res.status(403).json({ message: 'Only the issuing teacher or an admin may issue an all-clear.' });
     }
     alert.status = status;

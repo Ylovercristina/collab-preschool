@@ -4,10 +4,11 @@
 // Mirrors backend/config/permissions.js (labels only — the server owns the rules).
 const RBAC_POSITIONS = [
   { key: 'system_admin', label: 'System Administrator', accountType: 'admin' },
+  { key: 'system_manager', label: 'System Manager', accountType: 'admin' },
   { key: 'principal', label: 'Principal', accountType: 'admin' },
-  { key: 'registrar', label: 'Registrar', accountType: 'admin' },
-  { key: 'finance_officer', label: 'Finance Officer', accountType: 'admin' },
-  { key: 'auditor', label: 'Auditor', accountType: 'admin' },
+  { key: 'registrar', label: 'Registrar', accountType: 'staff' },
+  { key: 'finance_officer', label: 'Finance Officer', accountType: 'staff' },
+  { key: 'auditor', label: 'Auditor', accountType: 'staff' },
   { key: 'teacher', label: 'Teacher', accountType: 'teacher' },
   { key: 'teacher_aide', label: 'Teacher Aide', accountType: 'teacher' },
   { key: 'parent', label: 'Parent / Guardian', accountType: 'parent' },

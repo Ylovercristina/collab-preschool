@@ -12,21 +12,21 @@ const ACTIONS = ['view', 'manage', 'approve'];
 
 // key, label, which account types the module exists for, and whether it has an approval step.
 const MODULES = [
-  { key: 'dashboard', label: 'Dashboard', types: ['admin', 'teacher', 'parent'], approvable: false },
+  { key: 'dashboard', label: 'Dashboard', types: ['admin', 'staff', 'teacher', 'parent'], approvable: false },
   { key: 'users', label: 'User Management', types: ['admin'], approvable: true, approveHint: 'Approve or reject parent registrations' },
-  { key: 'students', label: 'Students', types: ['admin', 'teacher', 'parent'], approvable: false },
-  { key: 'classes', label: 'Classes', types: ['admin'], approvable: false },
-  { key: 'enrollment', label: 'Enrollment', types: ['admin', 'teacher', 'parent'], approvable: true, approveHint: 'Approve or reject enrollment applications' },
-  { key: 'records', label: 'Records Management', types: ['admin'], approvable: false },
+  { key: 'students', label: 'Students', types: ['admin', 'staff', 'teacher', 'parent'], approvable: false },
+  { key: 'classes', label: 'Classes', types: ['admin', 'staff'], approvable: false },
+  { key: 'enrollment', label: 'Enrollment', types: ['admin', 'staff', 'teacher', 'parent'], approvable: true, approveHint: 'Approve or reject enrollment applications' },
+  { key: 'records', label: 'Records Management', types: ['admin', 'staff'], approvable: false },
   { key: 'attendance', label: 'Attendance', types: ['teacher', 'parent'], approvable: false },
-  { key: 'progress', label: 'Academic Progress', types: ['admin', 'teacher', 'parent'], approvable: true, approveHint: 'Mark progress records as reviewed' },
-  { key: 'fees', label: 'Fees & Payments', types: ['admin', 'teacher', 'parent'], approvable: false },
-  { key: 'events', label: 'Events & Calendar', types: ['admin', 'teacher', 'parent'], approvable: true, approveHint: 'Review and approve teacher events' },
+  { key: 'progress', label: 'Academic Progress', types: ['admin', 'staff', 'teacher', 'parent'], approvable: true, approveHint: 'Mark progress records as reviewed' },
+  { key: 'fees', label: 'Fees & Payments', types: ['admin', 'staff', 'teacher', 'parent'], approvable: false },
+  { key: 'events', label: 'Events & Calendar', types: ['admin', 'staff', 'teacher', 'parent'], approvable: true, approveHint: 'Review and approve teacher events' },
   { key: 'messages', label: 'Messages', types: ['teacher', 'parent'], approvable: false },
-  { key: 'alerts', label: 'Emergency Alerts', types: ['admin', 'teacher', 'parent'], approvable: false },
-  { key: 'pickup', label: 'Pickup Authorization', types: ['admin', 'teacher', 'parent'], approvable: true, approveHint: 'Verify pickups at release' },
-  { key: 'reports', label: 'Reports', types: ['admin'], approvable: false },
-  { key: 'logs', label: 'Activity Logs', types: ['admin'], approvable: false },
+  { key: 'alerts', label: 'Emergency Alerts', types: ['admin', 'staff', 'teacher', 'parent'], approvable: false },
+  { key: 'pickup', label: 'Pickup Authorization', types: ['admin', 'staff', 'teacher', 'parent'], approvable: true, approveHint: 'Verify pickups at release' },
+  { key: 'reports', label: 'Reports', types: ['admin', 'staff'], approvable: false },
+  { key: 'logs', label: 'Activity Logs', types: ['admin', 'staff'], approvable: false },
   { key: 'settings', label: 'System Settings', types: ['admin'], approvable: false },
 ];
 
@@ -38,7 +38,7 @@ const L = { view: true, manage: false, approve: false }; // Limited access
 const A = { view: true, manage: false, approve: true }; // Approval access
 const N = { view: false, manage: false, approve: false }; // No access
 
-// Positions (the eight roles), adapted from the reference access-control matrix:
+// Positions (the nine roles; Registrar, Finance Officer and Auditor are staff accounts), adapted from the reference access-control matrix:
 //   System Administrator -> System Administrator     Store Manager     -> Principal
 //   Inventory Officer    -> Registrar               Purchasing Officer -> Finance Officer
 //   Warehouse Staff      -> Teacher                 Sales Cashier      -> Parent / Guardian (self-service)
@@ -50,6 +50,14 @@ const POSITIONS = [
     defaults: Object.fromEntries(MODULE_KEYS.map((key) => [key, FA])),
   },
   {
+    key: 'system_manager', label: 'System Manager', accountType: 'admin',
+    description: 'Run day-to-day school operations across all modules; System Settings are view-only.',
+    defaults: {
+      dashboard: L, users: FA, students: F, classes: F, enrollment: FA, records: F, progress: FA,
+      fees: F, events: FA, alerts: F, pickup: FA, reports: F, logs: L, settings: L,
+    },
+  },
+  {
     key: 'principal', label: 'Principal', accountType: 'admin',
     description: 'Oversee school operations and approve enrollments, events and progress reviews.',
     defaults: {
@@ -58,7 +66,7 @@ const POSITIONS = [
     },
   },
   {
-    key: 'registrar', label: 'Registrar', accountType: 'admin',
+    key: 'registrar', label: 'Registrar', accountType: 'staff',
     description: 'Maintain student records, classes and enrollment.',
     defaults: {
       dashboard: L, users: N, students: F, classes: F, enrollment: F, records: F, progress: L,
@@ -66,7 +74,7 @@ const POSITIONS = [
     },
   },
   {
-    key: 'finance_officer', label: 'Finance Officer', accountType: 'admin',
+    key: 'finance_officer', label: 'Finance Officer', accountType: 'staff',
     description: 'Manage fee statements, payments and receipts.',
     defaults: {
       dashboard: L, users: N, students: L, classes: N, enrollment: L, records: N, progress: N,
@@ -74,7 +82,7 @@ const POSITIONS = [
     },
   },
   {
-    key: 'auditor', label: 'Auditor', accountType: 'admin',
+    key: 'auditor', label: 'Auditor', accountType: 'staff',
     description: 'Review records, payments, reports and activity logs (read-only).',
     defaults: {
       dashboard: L, users: N, students: L, classes: L, enrollment: L, records: L, progress: L,
@@ -108,7 +116,14 @@ const POSITIONS = [
 ];
 
 const POSITION_KEYS = POSITIONS.map((position) => position.key);
-const DEFAULT_POSITION_BY_ROLE = { admin: 'system_admin', teacher: 'teacher', parent: 'parent' };
+const DEFAULT_POSITION_BY_ROLE = { admin: 'system_admin', staff: 'registrar', teacher: 'teacher', parent: 'parent' };
+const ACCOUNT_TYPES = Object.keys(DEFAULT_POSITION_BY_ROLE);
+
+// Office accounts (admin and staff) work across the whole school, limited only by their permissions;
+// teacher and parent accounts only see their own classes or children.
+function isOfficeRole(role) {
+  return role === 'admin' || role === 'staff';
+}
 
 function positionInfo(key) {
   return POSITIONS.find((position) => position.key === key) || null;
@@ -139,6 +154,9 @@ function normalizePermissions(input, accountType) {
 function positionForUser(user) {
   const info = positionInfo(user && user.position);
   if (info && info.accountType === user.role) return info.key;
+  // A saved role that doesn't fit the account type gets no role (and so no access), never the
+  // type's default — otherwise an admin account left with a staff role would become System Administrator.
+  if (user && user.position) return null;
   return DEFAULT_POSITION_BY_ROLE[user && user.role] || null;
 }
 
@@ -149,6 +167,8 @@ module.exports = {
   POSITIONS,
   POSITION_KEYS,
   DEFAULT_POSITION_BY_ROLE,
+  ACCOUNT_TYPES,
+  isOfficeRole,
   positionInfo,
   moduleAppliesTo,
   normalizePermissions,

@@ -15,18 +15,18 @@ const lockFee = exclusiveLock(Fee, {
 });
 
 router.use(protect);
-router.get('/', allowRoles('admin'), P('fees', 'view'), ctrl.listFees);
+router.get('/', allowRoles('admin', 'staff'), P('fees', 'view'), ctrl.listFees);
 router.get('/teacher', allowRoles('teacher'), P('fees', 'view'), ctrl.listTeacherFees);
-router.post('/', allowRoles('admin'), P('fees', 'manage'), ctrl.createFee);
+router.post('/', allowRoles('admin', 'staff'), P('fees', 'manage'), ctrl.createFee);
 router.get('/student/:studentId', P('fees', 'view'), ctrl.getStudentFees);
 // Reminding parents about a balance is part of limited (view) access.
-router.post('/reminders/all', allowRoles('admin', 'teacher'), P('fees', 'view'), limits.emailBlast, ctrl.remindAllParents);
-router.post('/:id/reminders', allowRoles('admin', 'teacher'), P('fees', 'view'), ctrl.remindParent);
-router.get('/:id/reminders/:notificationId/email-summary', allowRoles('admin', 'teacher'), P('fees', 'view'), ctrl.reminderEmailSummary);
-router.post('/:id/payments', allowRoles('admin'), P('fees', 'manage'), lockFee, ctrl.logPayment);
-router.patch('/:id/payments/:paymentId', allowRoles('admin'), P('fees', 'manage'), lockFee, versionGuard(Payment, { param: 'paymentId', label: 'payment', lock: 'payment' }), ctrl.updatePayment);
-router.delete('/:id/payments/:paymentId', allowRoles('admin'), P('fees', 'manage'), lockFee, ctrl.deletePayment);
-router.get('/:id/payments/:paymentId/receipt', allowRoles('admin', 'parent'), P('fees', 'view'), ctrl.getReceipt);
-router.get('/:id/payments', allowRoles('admin'), P('fees', 'view'), ctrl.listPayments);
+router.post('/reminders/all', allowRoles('admin', 'staff', 'teacher'), P('fees', 'view'), limits.emailBlast, ctrl.remindAllParents);
+router.post('/:id/reminders', allowRoles('admin', 'staff', 'teacher'), P('fees', 'view'), ctrl.remindParent);
+router.get('/:id/reminders/:notificationId/email-summary', allowRoles('admin', 'staff', 'teacher'), P('fees', 'view'), ctrl.reminderEmailSummary);
+router.post('/:id/payments', allowRoles('admin', 'staff'), P('fees', 'manage'), lockFee, ctrl.logPayment);
+router.patch('/:id/payments/:paymentId', allowRoles('admin', 'staff'), P('fees', 'manage'), lockFee, versionGuard(Payment, { param: 'paymentId', label: 'payment', lock: 'payment' }), ctrl.updatePayment);
+router.delete('/:id/payments/:paymentId', allowRoles('admin', 'staff'), P('fees', 'manage'), lockFee, ctrl.deletePayment);
+router.get('/:id/payments/:paymentId/receipt', allowRoles('admin', 'staff', 'parent'), P('fees', 'view'), ctrl.getReceipt);
+router.get('/:id/payments', allowRoles('admin', 'staff'), P('fees', 'view'), ctrl.listPayments);
 
 module.exports = router;

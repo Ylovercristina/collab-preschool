@@ -1,9 +1,10 @@
 const Classroom = require('../models/Classroom');
+const { isOfficeRole } = require('../config/permissions');
 const Student = require('../models/Student');
 
 async function isEventVisibleToUser(event, user) {
   if (!event || !user) return false;
-  if (user.role === 'admin') return true;
+  if (isOfficeRole(user.role)) return true;
 
   const audience = event.audience || 'parents';
   const createdByUser = String(event.createdBy && (event.createdBy._id || event.createdBy)) === String(user._id);

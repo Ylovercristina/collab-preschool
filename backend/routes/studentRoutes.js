@@ -14,14 +14,14 @@ router.use(protect);
 // The student list and profile are shared lookups used by Attendance, Progress, Fees, Pickup and
 // Messages; the data is already limited to the account's own students (teacher/parent).
 router.get('/', ctrl.listStudents);
-router.get('/archived', allowRoles('admin'), P('students', 'manage'), ctrl.listArchivedStudents);
+router.get('/archived', allowRoles('admin', 'staff'), P('students', 'manage'), ctrl.listArchivedStudents);
 router.get('/:id/photo', ctrl.getStudentPhoto);
-router.put('/:id/photo', allowRoles('admin', 'teacher', 'parent'), photoPermission, uploadStudentPhoto('photo'), ctrl.updateStudentPhoto);
+router.put('/:id/photo', allowRoles('admin', 'staff', 'teacher', 'parent'), photoPermission, uploadStudentPhoto('photo'), ctrl.updateStudentPhoto);
 router.get('/:id', ctrl.getStudent);
-router.post('/', allowRoles('admin'), P('students', 'manage'), ctrl.createStudent);
-router.patch('/:id', allowRoles('admin', 'teacher'), P('students', 'manage'), versionGuard(Student, { label: 'student record', lock: 'student' }), ctrl.updateStudent);
-router.patch('/:id/archive', allowRoles('admin'), P('students', 'manage'), ctrl.archiveStudent);
-router.patch('/:id/restore', allowRoles('admin'), P('students', 'manage'), ctrl.restoreStudent);
-router.delete('/:id', allowRoles('admin'), P('students', 'manage'), ctrl.deleteArchivedStudent);
+router.post('/', allowRoles('admin', 'staff'), P('students', 'manage'), ctrl.createStudent);
+router.patch('/:id', allowRoles('admin', 'staff', 'teacher'), P('students', 'manage'), versionGuard(Student, { label: 'student record', lock: 'student' }), ctrl.updateStudent);
+router.patch('/:id/archive', allowRoles('admin', 'staff'), P('students', 'manage'), ctrl.archiveStudent);
+router.patch('/:id/restore', allowRoles('admin', 'staff'), P('students', 'manage'), ctrl.restoreStudent);
+router.delete('/:id', allowRoles('admin', 'staff'), P('students', 'manage'), ctrl.deleteArchivedStudent);
 
 module.exports = router;

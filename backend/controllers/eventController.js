@@ -1,4 +1,5 @@
 const Classroom = require('../models/Classroom');
+const { isOfficeRole } = require('../config/permissions');
 const Event = require('../models/Event');
 const EmailLog = require('../models/EmailLog');
 const Notification = require('../models/Notification');
@@ -234,7 +235,7 @@ exports.listEvents = async (req, res) => {
     ];
   }
   const query = Event.find(filter).populate('createdBy', 'name role').sort({ date: 1 });
-  if (req.user.role === 'admin') query.select('+googleCalendar');
+  if (isOfficeRole(req.user.role)) query.select('+googleCalendar');
   const eventDocuments = await query;
   const { status: personalCalendarStatus, states: personalCalendarStates } = await getPersonalEventStates(
     req.user._id,
@@ -325,13 +326,13 @@ exports.updateEvent = async (req, res) => {
   try {
     const event = await Event.findById(req.params.id);
     if (!event) return res.status(404).json({ message: 'Event not found.' });
-    if (req.user.role !== 'admin' && String(event.createdBy) !== String(req.user._id)) {
+    if (!isOfficeRole(req.user.role) && String(event.createdBy) !== String(req.user._id)) {
       return res.status(403).json({ message: 'You can only update events you created.' });
     }
     if (req.user.role === 'teacher' && event.publicationStatus === 'published') {
       return res.status(403).json({ message: 'Published events can only be changed by an admin.' });
     }
-    if (req.user.role === 'admin' && event.publicationStatus === 'pending'
+    if (isOfficeRole(req.user.role) && event.publicationStatus === 'pending'
       && req.body.publicationStatus === 'published') {
       return res.status(400).json({ message: 'Review pending events with the Admin approval action.' });
     }
@@ -479,7 +480,7 @@ exports.approveEvent = async (req, res) => {
 exports.emailSummary = async (req, res) => {
   const event = await Event.findById(req.params.id);
   if (!event) return res.status(404).json({ message: 'Event not found.' });
-  if (req.user.role !== 'admin' && String(event.createdBy) !== String(req.user._id)) {
+  if (!isOfficeRole(req.user.role) && String(event.createdBy) !== String(req.user._id)) {
     return res.status(403).json({ message: 'You cannot view this delivery summary.' });
   }
   res.json({ emailSummary: await getEmailSummary(event) });

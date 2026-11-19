@@ -3959,3 +3959,26 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .account-role-tabs .account-tab { flex: 0 0 auto; padding: 9px 12px !important; font-size: 12.5px !important; white-space: nowrap; }
   .users-view-tabs { overflow-x: auto; }
 }
+
+/* Accounts list: search, role and status filters on one row; stacks on narrow screens. */
+.account-filterbar { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(180px, 240px) minmax(140px, 170px) auto; gap: 10px; align-items: center; margin-bottom: 8px; }
+.account-filterbar-search { position: relative; min-width: 0; }
+.account-filterbar-search i { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--ink-muted); font-size: 12px; pointer-events: none; }
+.account-filterbar input, .account-filterbar select { width: 100%; min-width: 0; height: 38px; padding: 0 12px; border: 1px solid var(--border); border-radius: 8px; background: #fff; color: var(--ink); font: inherit; font-size: 13px; }
+.account-filterbar input { padding-left: 34px; }
+.account-filterbar #userResetFilterBtn { height: 38px; padding: 0 14px; font-size: 12.5px; white-space: nowrap; }
+.account-filterbar-count { margin-bottom: 16px; font-size: 12.5px; font-weight: 600; color: var(--ink-muted); }
+@media (max-width: 900px) {
+  .account-filterbar { grid-template-columns: 1fr 1fr; }
+  .account-filterbar-search { grid-column: 1 / -1; }
+  .account-filterbar #userResetFilterBtn { grid-column: 1 / -1; justify-self: start; }
+}
+@media (max-width: 480px) {
+  .account-filterbar { grid-template-columns: 1fr; }
+}
+
+/* Login: popup shown after the automatic 30-minute inactivity sign-out. */
+.idle-signout-popup { max-width: 400px; text-align: center; }
+.idle-signout-icon { width: 56px; height: 56px; margin: 0 auto 14px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: rgba(46, 125, 50, 0.1); color: var(--primary); font-size: 24px; }
+.idle-signout-popup h3 { margin: 0 0 8px; }
+.idle-signout-popup p { margin: 0 0 20px; color: var(--ink-muted); font-size: 14px; line-height: 1.55; }

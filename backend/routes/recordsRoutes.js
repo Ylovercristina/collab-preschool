@@ -7,7 +7,7 @@ const Student = require('../models/Student');
 const User = require('../models/User');
 const { versionGuard } = require('../middleware/concurrency');
 
-router.use(protect, allowRoles('admin'));
+router.use(protect, allowRoles('admin', 'staff'));
 
 function uploadDocuments(req, res, next) {
   upload.array('documents', 5)(req, res, async (err) => {

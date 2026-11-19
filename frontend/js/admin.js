@@ -1,5 +1,6 @@
 // ---------- Play-is-School -- Admin Dashboard Controller ----------
-const user = requireRole('admin');
+// Admin accounts open this page; staff accounts open the Staff Panel, which runs the same code.
+const user = requireRole(location.pathname.includes('dashboard-staff') ? 'staff' : 'admin');
 let adminCalendar = null;
 let authSecuritySettingsBound = false;
 let credentialManagersBound = false;
@@ -56,7 +57,7 @@ function archivedDaysLeftHtml(item) {
 async function loadArchivedStudents() {
   const tbody = document.getElementById('archivedStudentsTbody');
   const message = document.getElementById('archivedAccountsMessage');
-  if (!tbody) return;
+  if (!tbody || !hasPermission('students', 'manage')) return;
   try {
     const { students } = await api.get('/students/archived');
     tbody.innerHTML = students.length ? students.map((student) => `<tr>
@@ -111,9 +112,10 @@ async function loadArchivedAccounts() {
   if (!tbody) return;
   message.textContent = '';
   message.className = 'form-msg';
+  if (!hasPermission('users', 'view')) return; // staff without account access only see archived students
   try {
     const { users } = await api.get('/users/archived');
-    const roleLabels = { admin: 'Administrator', teacher: 'Teacher', parent: 'Parent' };
+    const roleLabels = { admin: 'Administrator', staff: 'Staff', teacher: 'Teacher', parent: 'Parent' };
     tbody.innerHTML = users.length ? users.map((account) => {
       return `<tr>
         <td><strong>${escapeDashboardHtml(account.name)}</strong><div class="archived-account-email">${escapeDashboardHtml(account.email)}</div></td>
@@ -570,7 +572,10 @@ async function loadOverview() {
 
 // ---------- Users / Accounts ----------
 let cachedUsers = [];
-let activeAccountRole = 'teacher';
+let activeAccountRole = 'staff';
+// Each Accounts tab lists these account types. Staff covers office staff and teaching staff.
+const ACCOUNT_TAB_ROLES = { staff: ['staff', 'teacher'], parent: ['parent'], admin: ['admin'] };
+const inAccountTab = (u, tab) => (ACCOUNT_TAB_ROLES[tab] || [tab]).includes(u.role);
 let usersInitialized = false;
 
 function getInitials(name = '') {
@@ -608,20 +613,47 @@ function initUsersSection() {
   // Status filter
   document.getElementById('userStatusFilter')?.addEventListener('change', renderFilteredUsers);
 
+  // Role filter
+  document.getElementById('userRoleFilter')?.addEventListener('change', renderFilteredUsers);
+
   // Reset filter button
   document.getElementById('userResetFilterBtn')?.addEventListener('click', () => {
     const searchInput = document.getElementById('userSearchInput');
     const statusFilter = document.getElementById('userStatusFilter');
+    const roleFilter = document.getElementById('userRoleFilter');
+    if (roleFilter) roleFilter.value = '';
     if (searchInput) searchInput.value = '';
     if (statusFilter) statusFilter.value = '';
     renderFilteredUsers();
   });
 }
 
+// Role filter options follow the open tab: account-type groups (Staff tab only) and each role.
+function fillUserRoleFilter() {
+  const select = document.getElementById('userRoleFilter');
+  if (!select) return;
+  const types = ACCOUNT_TAB_ROLES[activeAccountRole] || [activeAccountRole];
+  const key = types.join(',');
+  if (select.dataset.tab === key) return;
+  const previous = select.value;
+  const typeOptions = types.length > 1
+    ? [['type:staff', 'Office staff (Staff Panel)'], ['type:teacher', 'Teaching staff (Teacher dashboard)']]
+    : [];
+  const positionOptions = RBAC_POSITIONS
+    .filter((position) => types.includes(position.accountType))
+    .map((position) => [`position:${position.key}`, position.label]);
+  const option = ([value, label]) => `<option value="${value}">${escapeDashboardHtml(label)}</option>`;
+  select.innerHTML = '<option value="">All Roles</option>'
+    + (typeOptions.length ? `<optgroup label="Account type">${typeOptions.map(option).join('')}</optgroup>` : '')
+    + (positionOptions.length ? `<optgroup label="Role">${positionOptions.map(option).join('')}</optgroup>` : '');
+  select.value = Array.from(select.options).some((item) => item.value === previous) ? previous : '';
+  select.dataset.tab = key;
+}
+
 function updateTabCounts() {
-  const teacherCount = cachedUsers.filter((u) => u.role === 'teacher').length;
-  const parentCount = cachedUsers.filter((u) => u.role === 'parent').length;
-  const adminCount = cachedUsers.filter((u) => u.role === 'admin').length;
+  const teacherCount = cachedUsers.filter((u) => inAccountTab(u, 'staff')).length;
+  const parentCount = cachedUsers.filter((u) => inAccountTab(u, 'parent')).length;
+  const adminCount = cachedUsers.filter((u) => inAccountTab(u, 'admin')).length;
 
   const elT = document.getElementById('tabCountTeacher');
   const elP = document.getElementById('tabCountParent');
@@ -644,19 +676,25 @@ function renderFilteredUsers() {
   if (!tbody) return;
 
   const roleLabels = {
-    teacher: 'Teacher',
+    staff: 'Staff',
     parent: 'Parent',
     admin: 'Administrator',
   };
   const currentRoleLabel = roleLabels[activeAccountRole] || 'User';
 
   // Archived accounts live in Settings → Archived accounts until restored or deleted.
-  const roleUsers = cachedUsers.filter((u) => u.role === activeAccountRole && u.status !== 'archived');
+  const roleUsers = cachedUsers.filter((u) => inAccountTab(u, activeAccountRole) && u.status !== 'archived');
 
+  fillUserRoleFilter();
+  const roleFilter = document.getElementById('userRoleFilter')?.value || '';
   const statusFilter = document.getElementById('userStatusFilter')?.value || '';
   const query = (document.getElementById('userSearchInput')?.value || '').trim().toLowerCase();
 
   let filtered = roleUsers;
+  if (roleFilter) {
+    const [kind, value] = roleFilter.split(':');
+    filtered = filtered.filter((u) => (kind === 'type' ? u.role === value : u.position === value));
+  }
   if (statusFilter) {
     filtered = filtered.filter((u) => u.status === statusFilter);
   }
@@ -671,7 +709,7 @@ function renderFilteredUsers() {
   // Update counter
   const counterEl = document.getElementById('userSearchResultsCount');
   if (counterEl) {
-    if (query || statusFilter) {
+    if (query || statusFilter || roleFilter) {
       counterEl.textContent = `Showing ${filtered.length} of ${roleUsers.length} ${currentRoleLabel} accounts`;
     } else {
       counterEl.textContent = `Total: ${roleUsers.length} ${currentRoleLabel} account${roleUsers.length === 1 ? '' : 's'}`;
@@ -845,21 +883,13 @@ function renderFilteredUsers() {
 
 document.getElementById('addUserBtn').addEventListener('click', () => {
   Modal.open(`
-    <h3>Add Teaching Staff, Parent, or Admin</h3>
+    <h3>Add Staff, Parent, or Admin Account</h3>
     <div id="modalMsg" class="form-msg"></div>
     <form id="userForm">
       <div class="field">
-        <label>Account Role</label>
-        <select id="uRole">
-          <option value="teacher" ${activeAccountRole === 'teacher' ? 'selected' : ''}>Teacher</option>
-          <option value="parent" ${activeAccountRole === 'parent' ? 'selected' : ''}>Parent</option>
-          ${currentAccess && currentAccess.isSystemAdmin ? `<option value="admin" ${activeAccountRole === 'admin' ? 'selected' : ''}>Administrator</option>` : ''}
-        </select>
-      </div>
-      <div class="field">
-        <label for="uPosition">Role (permissions)</label>
+        <label for="uPosition">Role</label>
         <select id="uPosition"></select>
-        <div class="field-hint">Sets which modules the account can use. A System Administrator can fine-tune it later under Roles &amp; Permissions.</div>
+        <div class="field-hint">Sets the account type and which modules the account can use. A System Administrator can fine-tune it later under Roles &amp; Permissions.</div>
       </div>
       <div class="field"><label>Full Name</label><input id="uName" placeholder="e.g. Sarah Jenkins" required /></div>
       <div class="field"><label>Email Address</label><input type="email" id="uEmail" placeholder="sarah@example.com" required autocomplete="off" data-lpignore="true" data-1p-ignore /></div>
@@ -868,24 +898,33 @@ document.getElementById('addUserBtn').addEventListener('click', () => {
       <button class="btn btn-primary btn-block" type="submit" style="margin-top:14px;">Create Account</button>
     </form>
   `);
-  const roleSelect = document.getElementById('uRole');
   const positionSelect = document.getElementById('uPosition');
-  const fillPositions = () => {
-    positionSelect.innerHTML = RBAC_POSITIONS
-      .filter((position) => position.accountType === roleSelect.value)
-      .map((position) => `<option value="${position.key}">${escapeDashboardHtml(position.label)}</option>`).join('');
-    // Only a System Administrator chooses a non-default role; others get the account type's default.
-    positionSelect.disabled = !(currentAccess && currentAccess.isSystemAdmin);
+  const isSystemAdmin = Boolean(currentAccess && currentAccess.isSystemAdmin);
+  // A System Administrator can create every role; other admins can create the default
+  // Teacher and Parent / Guardian roles only (the server enforces admin and staff account creation).
+  const allowedPositions = RBAC_POSITIONS.filter((position) => isSystemAdmin
+    || ['teacher', 'parent'].includes(position.key));
+  const groupLabels = {
+    admin: 'Admin — Admin dashboard',
+    staff: 'Staff — Staff Panel',
+    teacher: 'Staff — Teacher dashboard',
+    parent: 'Parent — Parent dashboard',
   };
-  roleSelect.addEventListener('change', fillPositions);
-  fillPositions();
+  const defaultKey = { admin: 'system_admin', staff: 'teacher', parent: 'parent' }[activeAccountRole] || 'teacher';
+  positionSelect.innerHTML = ['admin', 'staff', 'teacher', 'parent'].map((type) => {
+    const options = allowedPositions.filter((position) => position.accountType === type);
+    if (!options.length) return '';
+    return `<optgroup label="${groupLabels[type]}">${options.map((position) => `<option value="${position.key}" ${position.key === defaultKey ? 'selected' : ''}>${escapeDashboardHtml(position.label)}</option>`).join('')}</optgroup>`;
+  }).join('');
   document.getElementById('userForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const msg = document.getElementById('modalMsg');
+    const chosen = RBAC_POSITIONS.find((position) => position.key === positionSelect.value);
+    if (!chosen) return showMsg(msg, 'Choose a role.');
     try {
       await api.post('/users', {
-        position: currentAccess && currentAccess.isSystemAdmin ? positionSelect.value : undefined,
-        role: document.getElementById('uRole').value,
+        position: chosen.key,
+        role: chosen.accountType,
         name: document.getElementById('uName').value.trim(),
         email: document.getElementById('uEmail').value.trim(),
         phone: document.getElementById('uPhone').value.trim() || undefined,
@@ -2274,3 +2313,10 @@ async function loadLogs() {
 }
 
 loadOverview();
+
+// Staff Panel: show the staff member's role (e.g. Registrar) in the sidebar badge.
+document.addEventListener('permissions-loaded', (event) => {
+  const label = document.getElementById('staffRoleLabel');
+  const position = event.detail && event.detail.position;
+  if (label && position && position.label) label.textContent = position.label;
+});

@@ -17,14 +17,14 @@ function uploadProfileImage(req, res, next) {
 
 const mongoose = require('mongoose');
 const User = require('../models/User');
-const { positionForUser } = require('../config/permissions');
+const { positionForUser, isOfficeRole } = require('../config/permissions');
 const { versionGuard } = require('../middleware/concurrency');
 const guardAccountVersion = versionGuard(User, { label: 'account', lock: 'user' });
 
 const isSystemAdmin = (user) => user.role === 'admin' && positionForUser(user) === 'system_admin';
 const onlySystemAdmin = (res, message) => res.status(403).json({ code: 'PERMISSION_DENIED', message });
 
-// Admin accounts can only be created, changed, archived or deleted by a System Administrator,
+// Admin and staff (office) accounts can only be created, changed, archived or deleted by a System Administrator,
 // and account types (roles) can only be changed by one too — never on your own account.
 async function guardAccountChanges(req, res, next) {
   try {
@@ -34,16 +34,16 @@ async function guardAccountChanges(req, res, next) {
       }
       return next();
     }
-    if (req.method === 'POST' && !req.params.id && req.body && req.body.role === 'admin') {
-      return onlySystemAdmin(res, 'Only a System Administrator can create administrator accounts.');
+    if (req.method === 'POST' && !req.params.id && req.body && isOfficeRole(req.body.role)) {
+      return onlySystemAdmin(res, 'Only a System Administrator can create administrator or staff accounts.');
     }
     if (req.body && req.body.role !== undefined && req.method === 'PATCH' && req.params.id) {
       return onlySystemAdmin(res, 'Only a System Administrator can change an account type.');
     }
     if (req.params.id && mongoose.isObjectIdOrHexString(req.params.id)) {
       const target = await User.findById(req.params.id).select('role');
-      if (target && target.role === 'admin') {
-        return onlySystemAdmin(res, 'Only a System Administrator can change administrator accounts.');
+      if (target && isOfficeRole(target.role)) {
+        return onlySystemAdmin(res, 'Only a System Administrator can change administrator or staff accounts.');
       }
     }
     return next();
@@ -55,9 +55,9 @@ async function guardAccountChanges(req, res, next) {
 router.get('/me', protect, ctrl.getMyProfile);
 router.put('/me', protect, uploadProfileImage, ctrl.updateMyProfile);
 
+// Student and class forms read the parent/teacher lists, so those managers (admin or staff) may list accounts too.
+router.get('/', protect, allowRoles('admin', 'staff'), requireAnyPermission(['users', 'view'], ['students', 'manage'], ['records', 'manage'], ['classes', 'view']), ctrl.listUsers);
 router.use(protect, allowRoles('admin'));
-// Student and class forms read the parent/teacher lists, so those managers may list accounts too.
-router.get('/', requireAnyPermission(['users', 'view'], ['students', 'manage'], ['records', 'manage'], ['classes', 'view']), ctrl.listUsers);
 router.post('/', P('users', 'manage'), guardAccountChanges, ctrl.createUser);
 router.get('/archived', P('users', 'view'), ctrl.listArchivedUsers);
 router.get('/:id', P('users', 'view'), ctrl.getUserForEdit);

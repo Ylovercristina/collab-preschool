@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<!-- Staff Panel: office staff accounts (Registrar, Finance Officer, Auditor). Same markup and scripts as
+     dashboard-admin.html; each staff role only sees the modules its permissions allow. Keep both pages in sync. -->
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Staff Panel — Play-is-School</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+<link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <a href="../index.html" class="brand">
+      <img src="../img/logocollab.jpg" alt="Play-is-School Logo" class="brand-logo-img" />
+      <span>Play-is-School</span>
+    </a>
+    <div class="who sidebar-profile">
+      <div class="profile-avatar">
+        <img id="sidebarAvatar" alt="" hidden />
+        <span id="sidebarInitials" aria-hidden="true">?</span>
+      </div>
+      <div class="sidebar-profile-content">
+        <div class="user-name" id="whoName">Loading profile...</div>
+        <div class="sidebar-profile-email" id="whoEmail"></div>
+        <span class="role-badge"><i class="fa-solid fa-id-badge"></i> <span id="staffRoleLabel">Staff</span></span>
+      </div>
+    </div>
+    <button class="nav-item active" data-panel="overview"><i class="fa-solid fa-gauge-high"></i> Overview</button>
+    <button class="nav-item" data-panel="users"><i class="fa-solid fa-users-gear"></i> Accounts</button>
+    <button class="nav-item" data-panel="students"><i class="fa-solid fa-user-graduate"></i> Students</button>
+    <button class="nav-item" data-panel="classes"><i class="fa-solid fa-chalkboard-user"></i> Classes</button>
+    <button class="nav-item" data-panel="enrollment"><i class="fa-solid fa-file-signature"></i> Enrollment</button>
+    <button class="nav-item" data-panel="academic-progress"><i class="fa-solid fa-chart-line"></i> Academic Progress</button>
+    <button class="nav-item" data-panel="records"><i class="fa-solid fa-folder-open"></i> Records Management</button>
+    <button class="nav-item" data-panel="fees"><i class="fa-solid fa-credit-card"></i> Fees</button>
+    <button class="nav-item" data-panel="events"><i class="fa-solid fa-calendar-days"></i> Events &amp; Calendar</button>
+    <button class="nav-item" data-panel="alerts"><i class="fa-solid fa-triangle-exclamation"></i> Emergency Alerts</button>
+    <button class="nav-item" data-panel="logs"><i class="fa-solid fa-clock-rotate-left"></i> Activity Logs</button>
+    <div class="sidebar-actions">
+      <button class="nav-item logout" id="logoutBtn"><i class="fa-solid fa-right-from-bracket"></i> Log out</button>
+      <div class="settings-menu">
+        <button class="nav-item settings-button" type="button" data-panel="settings" aria-label="Settings" title="Settings"><i class="fa-solid fa-gear"></i></button>
+        <div class="settings-submenu" aria-label="Settings sections">
+          <button class="settings-subnav active" type="button" data-settings-section="profile"><i class="fa-solid fa-user"></i> Profile</button>
+          <button class="settings-subnav" type="button" data-settings-section="archived"><i class="fa-solid fa-box-archive"></i> Archived</button>
+          <button class="settings-subnav" type="button" data-settings-section="backup" data-requires="sysadmin" hidden><i class="fa-solid fa-database"></i> Backup &amp; Restore</button>
+          <button class="settings-subnav" type="button" data-settings-section="integrations"><i class="fa-solid fa-plug"></i> Integrations</button>
+          <button class="settings-subnav" type="button" data-settings-section="calendar" hidden><i class="fa-regular fa-calendar"></i> Google Calendar</button>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <main class="main-pane">
+
+    <section class="panel active" id="panel-overview">
+      <div style="margin-bottom:24px;">
+        <h1 style="margin-bottom:4px;">Good day, Administrator</h1>
+        <p style="margin:0;">Here is an overview of school activities and operations.</p>
+      </div>
+
+      <div class="stat-row" id="statRow"></div>
+
+      <div class="grid-2">
+        <div class="card overview-clickable" data-overview-panel="fees" role="button" tabindex="0" aria-label="View fee records">
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:14px;">
+            <i class="fa-solid fa-wallet" style="color:var(--primary); font-size:18px;"></i>
+            <h3 style="margin:0;">Fee Status Summary</h3>
+          </div>
+          <div id="feeReport">Loading…</div>
+        </div>
+        <div class="card overview-clickable" data-overview-panel="students" role="button" tabindex="0" aria-label="View student records">
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:14px;">
+            <i class="fa-solid fa-school" style="color:var(--primary); font-size:18px;"></i>
+            <h3 style="margin:0;">Students by Class</h3>
+          </div>
+          <div id="classReport">Loading…</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-users">
+      <div class="toolbar" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:18px;">
+        <div>
+          <h1 style="margin:0; font-size:24px; font-weight:800; color:var(--ink);">User Accounts Management</h1>
+          <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">View, search, and manage administrator, teaching staff, and parent accounts.</p>
+        </div>
+        <button class="btn btn-primary btn-sm" id="addUserBtn" data-requires="users:manage"><i class="fa-solid fa-user-plus"></i> Add Account</button>
+      </div>
+
+      <!-- Accounts / Roles & Permissions -->
+      <div class="record-category-tabs users-view-tabs" role="tablist" aria-label="User management views">
+        <button type="button" class="record-category-tab active" data-users-view="accounts" role="tab" aria-selected="true"><i class="fa-solid fa-users"></i> Accounts</button>
+        <button type="button" class="record-category-tab" data-users-view="permissions" role="tab" aria-selected="false" data-requires="sysadmin" hidden><i class="fa-solid fa-user-lock"></i> Roles &amp; Permissions</button>
+      </div>
+
+      <div id="usersPermissionsView" class="rbac-view" hidden>
+        <div class="rbac-legend">
+          <span><strong>Legend:</strong></span>
+          <span><span class="rbac-key">V</span> View — limited access: open the module and do its everyday actions</span>
+          <span><span class="rbac-key">M</span> Manage — full access: create, edit and delete</span>
+          <span><span class="rbac-key">A</span> Approve — review and approve</span>
+          <span>No box ticked = no access</span>
+        </div>
+
+        <section class="card rbac-card">
+          <div class="rbac-card-head">
+            <div>
+              <h2><i class="fa-solid fa-table-cells" aria-hidden="true"></i> Role permissions</h2>
+              <p>Default access for each role. Accounts without custom permissions follow these immediately.</p>
+            </div>
+            <div class="rbac-card-actions">
+              <span id="rbacRoleDirty" class="rbac-dirty" hidden>Unsaved changes</span>
+              <button type="button" class="btn btn-primary btn-sm" id="rbacSaveRoles" disabled><i class="fa-solid fa-floppy-disk"></i> Save role permissions</button>
+            </div>
+          </div>
+          <div id="rbacRoleMessage" class="form-msg" aria-live="polite"></div>
+          <div class="table-responsive rbac-matrix-wrap"><table class="rbac-matrix" id="rbacRoleMatrix"></table></div>
+        </section>
+
+        <section class="card rbac-card">
+          <div class="rbac-card-head">
+            <div>
+              <h2><i class="fa-solid fa-user-gear" aria-hidden="true"></i> User permissions</h2>
+              <p>Choose an account to set its role and, if needed, custom permissions that override the role.</p>
+            </div>
+          </div>
+          <div class="rbac-user-picker">
+            <div class="field"><label for="rbacUserSearch">Account</label><input id="rbacUserSearch" list="rbacUserOptions" placeholder="Type a name or email…" autocomplete="off" /><datalist id="rbacUserOptions"></datalist></div>
+          </div>
+          <div id="rbacUserMessage" class="form-msg" aria-live="polite"></div>
+          <div id="rbacUserEditor"></div>
+        </section>
+
+        <section class="card rbac-card">
+          <div class="rbac-card-head">
+            <div>
+              <h2><i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i> Permission change history</h2>
+              <p>Every change to roles and permissions, with who made it and when.</p>
+            </div>
+          </div>
+          <ul class="rbac-audit" id="rbacAudit"></ul>
+        </section>
+      </div>
+
+      <div id="usersAccountsView">
+      <!-- Segmented Role Category Tabs -->
+      <div class="account-role-tabs" style="display:flex; gap:8px; border-bottom:1px solid var(--border); margin-bottom:18px; overflow-x:auto;">
+        <button type="button" class="account-tab active" data-account-role="staff" style="padding:10px 18px; font-size:13.5px; font-weight:700; border:none; background:rgba(46,125,50,0.06); cursor:pointer; display:flex; align-items:center; gap:8px; border-bottom:3px solid var(--primary); color:var(--primary); border-radius:8px 8px 0 0; transition:all 0.15s ease;">
+          <i class="fa-solid fa-chalkboard-user"></i>
+          <span>Staff Accounts</span>
+          <span id="tabCountTeacher" class="badge" style="background:#E2E8F0; color:var(--ink); font-size:11px; padding:2px 7px;">0</span>
+        </button>
+        <button type="button" class="account-tab" data-account-role="parent" style="padding:10px 18px; font-size:13.5px; font-weight:700; border:none; background:none; cursor:pointer; display:flex; align-items:center; gap:8px; border-bottom:3px solid transparent; color:var(--ink-muted); border-radius:8px 8px 0 0; transition:all 0.15s ease;">
+          <i class="fa-solid fa-users"></i>
+          <span>Parent Accounts</span>
+          <span id="tabCountParent" class="badge" style="background:#E2E8F0; color:var(--ink); font-size:11px; padding:2px 7px;">0</span>
+        </button>
+        <button type="button" class="account-tab" data-account-role="admin" style="padding:10px 18px; font-size:13.5px; font-weight:700; border:none; background:none; cursor:pointer; display:flex; align-items:center; gap:8px; border-bottom:3px solid transparent; color:var(--ink-muted); border-radius:8px 8px 0 0; transition:all 0.15s ease;">
+          <i class="fa-solid fa-user-shield"></i>
+          <span>Admin Accounts</span>
+          <span id="tabCountAdmin" class="badge" style="background:#E2E8F0; color:var(--ink); font-size:11px; padding:2px 7px;">0</span>
+        </button>
+      </div>
+
+      <!-- Search, Filter & Counter Bar -->
+      <div class="account-filterbar">
+        <div class="account-filterbar-search">
+          <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+          <input type="text" id="userSearchInput" placeholder="Search by name or email..." aria-label="Search accounts by name or email" />
+        </div>
+        <select id="userRoleFilter" aria-label="Filter by role">
+          <option value="">All Roles</option>
+        </select>
+        <select id="userStatusFilter" aria-label="Filter by status">
+          <option value="">All Statuses</option>
+          <option value="approved">Approved</option>
+          <option value="pending">Pending</option>
+          <option value="rejected">Rejected</option>
+        </select>
+        <button type="button" class="btn btn-ghost btn-sm" id="userResetFilterBtn" title="Reset filters">
+          <i class="fa-solid fa-rotate-left"></i> Reset
+        </button>
+      </div>
+      <div id="userSearchResultsCount" class="account-filterbar-count"></div>
+
+      <!-- Accounts Table -->
+      <div class="table-responsive">
+        <table>
+          <thead>
+            <tr>
+              <th style="min-width:180px;">Account Name</th>
+              <th style="min-width:220px;">Email Address</th>
+              <th style="min-width:110px;">Status</th>
+              <th style="min-width:160px;">Role &amp; access</th>
+              <th style="min-width:120px;">Date Created</th>
+              <th style="min-width:150px; text-align:right;">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="usersTbody"></tbody>
+        </table>
+      </div>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-students">
+      <div class="toolbar">
+        <div>
+          <h1 style="margin:0;">Students Management</h1>
+          <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Manage student enrollments, profiles, and authorized pickup persons.</p>
+        </div>
+        <button class="btn btn-primary btn-sm" id="addStudentBtn" data-requires="students:manage"><i class="fa-solid fa-plus"></i> Add Student</button>
+      </div>
+      <div class="table-responsive">
+        <table>
+          <thead><tr><th>Name</th><th>Class</th><th>Parent</th><th>Teacher</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="studentsTbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-enrollment">
+      <div class="enrollment-page-heading">
+        <h1>Enrollment Management</h1>
+        <p>Set the term currently accepting applications and review parent and teacher submissions.</p>
+      </div>
+      <div class="enrollment-category-tabs" role="tablist" aria-label="Enrollment management sections">
+        <button type="button" class="enrollment-category-tab active" id="enrollmentAvailabilityTab" data-enrollment-view="availability" role="tab" aria-controls="enrollmentAvailabilityView" aria-selected="true"><i class="fa-solid fa-calendar-check"></i> Availability</button>
+        <button type="button" class="enrollment-category-tab" id="enrollmentApplicationsTab" data-enrollment-view="applications" role="tab" aria-controls="enrollmentApplicationsView" aria-selected="false"><i class="fa-solid fa-file-signature"></i> Applications <span id="enrollmentPendingTabCount" class="enrollment-tab-count">0</span></button>
+        <button type="button" class="enrollment-category-tab" id="enrollmentCompletedTab" data-enrollment-view="completed" role="tab" aria-controls="enrollmentCompletedView" aria-selected="false"><i class="fa-solid fa-circle-check"></i> Completed <span id="enrollmentCompletedTabCount" class="enrollment-tab-count">0</span></button>
+      </div>
+      <div class="enrollment-workspace">
+        <section class="enrollment-view active" id="enrollmentAvailabilityView" role="tabpanel" aria-labelledby="enrollmentAvailabilityTab">
+          <div class="card enrollment-settings-card">
+            <div class="enrollment-settings-heading">
+              <span class="icon-box enrollment-settings-icon"><i class="fa-solid fa-calendar-check"></i></span>
+              <div>
+                <h2>Enrollment availability</h2>
+                <p>Choose when families and staff can submit applications.</p>
+              </div>
+              <span id="adminEnrollmentAvailabilityBadge" class="enrollment-settings-status">Loading status</span>
+            </div>
+            <div id="adminEnrollmentMessage" class="form-msg" aria-live="polite"></div>
+            <form id="enrollmentPeriodForm" data-requires="enrollment:manage">
+              <div class="grid-2">
+                <div class="field"><label for="enrollmentTerm">Term / semester</label><input id="enrollmentTerm" maxlength="80" placeholder="e.g. First Semester" required /></div>
+                <div class="field"><label for="enrollmentSchoolYear">School year</label><input id="enrollmentSchoolYear" maxlength="40" placeholder="e.g. 2026–2027" required /></div>
+                <div class="field"><label for="enrollmentOpensAt">Opens on</label><input id="enrollmentOpensAt" type="date" data-no-past required /></div>
+                <div class="field"><label for="enrollmentClosesAt">Closes on</label><input id="enrollmentClosesAt" type="date" data-no-past required /></div>
+              </div>
+              <div class="enrollment-period-toggle">
+                <div>
+                  <strong>Accept applications</strong>
+                  <span>Allow parents and teachers to submit during this enrollment period.</span>
+                </div>
+                <label class="enrollment-switch" for="enrollmentEnabled" aria-label="Accept applications during this period">
+                  <input id="enrollmentEnabled" type="checkbox" checked />
+                  <span aria-hidden="true"></span>
+                </label>
+              </div>
+              <div class="enrollment-settings-footer">
+                <div class="enrollment-settings-actions">
+                  <button class="btn btn-primary" id="enrollmentSubmitButton" type="submit"><i class="fa-solid fa-floppy-disk"></i> Save changes</button>
+                  <button class="btn btn-ghost" id="cancelEnrollmentEdit" type="button" hidden>Cancel edit</button>
+                </div>
+                <p id="adminEnrollmentStatus" aria-live="polite"></p>
+              </div>
+            </form>
+          </div>
+          <section class="card enrollment-saved-period" id="adminEnrollmentSavedPeriod" hidden aria-live="polite"></section>
+        </section>
+        <section class="enrollment-view" id="enrollmentApplicationsView" role="tabpanel" aria-labelledby="enrollmentApplicationsTab" hidden>
+          <section class="card enrollment-applications-panel">
+            <div class="enrollment-applications-panel-heading">
+              <div>
+                <h2>Enrollment applications</h2>
+                <p>Review applications submitted by parents and teachers.</p>
+              </div>
+              <div id="adminEnrollmentApplicationCounts" class="enrollment-application-counts" aria-live="polite"></div>
+            </div>
+            <div id="adminEnrollmentApplications" class="table-responsive enrollment-applications-table"></div>
+          </section>
+        </section>
+        <section class="enrollment-view" id="enrollmentCompletedView" role="tabpanel" aria-labelledby="enrollmentCompletedTab" hidden>
+          <section class="card enrollment-completed-panel">
+            <div class="enrollment-applications-panel-heading">
+              <div>
+                <h2>Completed enrollments</h2>
+                <p>Approved students added to the official roster.</p>
+              </div>
+              <span id="adminEnrollmentCompletedCount" class="enrollment-application-total">0 students</span>
+            </div>
+            <div id="adminEnrollmentCompleted"></div>
+          </section>
+        </section>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-classes">
+      <div class="toolbar">
+        <div>
+          <h1 style="margin:0;">Classes</h1>
+          <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Create classes, assign a teacher, and place students. Teachers can only see students in their class.</p>
+        </div>
+        <button type="button" class="btn btn-primary btn-sm" id="addClassBtn" data-requires="classes:manage"><i class="fa-solid fa-plus"></i> New Class</button>
+      </div>
+      <div id="classesMessage" class="form-msg" aria-live="polite"></div>
+      <div id="classesNotices"></div>
+      <div class="records-filterbar">
+        <select id="classStatusFilter" aria-label="Filter classes by status"><option value="active">Active classes</option><option value="archived">Archived classes</option><option value="">All classes</option></select>
+        <span id="classResultCount" class="records-result-count"></span>
+      </div>
+      <div class="table-responsive">
+        <table>
+          <thead><tr><th>Class</th><th>Teacher</th><th>Active students</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="classesTbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-academic-progress">
+      <div class="toolbar">
+        <div>
+          <h1 style="margin:0;">Student Academic Progress</h1>
+          <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Review teacher-submitted assessments, evaluations and student development over time.</p>
+        </div>
+        <div class="record-actions">
+          <button type="button" class="btn btn-secondary btn-sm" id="progressExportBtn"><i class="fa-solid fa-file-csv"></i> Export CSV</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="progressPrintBtn"><i class="fa-solid fa-print"></i> Print report</button>
+        </div>
+      </div>
+      <div id="progressMessage" class="form-msg" aria-live="polite"></div>
+      <div class="records-filterbar">
+        <input type="search" id="progressSearch" placeholder="Search student name, ID or class..." aria-label="Search student progress" />
+        <select id="progressClassFilter" aria-label="Filter progress by class"><option value="">All classes</option></select>
+        <select id="progressStatusFilter" aria-label="Filter students by progress"><option value="">All progress statuses</option><option value="records">Has records</option><option value="none">No records</option><option value="support">Support noted</option></select>
+        <span id="progressResultCount" class="records-result-count"></span>
+      </div>
+      <div class="table-responsive">
+        <table>
+          <thead><tr><th>Student ID</th><th>Student</th><th>Class / Section</th><th>Academic progress</th><th>Records</th><th>Action</th></tr></thead>
+          <tbody id="progressStudentsTbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-records">
+      <div class="toolbar">
+        <div>
+          <h1 style="margin:0;">Records Management</h1>
+          <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Securely organize student and teaching staff profiles and documents.</p>
+        </div>
+        <button type="button" class="btn btn-primary btn-sm" id="addManagedRecordBtn" data-requires="records:manage"><i class="fa-solid fa-plus"></i> Add student record</button>
+      </div>
+      <div class="record-category-tabs" role="tablist" aria-label="Record category">
+        <button type="button" class="record-category-tab active" data-record-category="students" role="tab" aria-selected="true"><i class="fa-solid fa-user-graduate"></i> Student Records</button>
+        <button type="button" class="record-category-tab" data-record-category="teachers" role="tab" aria-selected="false"><i class="fa-solid fa-chalkboard-user"></i> Teacher Records</button>
+      </div>
+      <div id="recordsMessage" class="form-msg" aria-live="polite"></div>
+      <div class="records-filterbar">
+        <input type="search" id="recordsSearch" placeholder="Search name, ID, class or contact..." aria-label="Search records" />
+        <select id="recordsClassFilter" aria-label="Filter records by class"><option value="">All classes</option></select>
+        <span id="recordsResultCount" class="records-result-count"></span>
+      </div>
+      <div class="table-responsive">
+        <table>
+          <thead id="recordsThead"></thead>
+          <tbody id="recordsTbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel fee-panel" id="panel-fees">
+      <div class="toolbar fee-page-heading">
+        <div>
+          <h1 style="margin:0;">Fees &amp; Payments</h1>
+          <p class="fee-page-subtitle">Manage student balances, record cash payments, and send parent reminders.</p>
+        </div>
+        <div class="fee-toolbar-actions">
+          <button class="btn btn-secondary btn-sm" id="remindAllFeesBtn"><i class="fa-solid fa-envelope"></i> Remind All Unpaid</button>
+          <button class="btn btn-ghost btn-sm" id="paymentReportBtn"><i class="fa-solid fa-file-invoice-dollar"></i> Reports</button>
+          <button class="btn btn-primary btn-sm" id="addFeeBtn" data-requires="fees:manage"><i class="fa-solid fa-plus"></i> New Fee</button>
+        </div>
+      </div>
+      <div class="fee-search-row">
+        <label class="fee-search" for="feeSearchInput">
+          <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+          <input type="search" id="feeSearchInput" placeholder="Search student name or ID..." />
+        </label>
+        <div id="feeSearchCount" class="fee-search-count" aria-live="polite"></div>
+      </div>
+      <div class="table-responsive fee-table-wrap">
+        <table class="fee-table fee-table-admin">
+          <thead><tr><th>Student</th><th>Description</th><th>Total Amount</th><th>Total Paid</th><th>Remaining Balance</th><th>Due Date</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="feesTbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-events">
+      <div class="toolbar">
+        <div>
+          <h1 style="margin:0;">School Events &amp; Calendar</h1>
+          <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">View, schedule, and organize activities on the school calendar.</p>
+        </div>
+        <div class="panel-header-actions">
+          <button type="button" class="gcal-status-btn" id="googleCalendarStatusBtn" hidden aria-haspopup="dialog"></button>
+          <button class="btn btn-primary btn-sm" id="addEventBtn" data-requires="events:manage"><i class="fa-solid fa-calendar-plus"></i> New Event</button>
+        </div>
+      </div>
+      <div id="adminEventSummary" class="form-msg" aria-live="polite"></div>
+      <section class="event-review-queue" id="pendingEventsSection" aria-labelledby="pendingEventsHeading" hidden>
+        <div class="toolbar"><div><h2 id="pendingEventsHeading" style="font-size:18px;margin:0;">Teacher submissions awaiting approval</h2><p style="margin:4px 0 0;font-size:13px;color:var(--ink-muted);">Parents are not notified until you approve an event.</p></div><span id="pendingEventsCount" class="badge pending">0 pending</span></div>
+        <div id="pendingEventsList"></div>
+      </section>
+      <div id="eventsCalendarContainer"></div>
+      <section class="event-status-list" aria-labelledby="adminEventListHeading">
+        <h2 id="adminEventListHeading" style="font-size:18px;">Recent Events</h2>
+        <div id="adminEventStatusList"></div>
+      </section>
+    </section>
+
+    <section class="panel" id="panel-alerts">
+      <div class="alert-panel-heading" style="margin-bottom:18px;">
+        <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
+        <div><h1 style="margin:0;">Emergency Alerts</h1><p style="margin:4px 0 0;">Urgent messages for families linked to affected pupils.</p></div>
+      </div>
+      <div class="card alert-form-card">
+        <form id="adminAlertForm" novalidate data-requires="alerts:manage">
+          <section class="alert-section">
+            <h3>Emergency Type and Severity</h3>
+            <div class="grid-2">
+              <div class="field" data-alert-field="type"><label for="adminAlertType">Emergency type <span class="required-mark" aria-hidden="true">*</span></label><select id="adminAlertType" required><option value="">Select type</option><option>Medical</option><option>Weather</option><option>Security</option><option>Early dismissal</option><option>Other</option></select><small class="field-error" data-alert-error="type"></small></div>
+              <fieldset class="field" style="border:0;padding:0;margin:0;" data-alert-field="severity"><legend style="font-weight:600;font-size:13.5px;margin-bottom:6px;">Severity <span class="required-mark" aria-hidden="true">*</span></legend><div class="severity-options"><label class="severity-choice severity-moderate"><input type="radio" name="adminAlertSeverity" value="moderate" checked /><span>Moderate</span></label><label class="severity-choice severity-high"><input type="radio" name="adminAlertSeverity" value="high" /><span>High</span></label><label class="severity-choice severity-critical"><input type="radio" name="adminAlertSeverity" value="critical" /><span>Critical</span></label></div></fieldset>
+            </div>
+            <div class="field" data-alert-field="title"><label for="adminAlertTitle">Alert title <span class="required-mark" aria-hidden="true">*</span></label><input id="adminAlertTitle" maxlength="120" placeholder="e.g. Campus closure" required /><small class="field-error" data-alert-error="title"></small></div>
+          </section>
+          <section class="alert-section">
+            <h3>Description</h3>
+            <div class="field" data-alert-field="description"><label for="adminAlertDescription">What happened? <span class="required-mark" aria-hidden="true">*</span></label><textarea id="adminAlertDescription" rows="3" maxlength="2000" required></textarea><small class="field-error" data-alert-error="description"></small></div>
+          </section>
+          <section class="alert-section">
+            <h3>Affected Pupils and Classes</h3>
+            <div id="adminEmergencyAudience"></div>
+          </section>
+          <section class="alert-section">
+            <h3>Safety Instructions</h3>
+            <div class="field" data-alert-field="instructions"><label for="adminAlertInstructions">What should families do? <span class="required-mark" aria-hidden="true">*</span></label><textarea id="adminAlertInstructions" rows="3" maxlength="2000" required></textarea><small class="field-error" data-alert-error="instructions"></small></div>
+          </section>
+          <div id="adminAlertFormMessage" class="form-msg" role="alert"></div>
+          <button class="btn btn-danger" type="submit"><i class="fa-solid fa-shield-exclamation"></i> Review and Send Alert</button>
+        </form>
+      </div>
+      <div id="adminAlertEmailSummary" class="form-msg" aria-live="polite"></div>
+      <section class="event-status-list" aria-labelledby="adminRecentAlertsHeading">
+        <div class="toolbar"><h2 id="adminRecentAlertsHeading" style="font-size:18px;">Emergency Alerts</h2></div>
+        <div class="record-category-tabs" role="tablist" aria-label="Emergency alert status"><button type="button" class="record-category-tab active" data-admin-alert-view="active" role="tab" aria-selected="true">Active</button><button type="button" class="record-category-tab" data-admin-alert-view="archived" role="tab" aria-selected="false">Archived</button></div>
+        <div id="adminAlertsList"></div>
+      </section>
+    </section>
+
+    <section class="panel" id="panel-logs">
+      <div style="margin-bottom:20px;">
+        <h1 style="margin:0;">System Activity Logs</h1>
+        <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Audit log of user actions and record updates.</p>
+      </div>
+      <div class="table-responsive">
+        <table>
+          <thead><tr><th>Timestamp</th><th>User</th><th>Action</th><th>Details</th></tr></thead>
+          <tbody id="logsTbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-settings">
+      <div class="settings-section active" id="settings-section-profile">
+        <div class="toolbar">
+        <div>
+          <h1 style="margin:0;">Personal Profile</h1>
+          <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Update your profile and sign-in details.</p>
+        </div>
+        </div>
+        <div class="card profile-settings-card">
+        <div id="profileFormMessage" class="form-msg" aria-live="polite"></div>
+        <form id="profileForm" enctype="multipart/form-data">
+          <section class="profile-photo-editor" aria-label="Profile photo">
+            <div class="profile-avatar profile-avatar-large">
+              <img id="profilePreviewImage" alt="" hidden />
+              <span id="profilePreviewInitials" aria-hidden="true">?</span>
+            </div>
+            <div class="profile-photo-copy">
+              <h2>Profile photo</h2>
+              <p>JPG, PNG or WEBP, up to 2 MB.</p>
+              <input class="profile-file-input" id="profileImage" name="avatar" type="file" accept="image/jpeg,image/png,image/webp" />
+              <label class="btn btn-secondary profile-upload-button" for="profileImage"><i class="fa-solid fa-arrow-up-from-bracket"></i> Choose image</label>
+            </div>
+          </section>
+          <section class="profile-details">
+            <div class="profile-section-heading"><span>YOUR PROFILE</span><h2>Personal details</h2></div>
+            <div class="grid-2 profile-fields">
+            <div class="field"><label for="profileFirstName">First name</label><input id="profileFirstName" name="firstName" autocomplete="given-name" maxlength="80" required /></div>
+            <div class="field"><label for="profileMiddleName">Middle name</label><input id="profileMiddleName" name="middleName" autocomplete="additional-name" maxlength="80" /></div>
+            <div class="field"><label for="profileLastName">Last name</label><input id="profileLastName" name="lastName" autocomplete="family-name" maxlength="80" required /></div>
+            <div class="field"><label for="profileEmail">Email address</label><input id="profileEmail" name="email" type="email" autocomplete="email" required /></div>
+            <div class="field"><label for="profilePhone">Contact number</label><input id="profilePhone" name="phone" type="tel" autocomplete="tel" required /></div>
+            <div class="field"><label for="profileAddress">Address</label><textarea id="profileAddress" name="address" rows="2" maxlength="500" autocomplete="street-address" required></textarea></div>
+            </div>
+          </section>
+          <div class="field profile-children-field" id="profileChildrenField" hidden>
+            <label for="profileChildrenNames">Name of child/children</label>
+            <textarea id="profileChildrenNames" name="childrenNamesInput" rows="3"></textarea>
+            <div class="field-hint">Enter one child name per line.</div>
+          </div>
+          <div class="profile-form-footer"><button class="btn btn-primary" type="submit"><i class="fa-solid fa-floppy-disk"></i> Save Changes</button></div>
+        </form>
+        </div>
+      </div>
+      <div class="settings-section" id="settings-section-archived">
+        <div class="toolbar">
+          <div>
+            <h1 style="margin:0;">Archived accounts &amp; students</h1>
+            <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Restore within 30 days of archiving, or the record is permanently deleted.</p>
+          </div>
+        </div>
+        <div class="archived-accounts-notice">
+          <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
+          <p><strong>Deleting an account</strong> removes it with its messages, notifications, photo and documents, and unlinks it from students and classes.
+            <strong>Deleting a student</strong> removes their attendance, progress records and photos, pickup list, enrollment application, photo and documents.
+            Fees, payments, receipts and activity logs are kept.</p>
+        </div>
+        <div id="archivedAccountsMessage" class="form-msg" aria-live="polite"></div>
+        <h2 class="archived-table-heading" data-requires="users:view"><i class="fa-solid fa-user-slash" aria-hidden="true"></i> User accounts</h2>
+        <div class="card" style="padding:0;" data-requires="users:view">
+          <div class="table-responsive">
+            <table>
+              <thead><tr><th>Account</th><th>Role</th><th>Archived</th><th>Deleted in</th><th style="text-align:right;">Actions</th></tr></thead>
+              <tbody id="archivedAccountsTbody"><tr><td colspan="5">Loading archived accounts…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+        <h2 class="archived-table-heading" data-requires="students:manage"><i class="fa-solid fa-user-graduate" aria-hidden="true"></i> Students</h2>
+        <div class="card" style="padding:0;" data-requires="students:manage">
+          <div class="table-responsive">
+            <table>
+              <thead><tr><th>Student</th><th>Class</th><th>Archived</th><th>Deleted in</th><th style="text-align:right;">Actions</th></tr></thead>
+              <tbody id="archivedStudentsTbody"><tr><td colspan="5">Loading archived students…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="settings-section" id="settings-section-backup">
+        <div class="toolbar">
+          <div>
+            <h1 style="margin:0;">Backup &amp; Restore</h1>
+            <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Save a copy of the whole database, download it, or restore the school's data from a backup.</p>
+          </div>
+          <button type="button" class="btn btn-primary btn-sm" id="createBackupBtn"><i class="fa-solid fa-floppy-disk"></i> Back up now</button>
+        </div>
+        <div class="backup-info-grid">
+          <div class="backup-info"><i class="fa-solid fa-clock" aria-hidden="true"></i><div><strong>Automatic daily backups</strong><p>The system backs up once a day and keeps the newest <span id="backupKeepAuto">14</span>.</p></div></div>
+          <div class="backup-info"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i><div><strong>Safe restore</strong><p>A safety backup is taken right before every restore. If a restore fails, the data is put back automatically.</p></div></div>
+          <div class="backup-info"><i class="fa-solid fa-lock" aria-hidden="true"></i><div><strong>Keep downloads private</strong><p>Backups contain every record, including password hashes. Store downloaded files securely.</p></div></div>
+        </div>
+        <div id="backupMessage" class="form-msg" aria-live="polite"></div>
+        <div class="card" style="padding:0;">
+          <div class="table-responsive">
+            <table>
+              <thead><tr><th>Backup</th><th>Type</th><th>Records</th><th>Size</th><th style="text-align:right;">Actions</th></tr></thead>
+              <tbody id="backupsTbody"><tr><td colspan="5">Loading backups…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card backup-upload-card">
+          <h2><i class="fa-solid fa-upload" aria-hidden="true"></i> Upload a backup file</h2>
+          <p>Have a backup you downloaded earlier? Upload it here to add it back to the list above, then restore it from there. Uploading does not change any data.</p>
+          <form id="backupUploadForm" class="backup-upload-form">
+            <input class="profile-file-input" type="file" id="backupUploadFile" accept=".gz,.json,application/gzip,application/json" />
+            <label class="backup-dropzone" for="backupUploadFile" id="backupDropzone">
+              <i class="fa-solid fa-file-zipper" aria-hidden="true"></i>
+              <span>
+                <strong id="backupFileName">Choose a backup file</strong>
+                <small id="backupFileHint">or drag it here · .json.gz or .json, up to 250 MB</small>
+              </span>
+            </label>
+            <button type="submit" class="btn btn-primary btn-sm" id="backupUploadBtn" disabled><i class="fa-solid fa-upload"></i> Upload</button>
+          </form>
+        </div>
+      </div>
+      <div class="settings-section" id="settings-section-integrations">
+        <div class="toolbar">
+          <div>
+            <h1 style="margin:0;">Integrations</h1>
+            <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Manage Google sign-in and CAPTCHA integrations.</p>
+          </div>
+        </div>
+        <div class="card auth-security-settings-card">
+        <div class="profile-section-heading">
+          <span>SECURITY</span>
+          <h2>Authentication &amp; Security Settings</h2>
+          <p>Control Google authentication and CAPTCHA independently for Google sign-in.</p>
+        </div>
+        <div id="authSecurityMessage" class="form-msg" aria-live="polite"></div>
+        <div class="auth-security-options">
+          <label class="auth-security-option" for="googleAuthEnabled">
+            <span><strong>Google Sign-In</strong><small>Allow users to authenticate with their Google accounts.</small></span>
+            <span class="settings-switch"><input id="googleAuthEnabled" type="checkbox" /><span aria-hidden="true"></span></span>
+          </label>
+          <button class="auth-security-option auth-security-trigger" id="openGoogleOAuthClientSettings" type="button" aria-haspopup="dialog">
+            <span><strong>Google Sign-In Configuration</strong></span><span class="oauth-trigger-label">Manage</span>
+          </button>
+          <label class="auth-security-option" for="captchaEnabled">
+            <span><strong>CAPTCHA Verification</strong><small>Require a completed CAPTCHA before Google sign-in.</small></span>
+            <span class="settings-switch"><input id="captchaEnabled" type="checkbox" /><span aria-hidden="true"></span></span>
+          </label>
+          <button class="auth-security-option auth-security-trigger" id="openRecaptchaClientSettings" type="button" aria-haspopup="dialog">
+            <span><strong>reCAPTCHA Configuration</strong></span><span class="oauth-trigger-label">Manage</span>
+          </button>
+        </div>
+        <p class="auth-security-notice"><i class="fa-solid fa-shield-halved"></i> These settings affect Google authentication only. Password login is unchanged.</p>
+        <div class="profile-form-footer"><button class="btn btn-secondary" type="button" id="openRestoreIntegrationDefaults" aria-haspopup="dialog" style="margin-right:auto;"><i class="fa-solid fa-rotate-left"></i> Restore defaults</button><button class="btn btn-primary" type="button" id="saveAuthSecuritySettings"><i class="fa-solid fa-floppy-disk"></i> Save security settings</button></div>
+        </div>
+      </div>
+      <dialog id="googleOAuthClientDialog" class="credential-manager" aria-labelledby="googleOAuthDialogTitle">
+        <div class="credential-manager-header"><h2 id="googleOAuthDialogTitle">Custom Google Sign-In</h2><button type="button" class="btn btn-secondary btn-sm" id="closeGoogleOAuthClientDialog">Close</button></div>
+        <p id="googleOAuthClientStatus" class="credential-manager-status" aria-live="polite"></p>
+        <form id="googleOAuthClientForm" class="credential-manager-form" autocomplete="off">
+          <label for="googleOAuthClientId">Google Client ID</label>
+          <input id="googleOAuthClientId" maxlength="256" required autocomplete="off" spellcheck="false" data-lpignore="true" data-1p-ignore placeholder="Enter a new Client ID" />
+          <label for="googleOAuthClientSecret">Google Client Secret</label>
+          <input id="googleOAuthClientSecret" type="text" class="masked-secret" maxlength="2048" autocomplete="off" spellcheck="false" data-lpignore="true" data-1p-ignore />
+          <label for="googleOAuthCallbackUrl">Google Callback URL</label>
+          <input id="googleOAuthCallbackUrl" type="url" maxlength="2048" autocomplete="off" placeholder="Leave blank to use the server default (…/api/auth/google/callback)" />
+          <small class="credential-manager-hint">Add this callback URL to “Authorized redirect URIs” of your OAuth client in Google Cloud Console.</small>
+          <button type="submit" class="btn btn-primary" id="saveGoogleOAuthClient">Save custom configuration</button>
+        </form>
+        <p id="googleOAuthClientMessage" class="form-msg" aria-live="polite"></p>
+      </dialog>
+      <dialog id="recaptchaClientDialog" class="credential-manager" aria-labelledby="recaptchaDialogTitle">
+        <div class="credential-manager-header"><h2 id="recaptchaDialogTitle">Custom reCAPTCHA</h2><button type="button" class="btn btn-secondary btn-sm" id="closeRecaptchaClientDialog">Close</button></div>
+        <p id="recaptchaClientStatus" class="credential-manager-status" aria-live="polite"></p>
+        <form id="recaptchaClientForm" class="credential-manager-form" autocomplete="off">
+          <label for="recaptchaSiteKey">reCAPTCHA site key</label>
+          <input id="recaptchaSiteKey" maxlength="256" required autocomplete="off" spellcheck="false" data-lpignore="true" data-1p-ignore placeholder="Enter a new site key" />
+          <label for="recaptchaSecretKey">reCAPTCHA secret key</label>
+          <input id="recaptchaSecretKey" type="text" class="masked-secret" maxlength="2048" autocomplete="off" spellcheck="false" data-lpignore="true" data-1p-ignore />
+          <label for="recaptchaAllowedHostnames">Allowed hostnames</label>
+          <input id="recaptchaAllowedHostnames" placeholder="localhost, example.com" required autocomplete="off" />
+          <button type="submit" class="btn btn-primary" id="saveRecaptchaClient">Save custom configuration</button>
+        </form>
+        <p id="recaptchaClientMessage" class="form-msg" aria-live="polite"></p>
+      </dialog>
+      <dialog id="restoreIntegrationDefaultsDialog" class="credential-manager integration-otp-dialog" aria-labelledby="restoreIntegrationDefaultsTitle">
+        <div class="credential-manager-header"><h2 id="restoreIntegrationDefaultsTitle">Restore defaults</h2></div>
+        <form id="restoreIntegrationDefaultsForm" class="credential-manager-form">
+          <p>Choose which configurations to restore. The custom values you saved will be removed and the default configuration will be used again.</p>
+          <label class="restore-default-option"><input type="checkbox" id="restoreGoogleDefault" /> Google Sign-In (Client ID and Client Secret)</label>
+          <label class="restore-default-option"><input type="checkbox" id="restoreRecaptchaDefault" /> reCAPTCHA (site key and secret key)</label>
+          <p id="restoreIntegrationDefaultsMessage" class="form-msg" aria-live="polite"></p>
+          <div class="credential-manager-actions">
+            <button type="button" class="btn btn-secondary" id="cancelRestoreIntegrationDefaults">Cancel</button>
+            <button type="submit" class="btn btn-primary" id="confirmRestoreIntegrationDefaults">Restore</button>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="integrationOtpDialog"class="credential-manager integration-otp-dialog" aria-labelledby="integrationOtpTitle">
+        <div class="credential-manager-header">
+          <h2 id="integrationOtpTitle">Email verification</h2>
+        </div>
+        <form id="integrationOtpForm" class="credential-manager-form">
+          <p id="integrationOtpInstructions">Enter the six-digit code sent to the configured personal email address.</p>
+          <label id="integrationOtpLabel" for="integrationOtpInput">Verification code</label>
+          <input id="integrationOtpInput" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required />
+          <div class="credential-manager-actions">
+            <button type="button" class="btn btn-secondary" id="cancelIntegrationOtp">Cancel</button>
+            <button type="submit" class="btn btn-primary" id="verifyIntegrationOtp">Verify code</button>
+          </div>
+        </form>
+        <p id="integrationOtpMessage" class="form-msg" role="status" aria-live="polite"></p>
+      </dialog>
+      <div class="settings-section" id="settings-section-calendar">
+        <div class="toolbar">
+          <div>
+            <h1 style="margin:0;">Google Calendar</h1>
+            <p style="margin:4px 0 0; font-size:13.5px; color:var(--ink-muted);">Connect your own Google Calendar to the school calendar.</p>
+          </div>
+        </div>
+        <div class="card auth-security-settings-card">
+          <div class="profile-section-heading">
+            <span>INTEGRATION</span>
+            <h2>Personal Google Calendar</h2>
+            <p>Connect your Google account to add selected school events to your calendar. Events are never added automatically.</p>
+          </div>
+          <div id="personalGoogleCalendarMessage" class="form-msg" role="status" aria-live="polite"></div>
+          <p id="personalGoogleCalendarAccount" class="field-hint"></p>
+          <label class="auth-security-option" for="personalGoogleCalendarShareConsent">
+            <span><strong>Share my calendar with the school</strong><small>Events from your Google Calendar will be visible to school users on the shared school calendar.</small></span>
+            <span class="settings-switch"><input id="personalGoogleCalendarShareConsent" type="checkbox" /><span aria-hidden="true"></span></span>
+          </label>
+          <div class="profile-form-footer">
+            <button type="button" class="btn btn-primary" id="personalGoogleCalendarConnect" disabled>Connect Google Calendar</button>
+            <button type="button" class="btn btn-secondary" id="personalGoogleCalendarSync" hidden>Retry selected event updates</button>
+            <button type="button" class="btn btn-danger" id="personalGoogleCalendarDisconnect" hidden>Disconnect</button>
+          </div>
+          <p class="field-hint">Disconnecting stops future updates. Events already added to your calendar remain there.</p>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<div class="modal-backdrop" id="modalBackdrop">
+  <div class="modal" id="modalBody"></div>
+</div>
+
+<script src="../js/api.js"></script>
+<script src="../js/dashboard-common.js"></script>
+<script src="../js/admin.js"></script>
+<script src="../js/admin-records.js"></script>
+<script src="../js/admin-classes.js"></script>
+<script src="../js/admin-permissions.js"></script>
+<script src="../js/admin-backup.js"></script>
+<script src="../js/enrollment.js"></script>
+</body>
+</html>

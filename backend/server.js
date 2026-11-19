@@ -5,6 +5,7 @@ const cors = require('cors');
 const morgan = require('morgan');
 const connectDB = require('./config/db');
 const ensureSeedAdmin = require('./utils/seed');
+const migrateStaffAccounts = require('./utils/migrateStaffAccounts');
 const authController = require('./controllers/authController');
 const authRoutes = require('./routes/authRoutes');
 const emailService = require('./services/emailService');
@@ -20,6 +21,12 @@ app.use(cors({
   exposedHeaders: ['X-Integration-Access-Refresh'],
 }));
 app.use(express.json());
+// Express 5 leaves req.body undefined when a request has no body; default it to {} so handlers
+// answer with a validation message (400) instead of crashing with a 500.
+app.use((req, res, next) => {
+  if (req.body === undefined) req.body = {};
+  next();
+});
 // Rate limiting: a general limit per session/IP, and a tighter one for saves.
 app.use('/api', limits.api, limits.writes);
 app.use(morgan('dev'));
@@ -89,6 +96,7 @@ function logRegisteredAuthRoutes() {
 
 connectDB().then(async () => {
   await ensureSeedAdmin();
+  await migrateStaffAccounts();
   try {
     await emailService.verifyEmailTransport();
     console.log('Email server ready');

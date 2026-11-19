@@ -263,7 +263,8 @@ function requireRole(expectedRole) {
     return null;
   }
   const user = Auth.getUser();
-  if (expectedRole && user.role !== expectedRole) {
+  const allowed = Array.isArray(expectedRole) ? expectedRole : [expectedRole];
+  if (expectedRole && !allowed.includes(user.role)) {
     window.location.href = getDashboardUrl(user.role);
     return null;
   }

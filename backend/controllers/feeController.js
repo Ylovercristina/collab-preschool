@@ -1,4 +1,5 @@
 const Fee = require('../models/Fee');
+const { isOfficeRole } = require('../config/permissions');
 const EmailLog = require('../models/EmailLog');
 const Payment = require('../models/Payment');
 const Student = require('../models/Student');
@@ -208,7 +209,7 @@ exports.getStudentFees = async (req, res) => {
   } else if (req.user.role === 'teacher') {
     const student = await Student.findOne({ _id: req.params.studentId, teacher: req.user._id });
     if (!student) return res.status(403).json({ message: 'Not authorized to view this record.' });
-  } else if (req.user.role !== 'admin') {
+  } else if (!isOfficeRole(req.user.role)) {
     return res.status(403).json({ message: 'You do not have permission to view fee records.' });
   }
   const fees = await Fee.find({ student: req.params.studentId }).sort({ dueDate: 1 });
@@ -607,7 +608,7 @@ exports.deletePayment = async (req, res) => {
 // GET /api/fees/:id/payments/:paymentId/receipt
 exports.getReceipt = async (req, res) => {
   try {
-    if (!['admin', 'parent'].includes(req.user.role)) {
+    if (!isOfficeRole(req.user.role) && req.user.role !== 'parent') {
       return res.status(403).json({ message: 'You do not have permission to view receipts.' });
     }
     const fee = await Fee.findById(req.params.id);
