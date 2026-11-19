@@ -267,7 +267,143 @@ function requireRole(expectedRole) {
     window.location.href = getDashboardUrl(user.role);
     return null;
   }
+  startIdleLogout();
   return user;
+}
+
+// ---------- Automatic sign-out after inactivity ----------
+// After 30 minutes without mouse, keyboard, touch or scroll activity the person is signed out.
+// A warning appears 1 minute before. The last-activity time is shared through localStorage by
+// tabs using the same login, so working in one tab keeps the others signed in too.
+const IDLE_LOGOUT_MS = 30 * 60 * 1000;
+const IDLE_WARNING_MS = 60 * 1000;
+const IDLE_CHECK_MS = 5 * 1000;
+const IDLE_ACTIVITY_WRITE_MS = 5 * 1000;
+const IDLE_ACTIVITY_EVENTS = ['mousemove', 'mousedown', 'keydown', 'wheel', 'scroll', 'touchstart', 'pointerdown'];
+let idleLogoutStarted = false;
+
+function idleActivityKey() {
+  const token = Auth.getToken() || '';
+  return `png_last_activity:${token.slice(-24)}`;
+}
+
+function startIdleLogout() {
+  if (idleLogoutStarted || !Auth.isLoggedIn()) return;
+  idleLogoutStarted = true;
+  let lastActivity = Date.now();
+  let lastWrite = 0;
+  let loggingOut = false;
+  let warning = null;
+
+  const recordActivity = (force = false) => {
+    if (loggingOut) return;
+    const now = Date.now();
+    lastActivity = now;
+    if (force || now - lastWrite >= IDLE_ACTIVITY_WRITE_MS) {
+      lastWrite = now;
+      storageSet(localStorage, idleActivityKey(), String(now));
+    }
+  };
+
+  const latestActivity = () => {
+    const shared = Number(storageGet(localStorage, idleActivityKey())) || 0;
+    return Math.max(lastActivity, shared);
+  };
+
+  const hideWarning = () => {
+    if (warning && warning.open) warning.close();
+  };
+
+  const showWarning = (secondsLeft) => {
+    if (!warning) {
+      warning = document.createElement('dialog');
+      warning.id = 'idleLogoutDialog';
+      warning.className = 'credential-manager integration-otp-dialog';
+      warning.setAttribute('aria-labelledby', 'idleLogoutTitle');
+      warning.innerHTML = `
+        <div class="credential-manager-header"><h2 id="idleLogoutTitle"><i class="fa-solid fa-clock" aria-hidden="true"></i> Are you still there?</h2></div>
+        <p>You have been inactive for a while. For your security you will be signed out in <strong id="idleLogoutCountdown"></strong> seconds.</p>
+        <div class="credential-manager-actions">
+          <button type="button" class="btn btn-secondary" id="idleLogoutNow">Sign out</button>
+          <button type="button" class="btn btn-primary" id="idleStaySignedIn">Stay signed in</button>
+        </div>`;
+      document.body.appendChild(warning);
+      warning.querySelector('#idleStaySignedIn').addEventListener('click', () => {
+        recordActivity(true);
+        hideWarning();
+      });
+      warning.querySelector('#idleLogoutNow').addEventListener('click', () => idleSignOut(false));
+      // Escape counts as "I'm here" rather than leaving a half-closed warning.
+      warning.addEventListener('cancel', () => recordActivity(true));
+    }
+    warning.querySelector('#idleLogoutCountdown').textContent = String(secondsLeft);
+    if (!warning.open) {
+      warning.showModal();
+      warning.querySelector('#idleStaySignedIn').focus();
+    }
+  };
+
+  const idleSignOut = (timedOut = true) => {
+    if (loggingOut) return;
+    loggingOut = true;
+    clearInterval(checkTimer);
+    IDLE_ACTIVITY_EVENTS.forEach((type) => window.removeEventListener(type, onActivity, true));
+    hideWarning();
+    try { EditLocks.releaseAll(); } catch { /* locks expire on their own */ }
+    const token = Auth.getToken();
+    storageRemove(localStorage, idleActivityKey());
+    if (token) {
+      // keepalive lets the server revoke the token even though the page is about to change.
+      fetch(`${API_BASE}/auth/logout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        credentials: 'include',
+        body: '{}',
+        keepalive: true,
+      }).catch(() => { /* the token still expires on its own */ });
+    }
+    Auth.clear();
+    const loginUrl = getLoginUrl();
+    window.location.href = timedOut ? `${loginUrl}?reason=idle` : loginUrl;
+  };
+
+  const check = () => {
+    if (loggingOut) return;
+    if (!Auth.isLoggedIn()) {
+      // Signed out elsewhere in this tab; nothing left to guard.
+      clearInterval(checkTimer);
+      hideWarning();
+      return;
+    }
+    const idleFor = Date.now() - latestActivity();
+    if (idleFor >= IDLE_LOGOUT_MS) {
+      idleSignOut(true);
+    } else if (idleFor >= IDLE_LOGOUT_MS - IDLE_WARNING_MS) {
+      showWarning(Math.max(1, Math.ceil((IDLE_LOGOUT_MS - idleFor) / 1000)));
+    } else {
+      hideWarning();
+    }
+  };
+
+  // While the warning is open, only its buttons count; stray mouse movement shouldn't dismiss it.
+  function onActivity() {
+    if (warning && warning.open) return;
+    recordActivity();
+  }
+
+  IDLE_ACTIVITY_EVENTS.forEach((type) => window.addEventListener(type, onActivity, { capture: true, passive: true }));
+  // Timers are slowed in background tabs and paused while the computer sleeps, so re-check
+  // as soon as the page is visible again.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') check();
+  });
+  recordActivity(true);
+  const checkTimer = setInterval(check, IDLE_CHECK_MS);
+  // Keep the countdown ticking every second once the warning is showing.
+  const countdownTimer = setInterval(() => {
+    if (loggingOut) { clearInterval(countdownTimer); return; }
+    if (warning && warning.open) check();
+  }, 1000);
 }
 
 function fmtDate(d) {

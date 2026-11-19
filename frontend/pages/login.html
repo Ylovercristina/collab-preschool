@@ -283,6 +283,9 @@
 
     const loginMsg = document.getElementById('msg');
     const loginParams = new URLSearchParams(window.location.search);
+    if (loginParams.get('reason') === 'idle') {
+      showMsg(loginMsg, 'You were signed out after 30 minutes of inactivity. Please sign in again.', 'success');
+    }
     const googleErrors = {
       cancelled: 'Google sign-in was cancelled.',
       unverified: 'Google could not verify this email. Please use a verified account.',
